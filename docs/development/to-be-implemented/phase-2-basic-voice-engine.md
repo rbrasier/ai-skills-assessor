@@ -469,7 +469,25 @@ export default function AdminDashboard() {
 }
 ```
 
-### 1.6 Updated Database Schema
+### 1.6 Candidate UI
+
+**Design reference:** [index.html](https://api.anthropic.com/v1/design/h/eYopn19yj1-13nKkVwDedg?open_file=index.html)
+
+**File:** `apps/web/src/app/page.tsx`
+
+The default landing page of the candidate portal — what candidates see when they first access the application. Implements the UI as specified in the design file linked above.
+
+**Key responsibilities:**
+- Display the candidate-facing assessment portal home screen.
+- Show contextual information (what to expect, how the assessment works).
+- Poll `GET /api/v1/assessment/{session_id}/status` to reflect real-time call state (waiting → dialling → in-progress → completed/failed).
+- Present a clean, professional experience appropriate for an assessment context.
+
+**Implementation note:** Implement `index.html` from the design reference exactly, translating the design into a Next.js page component. Use Tailwind CSS classes to match the design's visual style.
+
+---
+
+### 1.7 Updated Database Schema
 
 **File:** `packages/database/src/schema/assessment-sessions.ts`
 
@@ -551,6 +569,9 @@ Admin Dashboard polls GET /api/v1/assessment/{session_id}/status
 - [ ] GET `/api/v1/assessment/{session_id}/status` returns session status and duration.
 - [ ] Admin dashboard displays triggered calls with real-time status updates.
 - [ ] Admin dashboard shows call duration in seconds.
+- [ ] Candidate UI renders as per the design at the linked reference (`index.html`).
+- [ ] Candidate UI is the default page of the candidate portal (`/`).
+- [ ] Candidate UI polls the backend and reflects real-time call state transitions (waiting → dialling → in-progress → completed/failed).
 - [ ] Greeting flow starts when call connects and completes without error.
 - [ ] Call can be placed, connected, and ended gracefully without crashes.
 - [ ] Recording URL is captured and stored in the database.
@@ -586,6 +607,7 @@ Admin Dashboard polls GET /api/v1/assessment/{session_id}/status
 - **Greeting flow**: Low — single Pipecat Flows state.
 - **FastAPI routes**: Low — two simple endpoints.
 - **Dashboard UI**: Low — form + polling list.
+- **Candidate UI**: Low — status display with polling; implement from design reference.
 - **Database schema**: Low — minimal tables.
 - **Integration testing**: Medium — need real Daily account + phone number.
 
