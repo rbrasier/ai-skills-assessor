@@ -1,16 +1,16 @@
-# Phase 6: Integration, Deployment & Latency Optimisation
+# Phase 7: Integration, Deployment & Latency Optimisation
 
 ## Status
 To Be Implemented
 
 ## Date
-2026-04-16
+2026-04-18
 
 ## References
-- PRD-001: Voice-AI SFIA Skills Assessment Platform
+- PRD-001: Voice-AI Skills Assessment Platform
 - ADR-004: Voice Engine Technology Decisions
 - ADR-005: RAG & Vector Store Strategy
-- Phases 1–5 (all prerequisites)
+- Phases 1–6 (all prerequisites)
 
 ## Objective
 

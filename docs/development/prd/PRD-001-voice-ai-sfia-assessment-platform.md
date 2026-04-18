@@ -252,11 +252,12 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 | Phase | Name | Scope |
 |-------|------|-------|
 | **Phase 1** | Foundation & Monorepo Scaffold | Project structure, CI/CD, database schema, shared types |
-| **Phase 2** | Voice Engine Core | Pipecat service, Daily transport, state machine, interjection logic |
-| **Phase 3** | RAG Knowledge Base | pgvector setup, SFIA data ingestion, SkillRetriever, dynamic prompt injection |
-| **Phase 4** | Claim Extraction Pipeline | Post-call processing, LLM integration, claim mapping, report generation |
-| **Phase 5** | SME Review Portal | Next.js frontend, review UI, claim approval workflow |
-| **Phase 6** | Integration & Deployment | End-to-end wiring, Sydney region deployment, latency optimisation, audit logging |
+| **Phase 2** | Basic Voice Engine & Call Tracking | Daily PSTN dial-out, call status tracking, admin dashboard (no assessment logic) |
+| **Phase 3** | Assessment Workflow & Interjection | SFIA flow states (discovery → evidence → summary), interjection rule, transcript persistence |
+| **Phase 4** | RAG Knowledge Base | pgvector setup, SFIA data ingestion, SkillRetriever, dynamic prompt injection |
+| **Phase 5** | Claim Extraction Pipeline | Post-call LLM processing, claim mapping, confidence scoring, report generation |
+| **Phase 6** | SME Review Portal | Next.js frontend, review UI, claim approval/adjustment workflow |
+| **Phase 7** | Integration & Deployment | End-to-end wiring, Sydney region deployment, latency optimisation, audit logging |
 
 ## 13. Out of Scope (v1)
 

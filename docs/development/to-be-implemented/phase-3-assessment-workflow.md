@@ -1,19 +1,20 @@
-# Phase 2: Voice Engine Core (Pipecat + Daily Transport)
+# Phase 3: Assessment Workflow & Interjection
 
 ## Status
 To Be Implemented
 
 ## Date
-2026-04-16
+2026-04-18
 
 ## References
-- PRD-001: Voice-AI SFIA Skills Assessment Platform
+- PRD-002: Assessment Interview Workflow
 - ADR-004: Voice Engine Technology Decisions
 - Phase 1: Foundation & Monorepo Scaffold (prerequisite)
+- Phase 2: Basic Voice Engine & Call Tracking (prerequisite)
 
 ## Objective
 
-Implement the core voice engine: the Pipecat pipeline, DailyTransport adapter, SFIAFlowController state machine, and the 60-second interjection mechanism. By the end of this phase, the system can place an outbound call, conduct a structured multi-phase conversation, and persist the transcript.
+Build the SFIA assessment conversation flow on top of the basic voice engine from Phase 2. Implement the SFIAFlowController state machine (discovery → evidence gathering → summary), the 60-second interjection mechanism, and transcript persistence with phase metadata. By the end of this phase, the system can conduct a structured multi-phase assessment conversation and persist detailed transcripts with speaker turns and phase labels.
 
 ---
 
@@ -573,7 +574,8 @@ These Pipecat events are critical for:
 ## 4. Dependencies
 
 - **Phase 1**: Monorepo structure, port interfaces, domain models.
-- **External**: Daily API key, Deepgram API key, OpenAI API key, ElevenLabs API key.
+- **Phase 2**: Working DailyTransport adapter, CallManager, basic voice infrastructure.
+- **External**: Daily API key, STT provider (Deepgram/Azure/Google), LLM API key (OpenAI/Anthropic), TTS provider (ElevenLabs/Google/Azure).
 
 ## 5. Risks
 
