@@ -4,7 +4,7 @@
 Draft
 
 ## Date
-2026-04-16
+2026-04-18 (Last Updated)
 
 ## Document Owner
 AI Skills Assessor Team
@@ -12,16 +12,24 @@ AI Skills Assessor Team
 ## References
 - ADR-001: Hexagonal Architecture (Ports & Adapters)
 - ADR-003: Monorepo Structure with pnpm Workspaces + Turborepo
-- ADR-004: Voice Engine Technology Decisions
-- ADR-005: RAG & Vector Store Strategy
+- PRD-002: Assessment Interview Workflow (details of how interviews are conducted)
 
 ---
 
 ## 1. Executive Summary
 
-The Voice-AI SFIA Skills Assessment Platform is an automated, voice-driven system that conducts real-time skills assessments against the SFIA 9 (Skills Framework for the Information Age) framework. A candidate receives a phone call from an AI-powered assessment bot that conducts a structured interview, dynamically retrieves relevant SFIA skill definitions via RAG (Retrieval-Augmented Generation), extracts verifiable work claims from the transcript, maps those claims to specific SFIA skill codes and responsibility levels (1–7), and produces a structured report for Subject Matter Expert (SME) review.
+The Voice-AI Skills Assessment Platform is an automated system that conducts skills assessments via phone call and produces structured reports for Subject Matter Expert (SME) review. 
 
-The platform targets the Australian market initially, with telephony optimised for +61 numbers and Daily WebRTC infrastructure deployed in the `ap-southeast-2` (Sydney) region.
+**High-level workflow:**
+1. Administrator triggers an assessment call for a candidate (via web dashboard).
+2. An AI bot conducts a structured interview with the candidate (see PRD-002 for interview details).
+3. Post-call, the system extracts verifiable work claims and maps them to framework skills.
+4. SME receives a structured report and review portal to approve, adjust, or reject claims.
+5. Final assessment is signed off and stored.
+
+**Framework Support**: Extensible design supports SFIA 9 initially, with support for TOGAF, ITIL, and other frameworks via metadata tagging (see PRD-002, Data Model section).
+
+**Geographic Focus**: Australian market, with telephony optimised for +61 numbers and infrastructure in `ap-southeast-2` (Sydney region).
 
 ## 2. Problem Statement
 
@@ -46,10 +54,9 @@ An AI-powered system that:
 
 | User Type | Description | Primary Need |
 |-----------|-------------|-------------|
-| **Candidate** | IT professional being assessed | Natural, non-intimidating phone conversation |
-| **SME Reviewer** | SFIA practitioner validating AI-extracted claims | Structured report with clear evidence links |
-| **Administrator** | HR/L&D staff triggering assessments | Simple trigger mechanism (phone number + candidate ID) |
-| **Platform Operator** | Technical team managing the system | Observability, audit trails, deployment controls |
+| **Candidate** | IT professional being assessed | Conversation with AI bot; clear explanation of framework being assessed |
+| **SME Reviewer** | Subject matter expert validating AI-extracted claims | Structured report with clear evidence (transcript excerpts), confidence indicators, easy claim approval/adjustment workflow |
+| **Administrator** | HR/L&D staff managing assessments | Simple trigger mechanism (phone number + candidate ID), real-time call status, access to completed reports |
 
 ## 4. Core User Journeys
 
@@ -60,21 +67,22 @@ An AI-powered system that:
 4. Administrator sees call status in real time (dialling, in-progress, completed).
 
 ### 4.2 Voice Assessment (Candidate)
-1. Candidate receives a phone call.
-2. Bot introduces itself, explains the purpose, and gains verbal consent.
-3. **Skill Discovery Phase**: Bot asks open-ended questions to identify which SFIA skills the candidate possesses.
-4. **Evidence Gathering Phase**: For each identified skill, bot uses RAG-retrieved SFIA definitions to ask targeted probing questions across Levels 1–7.
-5. **Interjection Rule**: If candidate speaks for >60 seconds without providing a verifiable work claim, bot interjects once per call with a polite redirect.
-6. Bot summarises key points and closes the call.
-7. Full transcript and recording are persisted.
+1. Candidate receives a phone call from the AI bot.
+2. Bot introduces itself, explains the assessment, and obtains verbal consent.
+3. Bot conducts a structured interview with two phases:
+   - **Skill Discovery**: Open-ended questions to understand candidate's background.
+   - **Evidence Gathering**: Targeted questions on specific skills with real-world examples.
+4. Full call is recorded; transcript is generated via speech-to-text.
 
-### 4.3 Claim Extraction (Automated)
-1. Post-call pipeline receives the complete transcript.
-2. LLM (Claude 3.5 Sonnet) analyses the transcript to extract discrete claims.
-3. Each claim is mapped to a SFIA skill code and responsibility level.
-4. A confidence score is assigned to each mapping.
-5. Structured report is generated and stored.
-6. A unique review link (NanoID-based) is generated for SME access.
+_For detailed interview flow, see PRD-002: Assessment Interview Workflow._
+
+### 4.3 Claim Extraction & Report Generation (Automated)
+1. Post-call, the system extracts verifiable work claims from the transcript.
+2. Each claim is mapped to a framework skill and responsibility level with a confidence score.
+3. Claims are grouped into a structured report, ready for SME review.
+4. A unique review link (NanoID-based) is generated for secure SME access.
+
+_For detailed extraction pipeline, see PRD-002: Assessment Interview Workflow._
 
 ### 4.4 SME Review (SME Reviewer)
 1. SME receives a unique, secure link.
@@ -142,76 +150,44 @@ ai-skills-assessor/
 └── package.json
 ```
 
-### 5.2 Hexagonal Architecture Mapping
+### 5.2 Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        DOMAIN CORE                          │
-│                                                             │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │              Assessment Orchestrator                  │  │
-│  │   SFIAFlowController  │  ClaimExtractor              │  │
-│  │   SkillMatcher         │  ReportGenerator            │  │
-│  └──────────────────────┬───────────────────────────────┘  │
-│                         │                                   │
-│  ┌──────────────────────▼───────────────────────────────┐  │
-│  │                    PORTS                              │  │
-│  │  AssessmentTrigger (IN)   VoiceTransport (OUT)       │  │
-│  │  TranscriptReceiver (IN)  KnowledgeBase (OUT)        │  │
-│  │                           Persistence (OUT)           │  │
-│  │                           LLMProvider (OUT)           │  │
-│  │                           NotificationSender (OUT)    │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                          ▲ implements
-┌─────────────────────────┴───────────────────────────────────┐
-│                      ADAPTERS                                │
-│  DailyTransport        │  PgVectorKnowledgeBase             │
-│  PostgresPersistence    │  AnthropicLLMProvider              │
-│  EmailNotification      │  WebhookNotification              │
-└─────────────────────────────────────────────────────────────┘
-                          ▲ wires together
-┌─────────────────────────┴───────────────────────────────────┐
-│                    COMPOSITION ROOT                           │
-│  apps/voice-engine/main.py   │   apps/web/api/routes        │
-└─────────────────────────────────────────────────────────────┘
+Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
+       │                    │                       │                   │
+       ├─ Trigger Call ────>│                       │                   │
+       │                    ├─ Interview ──────────>│                   │
+       │                    │  (transcript +         │                   │
+       │                    │   claims extracted)    │                   │
+       │                    │                       ├─ Report Ready ──>│
+       │<─ Call Status ─────┤                       │                   │
+       │                    │                       │         Approve   │
+       │                    │                       │<── Adjust/Reject─┤
+       │                    │                       │                   │
+       │                    │                       │<─ Final Report ───┤
 ```
 
-### 5.3 Port Definitions
+**Voice engine details and architecture are in PRD-002.**
 
-| Port | Direction | Interface | Purpose |
-|------|-----------|-----------|---------|
-| `AssessmentTrigger` | Inbound | `trigger(phone_number: str, candidate_id: str) -> AssessmentSession` | Receives a request to start an assessment call |
-| `TranscriptReceiver` | Inbound | `on_transcript_ready(session_id: str, transcript: Transcript) -> None` | Receives completed transcript for post-processing |
-| `VoiceTransport` | Outbound | `dial(phone_number: str, config: CallConfig) -> CallConnection` | Initiates and manages the phone call |
-| `KnowledgeBase` | Outbound | `query(text: str, framework_type: str, top_k: int) -> list[SkillDefinition]` | Queries vector store for relevant skill definitions |
-| `Persistence` | Outbound | `save_transcript(...)`, `save_claims(...)`, `save_report(...)` | Persists all assessment data to PostgreSQL |
-| `LLMProvider` | Outbound | `extract_claims(transcript: str) -> list[Claim]` | Calls the LLM for claim extraction and mapping |
-| `NotificationSender` | Outbound | `send_review_link(sme_email: str, review_url: str) -> None` | Notifies SME of available review |
+## 6. Key Platform Decisions
 
-## 6. Key Technical Decisions
-
-### 6.1 Voice Engine: Pipecat + Daily
-- **Pipecat** provides the real-time voice AI pipeline framework (STT → LLM → TTS).
-- **Daily** provides WebRTC transport with PSTN dial-out capability for Australian numbers.
-- The `DailyTransport` adapter is configured for `ap-southeast-2` (Sydney) to minimise latency.
-- Call recording and transcript logging enabled by default for audit.
-
-### 6.2 RAG: pgvector with Framework-Type Metadata
-- SFIA 9 skill definitions are chunked and embedded into pgvector.
-- Each vector entry includes a `framework_type` metadata tag (e.g., `"sfia-9"`, `"togaf"`, `"itil"`).
-- This makes the knowledge base pluggable for future framework additions.
-- The `SkillRetriever` class filters by `framework_type` at query time.
-
-### 6.3 Claim Extraction: Claude 3.5 Sonnet
-- Post-call processing uses Anthropic's Claude 3.5 Sonnet for claim extraction.
-- Structured output with JSON mode ensures consistent claim format.
-- Each claim includes: verbatim quote, interpreted claim, SFIA skill code, level, confidence.
-
-### 6.4 SME Review Links: NanoID
-- Each review session gets a NanoID-based URL (e.g., `/review/V1StGXR8_Z5jdHi6B-myT`).
+### 6.1 SME Review Links: NanoID
+- Each assessment report gets a NanoID-based URL (e.g., `/review/V1StGXR8_Z5jdHi6B-myT`).
 - NanoID provides URL-safe, collision-resistant, non-sequential identifiers.
-- Links expire after a configurable TTL (default: 30 days).
+- Links expire after 30 days by default (configurable).
+- No PII in URLs; links are access-controlled via database.
+
+### 6.2 Framework-Agnostic Architecture
+- Assessment system supports any framework (SFIA 9, TOGAF, ITIL, etc.) via metadata tagging.
+- Framework type is a property of each assessment session and claim, not a hard-coded choice.
+- New frameworks can be added by loading definitions into the knowledge base; no schema migrations.
+
+### 6.3 Voice Interview & Claim Extraction Pipeline
+- Interviews are conducted via phone (see PRD-002 for technical details).
+- Claims are extracted post-call using LLM analysis of the transcript.
+- Each claim includes a confidence score; SME reviews and approves/adjusts/rejects.
+
+**For voice engine architecture and technical decisions (Pipecat, Daily, Claude, pgvector), see PRD-002: Assessment Interview Workflow.**
 
 ## 7. Non-Functional Requirements
 
@@ -225,46 +201,51 @@ ai-skills-assessor/
 | **Audit Trail** | Full call recordings + transcripts retained for 12 months | Regulatory and quality assurance |
 | **Security** | TLS everywhere, review links with NanoID, no PII in URLs | Data protection |
 
-## 8. Data Model (High-Level)
+## 8. Data Model (Platform Level)
 
 ### Core Entities
 
-- **Candidate**: `id`, `name`, `email`, `phone`, `organisation_id`, `created_at`
-- **AssessmentSession**: `id`, `candidate_id`, `status`, `triggered_by`, `started_at`, `ended_at`, `recording_url`, `transcript_url`
-- **Transcript**: `id`, `session_id`, `full_text`, `segments[]` (speaker, text, timestamp)
-- **Claim**: `id`, `session_id`, `verbatim_quote`, `interpreted_claim`, `sfia_skill_code`, `sfia_level`, `confidence`, `sme_status` (pending/approved/adjusted/rejected)
-- **AssessmentReport**: `id`, `session_id`, `review_token` (NanoID), `generated_at`, `sme_reviewed_at`, `status`
-- **SFIASkill**: `id`, `code`, `name`, `category`, `subcategory`, `description`, `framework_type`, `embedding` (vector)
-- **SFIALevel**: `skill_id`, `level` (1–7), `description`, `autonomy`, `influence`, `complexity`, `knowledge`
+| Entity | Purpose | Key Fields |
+|--------|---------|-----------|
+| **Candidate** | Person being assessed | `id`, `name`, `email`, `phone` (+61 format), `organisation_id`, `created_at` |
+| **AssessmentSession** | Single assessment call | `id`, `candidate_id`, `status` (pending/dialling/in-progress/completed/failed), `started_at`, `ended_at`, `framework_type` (e.g., "sfia-9") |
+| **AssessmentReport** | Output of assessment + SME review | `id`, `session_id`, `review_token` (NanoID), `status` (generated/in-review/completed), `generated_at`, `sme_reviewed_at` |
 
-## 9. Integration Points
+**Detailed data structures for interviews, transcripts, claims, and framework definitions are in PRD-002.**
 
-| System | Integration | Protocol |
-|--------|-------------|----------|
-| **Daily.co** | Telephony/WebRTC transport | REST API + WebRTC |
-| **Anthropic Claude** | Claim extraction LLM | REST API |
-| **PostgreSQL + pgvector** | Persistence + vector store | TCP (pg protocol) |
-| **STT Provider** (via Pipecat) | Speech-to-text | WebSocket |
-| **TTS Provider** (via Pipecat) | Text-to-speech | WebSocket |
+## 9. Platform Integration Points
+
+| System | Integration | Purpose |
+|--------|-------------|---------|
+| **Email / Notification System** | Send review links to SME | SME invitations, reminders |
+| **PostgreSQL** | Persistent data store | Candidates, sessions, reports |
+| **Authentication** (TBD) | Access control for SME portal | Secure review link validation |
+
+**Voice engine integrations (Daily, STT/TTS, Claude, pgvector) are detailed in PRD-002.**
 
 ## 10. Success Metrics
 
 | Metric | Target | Measurement |
 |--------|--------|-------------|
-| Assessment completion rate | > 85% of initiated calls | Calls reaching EvidenceGathering / total calls |
-| Claim extraction accuracy | > 80% agreement with SME review | Claims approved without adjustment / total claims |
-| SME review time reduction | 50% vs. manual process | Average time from call end to SME sign-off |
-| Candidate satisfaction | > 4.0 / 5.0 | Post-call survey score |
+| Report delivery time | < 10 minutes from call end | Time to SME review portal readiness |
+| SME review completion rate | > 90% of reports reviewed | Reviews submitted / reports sent |
+| Time to SME sign-off | < 1 hour average | Time from report ready to final assessment |
+| System uptime | 99.5% during business hours (AEST) | Scheduled assessment reliability |
+| SME satisfaction with review UX | > 4.0 / 5.0 | Portal usability and claim clarity |
+
+**Interview-level success metrics (completion rate, claim accuracy, candidate satisfaction) are in PRD-002.**
 
 ## 11. Risks & Mitigations
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| PSTN dial-out reliability in AU | High | Medium | Daily has AU presence; fallback to WebRTC browser link |
-| LLM hallucination in claim mapping | High | Medium | SME review is mandatory; confidence thresholds flag uncertain claims |
-| Latency in voice pipeline | High | Low | Sydney region deployment; Pipecat's streaming architecture |
-| SFIA framework version changes | Medium | Low | Versioned framework_type metadata; re-embedding pipeline |
-| Candidate refuses AI interview | Medium | Medium | Clear introduction + opt-out mechanism; human assessor fallback |
+| SME review portal availability outage | High | Low | Redundant PostgreSQL, CDN for static assets, graceful degradation |
+| Review link leakage / unauthorized access | High | Low | NanoID provides sufficient entropy; HTTPS only; optional IP whitelisting |
+| SME claim adjustment discrepancies | Medium | Medium | Clear UI with transcript excerpts; audit trail of all changes; training docs |
+| Data residency / compliance violation | High | Low | Deploy to Australian region; call recordings in AU; document retention policy |
+| Framework definition data becomes stale | Medium | Low | Versioning via `framework_type` metadata; annual review cycle planned |
+
+**Interview-level risks (voice pipeline, LLM hallucination, candidate refusal) are in PRD-002.**
 
 ## 12. Phased Delivery Plan
 
@@ -279,17 +260,35 @@ ai-skills-assessor/
 
 ## 13. Out of Scope (v1)
 
-- Multi-framework support (TOGAF, ITIL) — architecture supports it, not delivered in v1.
-- Inbound calls (candidate-initiated).
-- Mobile app.
-- Real-time claim extraction during the call (post-call only in v1).
-- Multi-language support (English only in v1).
+- Alternative frameworks (TOGAF, ITIL) — SFIA 9 only in v1, but architecture supports others via metadata.
+- Inbound calls (candidate-initiated); administrator-triggered only.
+- Mobile app for candidates.
+- Multi-language support (English only).
 - SSO / enterprise identity integration.
+- Real-time claim extraction (see PRD-002 for scope).
 
 ## 14. Open Questions
 
-1. **STT/TTS provider selection**: Deepgram, Google Cloud Speech, or Azure? Need latency benchmarks for AU region.
-2. **Daily pricing model**: Per-minute costs for PSTN dial-out to AU numbers — need commercial review.
-3. **SFIA licensing**: Are SFIA 9 skill definitions freely redistributable, or do we need a license from the SFIA Foundation?
-4. **Data retention policy**: What is the regulatory requirement for call recordings in AU?
+1. **STT/TTS provider selection**: Deepgram, Google Cloud Speech, or Azure? Need latency benchmarks for AU region. (See PRD-002 for details.)
+2. **Daily pricing model**: Per-minute costs for PSTN dial-out to AU numbers — need commercial review. (See PRD-002 for details.)
+3. **SFIA licensing**: Are SFIA 9 skill definitions freely redistributable, or do we need a license from the SFIA Foundation? (See PRD-002 for details.)
+4. **Data retention policy**: What is the regulatory requirement for call recordings in AU? (See PRD-002 for details.)
 5. **SME notification channel**: Email only, or also Slack/Teams webhook?
+
+---
+
+## 15. Revision History
+
+| Date | Change | Author |
+|------|--------|--------|
+| 2026-04-18 | Refactored PRD-001 to focus on platform/SME review; moved interview details to PRD-002 | AI Skills Assessor Team |
+| 2026-04-16 | Initial draft | AI Skills Assessor Team |
+
+---
+
+## 16. Related Documents
+
+- **PRD-002**: Assessment Interview Workflow — Details of voice interview, claim extraction pipeline, and technical architecture.
+- **Phase 1–6**: Phased delivery plan (see Section 12).
+- **ADR-001**: Hexagonal Architecture — System design pattern.
+- **ADR-003**: Monorepo Structure — Repository organization.
