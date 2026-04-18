@@ -1,4 +1,4 @@
-# Phase 6: SME Review Portal (Next.js Frontend)
+# Phase 7: SME Review Portal (Next.js Frontend)
 
 ## Status
 To Be Implemented
@@ -9,7 +9,7 @@ To Be Implemented
 ## References
 - PRD-001: Voice-AI Skills Assessment Platform
 - Phase 1: Foundation & Monorepo Scaffold (Next.js shell)
-- Phase 5: Claim Extraction Pipeline (produces reports)
+- Phase 6: Claim Extraction Pipeline (produces reports)
 
 ## Objective
 

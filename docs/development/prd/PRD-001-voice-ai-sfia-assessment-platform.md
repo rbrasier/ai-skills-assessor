@@ -251,13 +251,14 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 
 | Phase | Name | Scope |
 |-------|------|-------|
-| **Phase 1** | Foundation & Monorepo Scaffold | Project structure, CI/CD, database schema, shared types |
+| **Phase 1** | Foundation & Monorepo Scaffold | Project structure, CI/CD skeleton, database schema, shared types |
 | **Phase 2** | Basic Voice Engine & Call Tracking | Daily PSTN dial-out, call status tracking, admin dashboard (no assessment logic) |
-| **Phase 3** | Assessment Workflow & Interjection | SFIA flow states (discovery → evidence → summary), interjection rule, transcript persistence |
-| **Phase 4** | RAG Knowledge Base | pgvector setup, SFIA data ingestion, SkillRetriever, dynamic prompt injection |
-| **Phase 5** | Claim Extraction Pipeline | Post-call LLM processing, claim mapping, confidence scoring, report generation |
-| **Phase 6** | SME Review Portal | Next.js frontend, review UI, claim approval/adjustment workflow |
-| **Phase 7** | Integration & Deployment | End-to-end wiring, Sydney region deployment, latency optimisation, audit logging |
+| **Phase 3** | Infrastructure Deployment (Sydney) | AWS/Azure setup, CI/CD pipeline, database init, containerization, monitoring |
+| **Phase 4** | Assessment Workflow & Interjection | SFIA flow states (discovery → evidence → summary), interjection rule, transcript persistence |
+| **Phase 5** | RAG Knowledge Base | pgvector setup, SFIA data ingestion, SkillRetriever, dynamic prompt injection |
+| **Phase 6** | Claim Extraction Pipeline | Post-call LLM processing, claim mapping, confidence scoring, report generation |
+| **Phase 7** | SME Review Portal | Next.js frontend, review UI, claim approval/adjustment workflow |
+| **Phase 8** | Final Integration & Optimisation | End-to-end testing, latency tuning, audit logging, observability, production readiness |
 
 ## 13. Out of Scope (v1)
 
@@ -290,6 +291,6 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 ## 16. Related Documents
 
 - **PRD-002**: Assessment Interview Workflow — Details of voice interview, claim extraction pipeline, and technical architecture.
-- **Phase 1–6**: Phased delivery plan (see Section 12).
+- **Phase 1–8**: Phased delivery plan (see Section 12).
 - **ADR-001**: Hexagonal Architecture — System design pattern.
 - **ADR-003**: Monorepo Structure — Repository organization.

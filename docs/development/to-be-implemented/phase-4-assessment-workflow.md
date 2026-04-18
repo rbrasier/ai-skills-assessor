@@ -1,4 +1,4 @@
-# Phase 3: Assessment Workflow & Interjection
+# Phase 4: Assessment Workflow & Interjection
 
 ## Status
 To Be Implemented
@@ -11,6 +11,7 @@ To Be Implemented
 - ADR-004: Voice Engine Technology Decisions
 - Phase 1: Foundation & Monorepo Scaffold (prerequisite)
 - Phase 2: Basic Voice Engine & Call Tracking (prerequisite)
+- Phase 3: Infrastructure Deployment (prerequisite)
 
 ## Objective
 

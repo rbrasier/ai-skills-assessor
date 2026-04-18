@@ -1,4 +1,4 @@
-# Phase 7: Integration, Deployment & Latency Optimisation
+# Phase 8: Final Integration & Latency Optimisation
 
 ## Status
 To Be Implemented
@@ -10,11 +10,11 @@ To Be Implemented
 - PRD-001: Voice-AI Skills Assessment Platform
 - ADR-004: Voice Engine Technology Decisions
 - ADR-005: RAG & Vector Store Strategy
-- Phases 1–6 (all prerequisites)
+- Phases 1–7 (all prerequisites)
 
 ## Objective
 
-Wire all components end-to-end, deploy to production infrastructure with the Daily transport configured for the Sydney (`ap-southeast-2`) region, optimise for sub-500ms voice latency, enable full audit logging (call recordings + transcripts), and establish observability.
+Conduct end-to-end integration testing across all components (voice engine → assessment workflow → RAG → claim extraction → SME review), optimise latency to meet sub-500ms round-trip targets, implement comprehensive audit logging and observability, and prepare for production scale testing. The infrastructure is already deployed and stable from Phase 3; this phase focuses on integration validation and performance tuning.
 
 ---
 
@@ -274,34 +274,23 @@ logger.info(
 | `daily.room_creation_errors` | Counter | Any |
 | `daily.pstn_dial_failures` | Counter | > 3 consecutive |
 
-### 1.7 Deployment Architecture
+### 1.7 Production Readiness Checklist
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Cloud Provider (AU Region)             │
-│                                                         │
-│  ┌──────────────────┐    ┌──────────────────────────┐  │
-│  │  Next.js Frontend │    │  Voice Engine (FastAPI)   │  │
-│  │  (Vercel / ECS)   │    │  (ECS / Cloud Run)       │  │
-│  │  Port 3000        │    │  Port 8000               │  │
-│  └────────┬─────────┘    └────────┬─────────────────┘  │
-│           │                       │                      │
-│           └───────────┬───────────┘                      │
-│                       │                                  │
-│              ┌────────▼──────────┐                       │
-│              │   PostgreSQL      │                       │
-│              │   + pgvector      │                       │
-│              │   (RDS / Cloud SQL│                       │
-│              │    ap-southeast-2)│                       │
-│              └───────────────────┘                       │
-│                                                         │
-│              ┌───────────────────┐                       │
-│              │   Daily.co        │                       │
-│              │   (Sydney PoP)    │                       │
-│              │   WebRTC + PSTN   │                       │
-│              └───────────────────┘                       │
-└─────────────────────────────────────────────────────────┘
-```
+**Note**: Infrastructure deployment is completed in Phase 3. This phase validates and optimizes the deployed system.
+
+**Pre-production checklist:**
+- [ ] All services are deployed and healthy (Phase 3).
+- [ ] Database is backed up and replication is tested.
+- [ ] Monitoring dashboards are configured and populated with real data.
+- [ ] Alerts are firing correctly (e.g., latency > 1s, call failures > 5%).
+- [ ] Log aggregation is working (Cloudwatch / Application Insights).
+- [ ] Load testing has completed (10 concurrent calls).
+- [ ] Latency targets verified in production (p50 < 500ms, p95 < 1000ms).
+- [ ] All integrations tested end-to-end.
+- [ ] SME review portal is accessible and functional.
+- [ ] Audit logs are complete (call recordings, transcripts, claim mappings).
+- [ ] Disaster recovery plan is tested.
+- [ ] On-call runbook is documented.
 
 ### 1.8 Environment Variables
 
@@ -372,9 +361,10 @@ REVIEW_LINK_EXPIRY_DAYS=30
 
 ## 4. Dependencies
 
-- **All prior phases** (1–5) must be complete.
+- **All prior phases** (1–7) must be complete.
+- **Phase 3 Infrastructure**: Production AWS/Azure environment already deployed and stable.
 - **External services**: Daily account with PSTN enabled, Anthropic API access, OpenAI API access, Deepgram API access, ElevenLabs API access.
-- **Infrastructure**: PostgreSQL with pgvector in AU region, compute in AU region.
+- **Infrastructure**: PostgreSQL with pgvector in AU region (deployed in Phase 3), compute in AU region (deployed in Phase 3).
 
 ## 5. Risks
 
