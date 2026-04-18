@@ -1,16 +1,17 @@
-# Phase 4: Claim Extraction Pipeline (Post-Call LLM Processing)
+# Phase 6: Claim Extraction Pipeline (Post-Call LLM Processing)
 
 ## Status
 To Be Implemented
 
 ## Date
-2026-04-16
+2026-04-18
 
 ## References
-- PRD-001: Voice-AI SFIA Skills Assessment Platform
+- PRD-002: Assessment Interview Workflow
 - ADR-005: RAG & Vector Store Strategy
-- Phase 2: Voice Engine Core (produces transcripts)
-- Phase 3: RAG Knowledge Base (skill definitions for mapping)
+- Phase 2: Basic Voice Engine (produces transcripts)
+- Phase 4: Assessment Workflow (produces assessment data)
+- Phase 5: RAG Knowledge Base (skill definitions for mapping)
 
 ## Objective
 

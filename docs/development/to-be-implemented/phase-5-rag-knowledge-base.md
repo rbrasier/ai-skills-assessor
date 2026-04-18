@@ -1,16 +1,18 @@
-# Phase 3: RAG Knowledge Base & SFIA Data Ingestion
+# Phase 5: RAG Knowledge Base & SFIA Data Ingestion
 
 ## Status
 To Be Implemented
 
 ## Date
-2026-04-16
+2026-04-18
 
 ## References
-- PRD-001: Voice-AI SFIA Skills Assessment Platform
+- PRD-002: Assessment Interview Workflow
 - ADR-005: RAG & Vector Store Strategy
-- Phase 1: Foundation (prerequisite)
-- Phase 2: Voice Engine Core (prerequisite for runtime integration)
+- Phase 1: Foundation & Monorepo Scaffold (prerequisite)
+- Phase 2: Basic Voice Engine & Call Tracking (prerequisite)
+- Phase 3: Infrastructure Deployment (prerequisite)
+- Phase 4: Assessment Workflow & Interjection (prerequisite for runtime integration)
 
 ## Objective
 
@@ -440,7 +442,9 @@ Candidate speaks → STT → User text
 ## 5. Dependencies
 
 - **Phase 1**: Database schema, port interfaces.
-- **Phase 2**: Pipecat pipeline (for runtime integration).
+- **Phase 2**: Basic voice infrastructure, call tracking.
+- **Phase 3**: Infrastructure deployed to production.
+- **Phase 4**: Assessment workflow state machine (for runtime integration).
 - **External**: OpenAI API key (for embeddings), PostgreSQL with pgvector.
 
 ## 6. Risks
