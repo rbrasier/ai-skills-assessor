@@ -9,7 +9,7 @@ To Be Implemented
 ## References
 - PRD-002: Assessment Interview Workflow
 - ADR-005: RAG & Vector Store Strategy
-- Phase 1: Foundation & Monorepo Scaffold (prerequisite)
+- Phase 1: Foundation & Monorepo Scaffold (prerequisite — defines Prisma schema)
 - Phase 2: Basic Voice Engine & Call Tracking (prerequisite)
 - Phase 3: Infrastructure Deployment (prerequisite)
 - Phase 4: Assessment Workflow & Interjection (prerequisite for runtime integration)
@@ -22,62 +22,85 @@ Set up the pgvector-based knowledge base, ingest SFIA 9 skill definitions with f
 
 ## 1. Deliverables
 
-### 1.1 pgvector Schema & Migration
+### 1.1 KnowledgeBase Port Definition
 
-**File:** `packages/database/src/schema/skill-embeddings.ts`
+**File:** `apps/voice-engine/src/domain/ports/knowledge_base.py`
 
-Drizzle schema for the vector store table:
+The `IKnowledgeBase` port is deferred from Phase 1 and defined here:
 
-```typescript
-import { pgTable, uuid, text, integer, real, timestamp, jsonb, uniqueIndex, index } from "drizzle-orm/pg-core";
-import { vector } from "drizzle-orm/pg-core"; // pgvector extension
+```python
+from abc import ABC, abstractmethod
+from domain.models.skill import SkillDefinition
 
-export const skillEmbeddings = pgTable(
-  "skill_embeddings",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    frameworkType: text("framework_type").notNull(),
-    frameworkVersion: text("framework_ver").notNull(),
-    skillCode: text("skill_code").notNull(),
-    skillName: text("skill_name").notNull(),
-    category: text("category").notNull(),
-    subcategory: text("subcategory"),
-    level: integer("level"),
-    content: text("content").notNull(),
-    embedding: vector("embedding", { dimensions: 1536 }).notNull(),
-    metadata: jsonb("metadata").default("{}"),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => ({
-    uniqueFrameworkSkillLevel: uniqueIndex("idx_unique_framework_skill_level").on(
-      table.frameworkType,
-      table.frameworkVersion,
-      table.skillCode,
-      table.level
-    ),
-    frameworkIdx: index("idx_skill_embeddings_framework").on(
-      table.frameworkType,
-      table.frameworkVersion
-    ),
-    skillIdx: index("idx_skill_embeddings_skill").on(table.skillCode),
-  })
-);
+class IKnowledgeBase(ABC):
+    @abstractmethod
+    async def query(
+        self,
+        text: str,
+        framework_type: str = "sfia-9",
+        top_k: int = 5,
+        level_filter: int | None = None,
+        skill_codes: list[str] | None = None,
+    ) -> list[SkillDefinition]:
+        """
+        Query the knowledge base for skill definitions relevant to the given text.
+
+        Args:
+            text: Query text to embed and search on
+            framework_type: Which framework to search (default: sfia-9)
+            top_k: Number of results to return
+            level_filter: Restrict results to a specific responsibility level (1-7)
+            skill_codes: Restrict to specific skill codes (for targeted probing)
+
+        Returns:
+            List of matching SkillDefinition objects ordered by relevance
+        """
+        ...
 ```
 
-**Raw SQL migration (for IVFFlat index):**
+### 1.2 pgvector Schema & Migration
+
+**Update to Prisma schema:** In `packages/database/prisma/schema.prisma`, add the `SkillEmbedding` model:
+
+```prisma
+model SkillEmbedding {
+  id                String   @id @default(uuid())
+  frameworkType     String   @db.VarChar(50)  // e.g., "sfia-9"
+  frameworkVersion  String   @db.VarChar(20)  // e.g., "9.0"
+  skillCode         String   @db.VarChar(50)  // e.g., "INFL"
+  skillName         String   @db.VarChar(255)
+  category          String   @db.VarChar(100)
+  subcategory       String?  @db.VarChar(100)
+  level             Int?                       // 1-7 for SFIA
+  content           String   @db.Text         // The chunked text for embedding
+  embedding         Unsupported("vector(1536)")?  // pgvector embeddings
+  metadata          Json?
+  createdAt         DateTime @default(now())
+
+  @@unique([frameworkType, frameworkVersion, skillCode, level], name: "idx_unique_framework_skill_level")
+  @@index([frameworkType, frameworkVersion])
+  @@index([skillCode])
+  @@index([frameworkType])
+}
+```
+
+**Notes:**
+- `embedding` uses `Unsupported("vector(1536)")` because Prisma doesn't have native pgvector support yet. Raw SQL or a migration file will handle this.
+- The unique constraint ensures no duplicate (framework, skill, level) combinations.
+- Post-migration, add the IVFFlat index manually via raw SQL:
 
 ```sql
--- Enable pgvector extension
+-- Enable pgvector extension (if not already enabled)
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- IVFFlat index for approximate nearest neighbour search
-CREATE INDEX idx_skill_embeddings_embedding 
-    ON skill_embeddings 
+-- Create IVFFlat index for efficient similarity search
+CREATE INDEX idx_skill_embeddings_embedding
+    ON skill_embeddings
     USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 ```
 
-### 1.2 SFIA 9 Data Ingestion Pipeline
+### 1.3 SFIA 9 Data Ingestion Pipeline
 
 **File:** `apps/voice-engine/src/scripts/ingest_sfia.py`
 
@@ -144,11 +167,11 @@ async def ingest_sfia_skills(
     print(f"Ingested {sum(len(s.levels) for s in skills)} chunks for {framework_type}")
 ```
 
-### 1.3 SkillRetriever (KnowledgeBase Adapter)
+### 1.4 PgVectorKnowledgeBase Adapter
 
 **File:** `apps/voice-engine/src/adapters/pgvector_knowledge_base.py`
 
-Implements the `KnowledgeBase` port.
+Implements the `IKnowledgeBase` port using pgvector.
 
 ```python
 from domain.ports.knowledge_base import KnowledgeBase

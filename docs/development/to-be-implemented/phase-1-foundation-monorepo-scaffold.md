@@ -4,7 +4,7 @@
 To Be Implemented
 
 ## Date
-2026-04-16
+2026-04-19 (Last Updated)
 
 ## References
 - PRD-001: Voice-AI SFIA Skills Assessment Platform
@@ -17,7 +17,27 @@ Establish the monorepo foundation, CI/CD skeleton, database schema, shared type 
 
 ---
 
+## 0. Prerequisite: Version Bump
+
+Before starting Phase 1 implementation, a **MINOR version bump** is required (this phase includes database migrations):
+
+1. Run `/bump-version` in Claude Code to bump from v0.1.0 → v0.2.0
+2. Create a new migration file using the version number: `v0_2_0_init_schema.ts`
+3. Update CHANGELOG.md with v0.2.0 entry
+4. Commit the version bump before implementing Phase 1 deliverables
+
+---
+
 ## 1. Deliverables
+
+**Build in this order to avoid re-work:**
+1. **1.1 Monorepo Root Configuration** — pnpm-workspace.yaml, turbo.json, tsconfig.base.json, shared configs
+2. **1.2 apps/web & apps/voice-engine scaffolds** — create package structures and basic imports
+3. **1.3 packages/database schema** — Prisma schema, migrations, and basic models
+4. **1.4 packages/shared-types** — TypeScript types (minimal: AssessmentTrigger types only)
+5. **1.5 Port definitions** — Python ABC interfaces in voice-engine/src/domain/
+
+---
 
 ### 1.1 Monorepo Root Configuration
 
@@ -124,22 +144,24 @@ apps/web/
 │       └── types.ts           ← Re-exports from shared-types
 ```
 
-**API route stub (`apps/web/src/app/api/assessment/trigger/route.ts`):**
+**API route stubs:**
 
+`apps/web/src/app/api/health/route.ts`:
+```typescript
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  return NextResponse.json({ status: "ok" });
+}
+```
+
+`apps/web/src/app/api/assessment/trigger/route.ts`:
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { phoneNumber, candidateId } = body;
-
-  // Validate Australian phone number format
-  if (!phoneNumber?.match(/^\+61\d{9}$/)) {
-    return NextResponse.json(
-      { error: "Invalid Australian phone number format. Expected +61XXXXXXXXX" },
-      { status: 400 }
-    );
-  }
 
   // Forward to voice engine
   const voiceEngineUrl = process.env.VOICE_ENGINE_URL || "http://localhost:8000";
@@ -155,6 +177,8 @@ export async function POST(request: NextRequest) {
 ```
 
 ### 1.3 `apps/voice-engine` — Python Service Shell
+
+**Note:** The voice engine uses Prisma (via TypeScript adapters) to query the database. Phase 1 scaffolds the Python structure with port definitions; actual port implementations and integrations happen in later phases.
 
 **Project structure:**
 ```
@@ -233,179 +257,227 @@ dev = [
 ]
 ```
 
-### 1.4 `packages/database` — PostgreSQL Schema
+### 1.4 `packages/database` — PostgreSQL Schema with Prisma
 
 **Structure:**
 ```
 packages/database/
 ├── package.json               ← @ai-skills-assessor/database
-├── drizzle.config.ts
-├── src/
-│   ├── index.ts               ← Schema exports
-│   ├── schema/
-│   │   ├── candidates.ts
-│   │   ├── assessment-sessions.ts
-│   │   ├── transcripts.ts
-│   │   ├── claims.ts
-│   │   ├── assessment-reports.ts
-│   │   ├── sfia-skills.ts
-│   │   └── sfia-levels.ts
+├── prisma/
+│   ├── schema.prisma          ← Schema definition
 │   └── migrations/
-└── seed/
-    └── sfia-9-skills.ts       ← SFIA 9 skill definitions seed data
+│       └── v0_2_0_init_schema/
+│           └── migration.sql
+├── src/
+│   ├── index.ts               ← Generated Prisma client exports
+│   └── seed.ts                ← Empty seed file (populated in later phases)
+└── .env.example
 ```
 
-**Core schema (Drizzle ORM):**
+**Core schema (Prisma):**
 
-```typescript
-// candidates.ts
-export const candidates = pgTable("candidates", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  name: text("name").notNull(),
-  email: text("email").notNull(),
-  phone: text("phone").notNull(),
-  organisationId: uuid("organisation_id"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+```prisma
+// prisma/schema.prisma
 
-// assessment-sessions.ts
-export const assessmentSessions = pgTable("assessment_sessions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  candidateId: uuid("candidate_id").references(() => candidates.id).notNull(),
-  status: text("status", { 
-    enum: ["pending", "dialling", "in_progress", "completed", "failed", "cancelled"] 
-  }).notNull().default("pending"),
-  triggeredBy: uuid("triggered_by"),
-  dailyRoomUrl: text("daily_room_url"),
-  recordingUrl: text("recording_url"),
-  startedAt: timestamp("started_at"),
-  endedAt: timestamp("ended_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+generator client {
+  provider = "prisma-client-js"
+}
 
-// claims.ts
-export const claims = pgTable("claims", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  sessionId: uuid("session_id").references(() => assessmentSessions.id).notNull(),
-  verbatimQuote: text("verbatim_quote").notNull(),
-  interpretedClaim: text("interpreted_claim").notNull(),
-  sfiaSkillCode: text("sfia_skill_code").notNull(),
-  sfiaLevel: integer("sfia_level").notNull(),
-  confidence: real("confidence").notNull(),
-  smeStatus: text("sme_status", {
-    enum: ["pending", "approved", "adjusted", "rejected"]
-  }).notNull().default("pending"),
-  smeAdjustedLevel: integer("sme_adjusted_level"),
-  smeNotes: text("sme_notes"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
-// assessment-reports.ts
-export const assessmentReports = pgTable("assessment_reports", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  sessionId: uuid("session_id").references(() => assessmentSessions.id).notNull(),
-  reviewToken: text("review_token").notNull().unique(),
-  status: text("status", {
-    enum: ["generated", "sent", "in_review", "completed"]
-  }).notNull().default("generated"),
-  generatedAt: timestamp("generated_at").defaultNow().notNull(),
-  smeReviewedAt: timestamp("sme_reviewed_at"),
-  expiresAt: timestamp("expires_at").notNull(),
-});
+model Candidate {
+  id        String   @id @default(uuid())
+  firstName String   @db.VarChar(255)
+  lastName  String   @db.VarChar(255)
+  email     String   @unique @db.VarChar(255)
+  phoneNumber String @db.VarChar(20)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assessmentSessions AssessmentSession[]
+
+  @@index([email])
+  @@index([createdAt])
+}
+
+model AssessmentSession {
+  id            String   @id @default(uuid())
+  candidateId   String
+  candidate     Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  phoneNumber   String   @db.VarChar(20)
+  status        String   @default("pending") // pending, dialling, in_progress, completed, failed, cancelled
+  dailyRoomUrl  String?
+  recordingUrl  String?
+  startedAt     DateTime?
+  endedAt       DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([candidateId])
+  @@index([candidateId, createdAt])
+  @@index([status])
+}
 ```
 
-### 1.5 `packages/shared-types` — Assessment Report Contract
+**Notes:**
+- `candidates.email` is **unique** per business requirement
+- `assessment_sessions.phone_number` is **denormalized** for easy access during calls (not indexed unless queries by phone are needed)
+- **Cascade delete** on candidate ensures sessions are cleaned up if candidate is deleted
+- Indexes recommended on `candidateId` (foreign key) and `(candidateId, createdAt)` for "latest assessment" queries
+- **No SFIA-specific tables** in Phase 1 — schema is generic to support any framework
+- **No claims or assessment_reports** in Phase 1 — moved to appropriate phase when claim extraction PRD is defined
+
+### 1.5 `packages/shared-types` — Minimal Shared Types
 
 **Structure:**
 ```
 packages/shared-types/
 ├── package.json               ← @ai-skills-assessor/shared-types
 ├── tsconfig.json
-├── src/
-│   ├── index.ts               ← Re-exports
-│   ├── assessment-report.ts   ← TypeScript types
-│   ├── assessment-trigger.ts  ← Trigger request/response types
-│   └── schemas/
-│       ├── assessment-report.schema.json   ← JSON Schema (language-agnostic)
-│       └── assessment-trigger.schema.json
+└── src/
+    └── index.ts               ← Assessment trigger types only
 ```
 
-See the contract specification document for full type definitions.
+**Minimal types for Phase 1:**
+
+```typescript
+// packages/shared-types/src/index.ts
+
+export interface AssessmentTriggerRequest {
+  phoneNumber: string;     // +61XXXXXXXXX format
+  candidateId: string;
+}
+
+export interface AssessmentTriggerResponse {
+  sessionId: string;
+  status: "pending" | "dialling" | "in_progress" | "completed" | "failed" | "cancelled";
+  createdAt: string;
+}
+```
+
+**Note:** Full Assessment Report Contract (including Claim, SkillLevel types) is deferred to the phase where claim extraction is implemented.
 
 ---
 
-## 2. Port Interface Definitions (Python)
+## 2. Domain Models & Port Interfaces (Python)
 
-These are created as stubs in Phase 1 and implemented in subsequent phases.
+### 2.1 Domain Models
+
+Phase 1 defines minimal domain models in `apps/voice-engine/src/domain/models/`:
+
+```python
+# domain/models/assessment.py
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+
+class AssessmentStatus(str, Enum):
+    PENDING = "pending"
+    DIALLING = "dialling"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+@dataclass
+class CallConfig:
+    phone_number: str
+    candidate_id: str
+    timeout_seconds: int = 300
+
+@dataclass
+class CallConnection:
+    connection_id: str
+    room_url: str
+    is_active: bool
+
+@dataclass
+class AssessmentSession:
+    id: str
+    candidate_id: str
+    phone_number: str
+    status: AssessmentStatus
+    daily_room_url: str | None = None
+    recording_url: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+
+# domain/models/transcript.py
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class TranscriptSegment:
+    timestamp: datetime
+    speaker: str  # "candidate" or "bot"
+    text: str
+    duration_seconds: float
+
+@dataclass
+class Transcript:
+    id: str
+    session_id: str
+    raw_text: str
+    segments: list[TranscriptSegment]
+    language: str = "en"
+    created_at: datetime = None
+```
+
+### 2.2 Port Interfaces (Minimal Set)
+
+Three port interfaces in Phase 1 (`apps/voice-engine/src/domain/ports/`):
 
 ```python
 # domain/ports/assessment_trigger.py
 from abc import ABC, abstractmethod
-from domain.models.assessment import AssessmentSession
+from domain.models.assessment import AssessmentSession, CallConfig
 
-class AssessmentTrigger(ABC):
+class IAssessmentTrigger(ABC):
     @abstractmethod
-    async def trigger(self, phone_number: str, candidate_id: str) -> AssessmentSession:
-        """Initiate an assessment call."""
+    async def trigger(self, config: CallConfig) -> AssessmentSession:
+        """Initiate an assessment call and return session metadata."""
         ...
 
 # domain/ports/voice_transport.py
 from abc import ABC, abstractmethod
 from domain.models.assessment import CallConfig, CallConnection
 
-class VoiceTransport(ABC):
+class IVoiceTransport(ABC):
     @abstractmethod
-    async def dial(self, phone_number: str, config: CallConfig) -> CallConnection:
-        """Place an outbound call."""
+    async def dial(self, config: CallConfig) -> CallConnection:
+        """Place an outbound call and return connection details."""
         ...
-    
+
     @abstractmethod
     async def hangup(self, connection: CallConnection) -> None:
         """End an active call."""
-        ...
-
-# domain/ports/knowledge_base.py
-from abc import ABC, abstractmethod
-from domain.models.skill import SkillDefinition
-
-class KnowledgeBase(ABC):
-    @abstractmethod
-    async def query(
-        self, text: str, framework_type: str = "sfia-9", top_k: int = 5
-    ) -> list[SkillDefinition]:
-        """Query the knowledge base for relevant skill definitions."""
         ...
 
 # domain/ports/persistence.py
 from abc import ABC, abstractmethod
 from domain.models.assessment import AssessmentSession
 from domain.models.transcript import Transcript
-from domain.models.claim import Claim
 
-class Persistence(ABC):
+class IPersistence(ABC):
     @abstractmethod
-    async def save_session(self, session: AssessmentSession) -> None: ...
-    
-    @abstractmethod
-    async def save_transcript(self, transcript: Transcript) -> None: ...
-    
-    @abstractmethod
-    async def save_claims(self, session_id: str, claims: list[Claim]) -> None: ...
-    
-    @abstractmethod
-    async def get_session(self, session_id: str) -> AssessmentSession | None: ...
+    async def save_session(self, session: AssessmentSession) -> None:
+        """Save assessment session to storage."""
+        ...
 
-# domain/ports/llm_provider.py
-from abc import ABC, abstractmethod
-from domain.models.claim import Claim
-
-class LLMProvider(ABC):
     @abstractmethod
-    async def extract_claims(self, transcript: str) -> list[Claim]:
-        """Extract structured claims from a transcript."""
+    async def save_transcript(self, transcript: Transcript) -> None:
+        """Save transcript to storage."""
+        ...
+
+    @abstractmethod
+    async def get_session(self, session_id: str) -> AssessmentSession | None:
+        """Retrieve session by ID."""
         ...
 ```
+
+**Note:** `IKnowledgeBase` and `ILLMProvider` are deferred to the phase where claim extraction and SFIA mapping are implemented.
 
 ---
 
@@ -464,29 +536,67 @@ jobs:
 
 ---
 
+## 3. Prisma Database Setup
+
+In `apps/voice-engine/` or at the root (to be determined), create a `.env.example`:
+
+```bash
+DATABASE_URL=postgresql://user:password@localhost:5432/ai_skills_assessor?schema=public
+```
+
+The Prisma client is generated after `pnpm install` and migrations are applied before the voice engine starts.
+
+---
+
 ## 4. Acceptance Criteria
 
-- [ ] `pnpm install` at root succeeds with all workspaces resolved.
-- [ ] `pnpm build` completes for all packages (even if outputs are stubs).
+**Monorepo & Tooling**
+- [ ] `pnpm install` at root succeeds with all workspaces resolved (no unmet dependencies).
+- [ ] `turbo run build` completes for all packages without errors (next-app, web, and voice-engine stubs).
 - [ ] `pnpm lint` passes across all TypeScript packages.
-- [ ] `ruff check .` passes in `apps/voice-engine`.
-- [ ] All port interfaces are defined as Python ABCs in `apps/voice-engine/src/domain/ports/`.
-- [ ] All domain models are defined as Pydantic models in `apps/voice-engine/src/domain/models/`.
-- [ ] Database schema is defined in `packages/database/` with all core entities.
-- [ ] Shared types are defined in `packages/shared-types/` with both TypeScript types and JSON Schema.
-- [ ] Next.js app runs with `pnpm dev --filter @ai-skills-assessor/web`.
-- [ ] FastAPI app runs with `uvicorn src.main:app` in `apps/voice-engine/`.
-- [ ] CI workflow is defined and would pass on push.
+- [ ] `ruff check .` passes in `apps/voice-engine/`.
+- [ ] `pnpm typecheck` passes across all TypeScript packages.
+
+**Database Schema**
+- [ ] Prisma schema is defined in `packages/database/prisma/schema.prisma` with `Candidate` and `AssessmentSession` models.
+- [ ] Migration file `v0_2_0_init_schema/migration.sql` is generated and applies cleanly.
+- [ ] Schema includes indexes on `candidates(email)`, `assessment_sessions(candidateId)`, and `assessment_sessions(candidateId, createdAt)`.
+- [ ] Foreign key cascade rules are correctly defined (candidate deletion cascades to sessions).
+
+**Domain Models & Ports (Python)**
+- [ ] Domain models are defined as dataclasses in `apps/voice-engine/src/domain/models/` (AssessmentSession, CallConfig, CallConnection, Transcript, TranscriptSegment).
+- [ ] Port interfaces are defined as ABCs in `apps/voice-engine/src/domain/ports/` (IAssessmentTrigger, IVoiceTransport, IPersistence).
+- [ ] All domain models and port signatures match the requirements in this document.
+
+**Shared Types**
+- [ ] `packages/shared-types/src/index.ts` exports `AssessmentTriggerRequest` and `AssessmentTriggerResponse` types.
+
+**Application Stubs**
+- [ ] Next.js app starts with `pnpm dev --filter @ai-skills-assessor/web` and responds at `http://localhost:3000/api/health` with `{"status":"ok"}`.
+- [ ] FastAPI app starts with `uvicorn src.main:app` in `apps/voice-engine/` and responds with `{"status":"ok"}` on GET `/health`.
+- [ ] Both apps run without errors for at least 10 seconds.
+
+**CI/CD**
+- [ ] `.github/workflows/ci.yml` is defined and all jobs (lint-and-typecheck, test-typescript, test-python) pass on a test PR.
+- [ ] CI confirms TypeScript packages build, lint, and typecheck without errors.
+- [ ] CI confirms Python package lints with ruff and typechecks with mypy without errors.
 
 ## 5. Dependencies on Other Phases
 
-- **None** — Phase 1 is the foundation. All other phases depend on it.
+- **None** — Phase 1 is the foundation. All other phases depend on it being complete and correct.
 
 ## 6. Estimated Complexity
 
 - **Monorepo config**: Low — standard pnpm + Turborepo setup.
-- **Next.js shell**: Low — scaffold + stub routes.
-- **Python service shell**: Medium — port/model definitions require careful domain modelling.
-- **Database schema**: Medium — schema design for all core entities.
-- **Shared types**: Low-Medium — TypeScript types + JSON Schema generation.
-- **CI/CD**: Low — standard GitHub Actions.
+- **Next.js shell**: Low — scaffold + health/trigger route stubs.
+- **Python service shell**: Medium — domain models and port definitions require careful typing.
+- **Database schema (Prisma)**: Medium — schema design for candidates and assessment sessions, with proper indexes and constraints.
+- **Shared types**: Low — minimal, assessment trigger types only.
+- **Domain models & ports**: Medium — 5 dataclasses, 3 port ABCs with clear contracts.
+- **CI/CD**: Low — standard GitHub Actions with TypeScript and Python jobs.
+
+## 7. Revision History
+
+| Date | Change | Notes |
+|------|--------|-------|
+| 2026-04-19 | Refine pass | Tightened acceptance criteria, switched to Prisma, added version bump prerequisite, removed SFIA/claims/reports (defer to appropriate phase), reduced ports to minimal set (3), simplified schema to candidates + sessions only, added explicit build sequence. |

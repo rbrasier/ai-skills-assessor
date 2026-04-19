@@ -9,9 +9,10 @@ To Be Implemented
 ## References
 - PRD-002: Assessment Interview Workflow
 - ADR-005: RAG & Vector Store Strategy
+- Phase 1: Foundation & Monorepo Scaffold (defines Prisma schema, base ports)
 - Phase 2: Basic Voice Engine (produces transcripts)
 - Phase 4: Assessment Workflow (produces assessment data)
-- Phase 5: RAG Knowledge Base (skill definitions for mapping)
+- Phase 5: RAG Knowledge Base (implements IKnowledgeBase, ingests SFIA data)
 
 ## Objective
 
@@ -21,25 +22,229 @@ Build the post-call processing pipeline that takes a completed assessment transc
 
 ## 1. Deliverables
 
-### 1.1 Claim Extraction Service
+### 1.0 Domain Models & LLMProvider Port Definition
+
+#### 1.0.1 Domain Models for Claims
+
+**File:** `apps/voice-engine/src/domain/models/claim.py`
+
+```python
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class Claim:
+    """A discrete, verifiable work claim extracted from a transcript."""
+    verbatim_quote: str
+    interpreted_claim: str
+    sfia_skill_code: str | None = None
+    sfia_level: int | None = None
+    confidence: float | None = None
+    reasoning: str | None = None
+
+@dataclass
+class ExtractedClaim:
+    """A claim after full enrichment with skill mapping and confidence."""
+    id: str
+    session_id: str
+    verbatim_quote: str
+    interpreted_claim: str
+    sfia_skill_code: str
+    sfia_level: int
+    confidence: float
+    reasoning: str
+    sme_status: str = "pending"  # pending, approved, adjusted, rejected
+    sme_adjusted_level: int | None = None
+    sme_notes: str | None = None
+    created_at: datetime | None = None
+
+@dataclass
+class AssessmentReport:
+    """Top-level assessment report generated post-call."""
+    id: str
+    session_id: str
+    review_token: str  # NanoID-based unique link for SME review
+    status: str  # generated, sent, in_review, completed
+    claims: list[ExtractedClaim]
+    generated_at: datetime
+    sme_reviewed_at: datetime | None = None
+    expires_at: datetime | None = None
+
+@dataclass
+class SkillSummary:
+    """Summary of a single skill across all claims."""
+    skill_code: str
+    skill_name: str
+    max_level: int
+    avg_confidence: float
+    claim_count: int
+```
+
+#### 1.0.2 LLMProvider Port Definition
+
+**File:** `apps/voice-engine/src/domain/ports/llm_provider.py`
+
+The `ILLMProvider` port is deferred from Phase 1 and defined here:
+
+```python
+from abc import ABC, abstractmethod
+from domain.models.claim import Claim
+from domain.models.skill import SkillDefinition
+
+class ILLMProvider(ABC):
+    @abstractmethod
+    async def extract_claims(self, transcript: str) -> list[Claim]:
+        """
+        Extract discrete, verifiable work claims from a transcript.
+
+        Args:
+            transcript: Full transcript text from the assessment call
+
+        Returns:
+            List of Claim objects with verbatim_quote and interpreted_claim populated
+        """
+        ...
+
+    @abstractmethod
+    async def map_claim_to_skill(
+        self,
+        claim: Claim,
+        skill_definitions: list[SkillDefinition],
+    ) -> Claim:
+        """
+        Map a claim to the most appropriate SFIA skill code and responsibility level.
+
+        Args:
+            claim: Claim with extracted text
+            skill_definitions: Candidate SFIA skill definitions from KnowledgeBase
+
+        Returns:
+            Enriched Claim with sfia_skill_code, sfia_level, confidence, and reasoning
+        """
+        ...
+```
+
+### 1.2 Database Schema Updates
+
+**Update Prisma schema:** In `packages/database/prisma/schema.prisma`, add the `Claim` and `AssessmentReport` models:
+
+```prisma
+model Claim {
+  id                  String   @id @default(uuid())
+  sessionId           String
+  assessmentSession   AssessmentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  verbatimQuote       String   @db.Text
+  interpretedClaim    String   @db.Text
+  sfiaSkillCode       String   @db.VarChar(50)
+  sfiaLevel           Int
+  confidence          Float
+  reasoning           String?  @db.Text
+  smeStatus           String   @default("pending")  // pending, approved, adjusted, rejected
+  smeAdjustedLevel    Int?
+  smeNotes            String?  @db.Text
+  createdAt           DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([sfiaSkillCode])
+}
+
+model AssessmentReport {
+  id          String   @id @default(uuid())
+  sessionId   String   @unique
+  session     AssessmentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  reviewToken String   @unique @db.VarChar(50)  // NanoID-based, 21 chars
+  status      String   @default("generated")     // generated, sent, in_review, completed
+  generatedAt DateTime @default(now())
+  smeReviewedAt DateTime?
+  expiresAt   DateTime
+
+  @@index([reviewToken])
+  @@index([status])
+}
+```
+
+**Update `AssessmentSession` model to include relations:**
+
+```prisma
+model AssessmentSession {
+  // ... existing fields ...
+
+  claims              Claim[]
+  assessmentReport    AssessmentReport?
+
+  @@index([candidateId])
+  @@index([candidateId, createdAt])
+  @@index([status])
+}
+```
+
+### 1.3 Extend IPersistence Port for Claims
+
+**File:** `apps/voice-engine/src/domain/ports/persistence.py`
+
+Extend the `IPersistence` port (defined in Phase 1) with claim and report persistence methods:
+
+```python
+# Add these methods to the IPersistence ABC:
+
+@abstractmethod
+async def save_claims(
+    self,
+    session_id: str,
+    claims: list[ExtractedClaim]
+) -> None:
+    """Save extracted claims for a session."""
+    ...
+
+@abstractmethod
+async def save_assessment_report(
+    self,
+    report: AssessmentReport
+) -> None:
+    """Save the generated assessment report."""
+    ...
+
+@abstractmethod
+async def get_claims(self, session_id: str) -> list[ExtractedClaim]:
+    """Retrieve all claims for a session."""
+    ...
+
+@abstractmethod
+async def get_assessment_report(
+    self,
+    session_id: str
+) -> AssessmentReport | None:
+    """Retrieve the report for a session."""
+    ...
+
+@abstractmethod
+async def get_assessment_report_by_token(
+    self,
+    review_token: str
+) -> AssessmentReport | None:
+    """Retrieve a report by its SME review token."""
+    ...
+```
+
+### 1.4 Claim Extraction Service
 
 **File:** `apps/voice-engine/src/domain/services/claim_extractor.py`
 
 Domain service that orchestrates the extraction pipeline. This is pure business logic — no infrastructure dependencies.
 
 ```python
-from domain.ports.llm_provider import LLMProvider
-from domain.ports.knowledge_base import KnowledgeBase
-from domain.ports.persistence import Persistence
-from domain.models.claim import Claim, ClaimExtractionResult
+from domain.ports.llm_provider import ILLMProvider
+from domain.ports.knowledge_base import IKnowledgeBase
+from domain.ports.persistence import IPersistence
+from domain.models.claim import Claim, ExtractedClaim, AssessmentReport
 from domain.models.transcript import Transcript
 
 class ClaimExtractor:
     def __init__(
         self,
-        llm_provider: LLMProvider,
-        knowledge_base: KnowledgeBase,
-        persistence: Persistence,
+        llm_provider: ILLMProvider,
+        knowledge_base: IKnowledgeBase,
+        persistence: IPersistence,
     ):
         self.llm = llm_provider
         self.kb = knowledge_base
@@ -85,11 +290,11 @@ class ClaimExtractor:
         )
 ```
 
-### 1.2 Anthropic LLM Provider Adapter
+### 1.5 Anthropic LLM Provider Adapter
 
 **File:** `apps/voice-engine/src/adapters/anthropic_llm_provider.py`
 
-Implements the `LLMProvider` port using Claude 3.5 Sonnet.
+Implements the `ILLMProvider` port using Claude 3.5 Sonnet.
 
 ```python
 from anthropic import AsyncAnthropic
@@ -211,11 +416,11 @@ Return your response as JSON:
 Return ONLY the JSON object, no other text."""
 ```
 
-### 1.3 Report Generator
+### 1.6 Report Generator
 
 **File:** `apps/voice-engine/src/domain/services/report_generator.py`
 
-Generates the structured assessment report and the NanoID review link.
+Generates the structured assessment report and the NanoID review link for SME access.
 
 ```python
 from nanoid import generate as nanoid

@@ -487,31 +487,15 @@ The default landing page of the candidate portal — what candidates see when th
 
 ---
 
-### 1.7 Updated Database Schema
+### 1.7 Database Schema Integration
 
-**File:** `packages/database/src/schema/assessment-sessions.ts`
+**Note:** The `Candidate` and `AssessmentSession` tables are already defined in Phase 1 using Prisma (`packages/database/prisma/schema.prisma`). Phase 2 uses these tables via the Prisma client, generated after `pnpm install`.
 
-Minimal schema for tracking calls (no claim-related fields yet).
+The `AssessmentSession` model includes:
+- `id`, `candidateId`, `phoneNumber`, `status` (pending, dialling, in_progress, completed, failed, cancelled)
+- `dailyRoomUrl`, `recordingUrl`, `startedAt`, `endedAt`, `createdAt`
 
-```typescript
-import { pgTable, uuid, text, timestamp } from "drizzle-orm/pg-core";
-
-export const assessmentSessions = pgTable("assessment_sessions", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  candidateId: uuid("candidate_id").notNull(),
-  status: text("status", {
-    enum: ["pending", "dialling", "in_progress", "completed", "failed"],
-  })
-    .notNull()
-    .default("pending"),
-  frameworkType: text("framework_type").notNull().default("sfia-9"),
-  dailyRoomUrl: text("daily_room_url"),
-  recordingUrl: text("recording_url"),
-  startedAt: timestamp("started_at"),
-  endedAt: timestamp("ended_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
-```
+No schema changes are required in Phase 2. The PostgreSQL adapter's `update_session_status()` method queries this table directly.
 
 ---
 
