@@ -19,6 +19,15 @@
     "db:migrate": "pnpm --filter @ai-skills-assessor/database migrate",
     "db:seed": "pnpm --filter @ai-skills-assessor/database seed"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "unrs-resolver"
+    ]
+  },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.8.0",
     "@typescript-eslint/parser": "^8.8.0",

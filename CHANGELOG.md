@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `packages/database` with Prisma schema for `Candidate` and `AssessmentSession`,
   plus initial migration `v0_2_0_init_schema/migration.sql`.
 - `apps/web` Next.js 14 (App Router) shell with `/api/health`,
-  `/api/assessment/trigger`, and stub pages for landing, dashboard, and SME review.
+  `/api/assessment/trigger`, and stub pages for landing (`/`), dashboard
+  (`/dashboard`), and SME review (`/review/[token]`).
 - `apps/voice-engine` FastAPI shell with:
   - Domain models (`AssessmentSession`, `CallConfig`, `CallConnection`,
     `Transcript`, `TranscriptSegment`, plus stub `Claim` / `SkillDefinition` models).

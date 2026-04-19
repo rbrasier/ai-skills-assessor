@@ -7,7 +7,7 @@ returns a synthetic ``pending`` session — no real call is placed.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, status
@@ -42,5 +42,5 @@ async def trigger_assessment(payload: AssessmentTriggerPayload) -> AssessmentTri
     return AssessmentTriggerResult(
         session_id=str(uuid4()),
         status="pending",
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )

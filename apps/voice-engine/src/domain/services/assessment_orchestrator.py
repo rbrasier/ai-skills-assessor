@@ -9,7 +9,7 @@ is added by later phases.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from src.domain.models.assessment import (
@@ -47,7 +47,7 @@ class AssessmentOrchestrator:
             session,
             status=AssessmentStatus.DIALLING,
             daily_room_url=connection.room_url,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
         )
         await self._persistence.save_session(started_session)
 
