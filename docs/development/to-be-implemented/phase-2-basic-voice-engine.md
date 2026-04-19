@@ -8,14 +8,13 @@ To Be Implemented
 
 ## References
 - PRD-001: Voice-AI Skills Assessment Platform
-- PRD-002: Assessment Interview Workflow
 - ADR-001: Hexagonal Architecture (Ports & Adapters)
 - ADR-004: Voice Engine Technology Decisions
 - Phase 1: Foundation & Monorepo Scaffold (prerequisite)
 
 ## ⚠️ Blocking Note
 
-**Phase 2 implementation is blocked until PRD-001 and PRD-002 reach 🟢 Approved status.** Use `/check-prd PRD-001 PRD-002` to verify before starting.
+**Phase 2 implementation is blocked until PRD-001 reach 🟢 Approved status.** Use `/check-prd PRD-001` to verify before starting.
 
 ---
 
