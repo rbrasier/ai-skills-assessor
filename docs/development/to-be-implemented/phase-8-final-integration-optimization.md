@@ -25,9 +25,15 @@ Conduct end-to-end integration testing across all components (voice engine → a
 **The full flow, wired together:**
 
 ```
-Admin Dashboard                Voice Engine                     Post-Call Pipeline
+Candidate Portal (/)           Voice Engine                     Post-Call Pipeline
      │                              │                                  │
-     │  POST /api/assessment/       │                                  │
+     │  POST /api/v1/assessment/    │                                  │
+     │  candidate (intake form)     │                                  │
+     ├─────────────────────────────▶│                                  │
+     │  { candidate_id }            │                                  │
+     │◀─────────────────────────────│                                  │
+     │                              │                                  │
+     │  POST /api/v1/assessment/    │                                  │
      │  trigger                     │                                  │
      ├─────────────────────────────▶│                                  │
      │                              │  Create Daily room               │
@@ -159,7 +165,7 @@ DAILY_ROOM_CONFIG = {
         "enable_chat": False,
         "enable_screenshare": False,
         "sip": {
-            "display_name": "SFIA Assessment",
+            "display_name": "Resonant · Noa",
             "video": False,
             "sip_mode": "dial-out",
             "num_endpoints": 1,
@@ -328,9 +334,10 @@ REVIEW_LINK_EXPIRY_DAYS=30
 
 | Scenario | Steps | Expected Result |
 |----------|-------|-----------------|
-| **Happy path** | Trigger → Call → Discover → Evidence → Close → Process → Review | Report with claims, reviewable via link |
-| **Candidate declines** | Trigger → Call → Introduction (decline) → Close | Session status: "completed", no claims |
-| **Call fails (no answer)** | Trigger → Dial → Timeout | Session status: "failed", error logged |
+| **Happy path** | Candidate fills form → Call → Discover → Evidence → Close → Process → Review | Report with claims, reviewable via link |
+| **Candidate declines** | Candidate fills form → Call → Introduction (decline) → Close | Session status: "completed", no claims |
+| **Call fails (no answer)** | Candidate fills form → Dial → Timeout | Session status: "failed" with reason, candidate sees "Failed" state |
+| **Candidate cancels** | Candidate fills form → Dialling → Clicks Cancel | Session status: "cancelled", candidate sees "Cancelled" state |
 | **Long monologue (interjection)** | Candidate talks >60s without claim | Bot interjects once, then continues |
 | **Empty transcript** | Call connects but minimal speech | Report generated with 0 claims |
 | **SME adjusts claims** | Review → Adjust levels → Submit | Report reflects adjusted levels |
@@ -346,7 +353,7 @@ REVIEW_LINK_EXPIRY_DAYS=30
 
 ## 3. Acceptance Criteria
 
-- [ ] Full end-to-end flow works: trigger → call → process → review → submit.
+- [ ] Full end-to-end flow works: candidate intake form → call → process → review → submit.
 - [ ] Daily rooms are created in `ap-southeast-2` region.
 - [ ] Call recording URLs are captured and persisted.
 - [ ] Transcript is persisted with timestamped segments.

@@ -52,7 +52,7 @@ class DailyVoiceTransport(VoiceTransport):
         transport = DailyTransport(
             room_url=room.url,
             token=room.token,
-            bot_name="SFIA Assessment Bot",
+            bot_name="Noa",
             params=DailyParams(
                 audio_in_enabled=True,
                 audio_out_enabled=True,
@@ -140,8 +140,8 @@ flow_config: FlowConfig = {
                 {
                     "role": "system",
                     "content": (
-                        "You are a friendly, professional AI skills assessor. "
-                        "Introduce yourself, explain you'll be conducting a skills assessment "
+                        "You are Noa, a friendly, professional AI skills assessor from Resonant. "
+                        "Introduce yourself by name, explain you'll be conducting a skills assessment "
                         "based on the SFIA framework, and ask for verbal consent to proceed "
                         "and to record the call."
                     ),
@@ -510,8 +510,8 @@ import re
 router = APIRouter(prefix="/api/v1")
 
 class TriggerRequest(BaseModel):
-    phone_number: str = Field(..., pattern=r"^\+61\d{9}$")
-    candidate_id: str
+    candidate_id: str  # Candidate email (from POST /assessment/candidate)
+    phone_number: str  # International format accepted; normalized to +format by Phase 2 transport
 
 class TriggerResponse(BaseModel):
     session_id: str
@@ -519,7 +519,7 @@ class TriggerResponse(BaseModel):
 
 @router.post("/assessment/trigger", response_model=TriggerResponse)
 async def trigger_assessment(request: TriggerRequest):
-    """Trigger an outbound assessment call."""
+    """Trigger an outbound assessment call. Phone numbers are normalized to +format."""
     session_id = await orchestrator.run_assessment(
         phone_number=request.phone_number,
         candidate_id=request.candidate_id,
