@@ -56,15 +56,18 @@ An AI-powered system that:
 |-----------|-------------|-------------|
 | **Candidate** | IT professional being assessed | Conversation with AI bot; clear explanation of framework being assessed |
 | **SME Reviewer** | Subject matter expert validating AI-extracted claims | Structured report with clear evidence (transcript excerpts), confidence indicators, easy claim approval/adjustment workflow |
-| **Administrator** | HR/L&D staff managing assessments | Simple trigger mechanism (phone number + candidate ID), real-time call status, access to completed reports |
+| **Administrator** | HR/L&D staff managing assessments | Read-only monitoring of call status and history, access to completed reports |
 
 ## 4. Core User Journeys
 
-### 4.1 Assessment Trigger (Administrator)
-1. Administrator enters candidate phone number (+61 format) and candidate ID into the web portal.
-2. System validates the input and enqueues the call.
-3. The voice engine initiates an outbound call via Daily transport.
-4. Administrator sees call status in real time (dialling, in-progress, completed).
+### 4.1 Assessment Initiation (Candidate Self-Service)
+1. Candidate visits the assessment portal (`/`) and completes the intake form (FIRST NAME, LAST NAME, WORK EMAIL, EMPLOYEE ID, PHONE NUMBER — all mandatory).
+2. System creates or updates the Candidate record (keyed by WORK EMAIL), then creates an AssessmentSession.
+3. The voice engine initiates an outbound call to the candidate's phone number (international format accepted) via Daily transport.
+4. Candidate sees real-time call state transitions (Dialling → Call In Progress → Interview Complete) on the same page.
+5. Administrators can monitor call history and status via a read-only admin dashboard.
+
+**Note:** Calls are candidate-initiated (self-service), not administrator-triggered. The admin dashboard provides monitoring and observability only.
 
 ### 4.2 Voice Assessment (Candidate)
 1. Candidate receives a phone call from the AI bot.

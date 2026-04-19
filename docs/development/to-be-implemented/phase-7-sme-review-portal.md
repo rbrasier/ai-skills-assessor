@@ -13,7 +13,9 @@ To Be Implemented
 
 ## Objective
 
-Build the Next.js frontend with two primary interfaces: an Admin Dashboard for triggering assessments and monitoring status, and an SME Review Portal where subject matter experts can review, approve, adjust, or reject AI-extracted claims. The portal is accessed via unique NanoID-based URLs.
+Build the Next.js frontend with two primary interfaces: a read-only Admin Dashboard for monitoring assessment status and history, and an SME Review Portal where subject matter experts can review, approve, adjust, or reject AI-extracted claims. The portal is accessed via unique NanoID-based URLs.
+
+**Note:** Assessment calls are candidate-initiated via the self-service portal (`/`, Phase 2). The admin dashboard is monitoring-only — it does not trigger calls.
 
 ---
 
@@ -32,16 +34,14 @@ Build the Next.js frontend with two primary interfaces: an Admin Dashboard for t
 ```
 apps/web/src/app/
 ├── layout.tsx                          ← Root layout (Tailwind, fonts, metadata)
-├── page.tsx                            ← Landing / login redirect
+├── page.tsx                            ← Candidate self-service portal (Phase 2: intake form + call status)
 ├── (dashboard)/
 │   ├── layout.tsx                      ← Dashboard layout (sidebar, header)
-│   ├── page.tsx                        ← Dashboard home (recent assessments)
+│   ├── page.tsx                        ← Dashboard home (recent assessments — read-only)
 │   ├── assessments/
-│   │   ├── page.tsx                    ← Assessment list
-│   │   ├── new/
-│   │   │   └── page.tsx               ← Trigger new assessment form
+│   │   ├── page.tsx                    ← Assessment list (read-only)
 │   │   └── [id]/
-│   │       └── page.tsx               ← Assessment detail (status, transcript)
+│   │       └── page.tsx               ← Assessment detail (status, transcript, recording)
 │   └── candidates/
 │       ├── page.tsx                    ← Candidate list
 │       └── [id]/
@@ -52,130 +52,37 @@ apps/web/src/app/
 │       └── page.tsx                    ← SME review interface
 └── api/
     └── assessment/
-        └── trigger/
-            └── route.ts               ← POST: trigger assessment (from Phase 1)
+        └── status/
+            └── route.ts               ← GET: status proxy to voice engine
 ```
 
-### 1.2 Admin Dashboard
+**Note:** There is no `/assessments/new` route. Calls are triggered by candidates via the self-service portal (`/`). The admin dashboard has no trigger capability.
 
-#### Assessment Trigger Form
+### 1.2 Admin Dashboard (Read-Only Monitoring)
 
-**Route:** `/assessments/new`
+The admin dashboard provides read-only visibility into all assessment sessions. It does **not** trigger calls — assessment initiation is candidate self-service via the portal at `/` (Phase 2).
 
-**Component:** `TriggerAssessmentForm`
+**Routes:**
+- `/` (dashboard home) → Recent sessions overview
+- `/assessments` → Paginated session list with filters
+- `/assessments/[id]` → Session detail (transcript, recording, extracted claims)
+- `/candidates` → Candidate list (keyed by WORK EMAIL)
+- `/candidates/[id]` → Candidate profile + assessment history
 
-```tsx
-"use client";
-
-import { useState } from "react";
-import { Phone, User, Loader2, CheckCircle } from "lucide-react";
-
-interface TriggerFormData {
-  phoneNumber: string;
-  candidateId: string;
-  candidateName: string;
-  smeEmail?: string;
-}
-
-export function TriggerAssessmentForm() {
-  const [formData, setFormData] = useState<TriggerFormData>({
-    phoneNumber: "+61",
-    candidateId: "",
-    candidateName: "",
-    smeEmail: "",
-  });
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [result, setResult] = useState<{ sessionId: string } | null>(null);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setStatus("loading");
-
-    try {
-      const response = await fetch("/api/assessment/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
-      });
-      
-      if (!response.ok) throw new Error("Failed to trigger assessment");
-      
-      const data = await response.json();
-      setResult(data);
-      setStatus("success");
-    } catch {
-      setStatus("error");
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="max-w-lg space-y-6">
-      <div>
-        <label className="block text-sm font-medium text-gray-700">
-          <Phone className="inline h-4 w-4 mr-1" />
-          Phone Number (AU)
-        </label>
-        <input
-          type="tel"
-          pattern="^\+61\d{9}$"
-          placeholder="+61412345678"
-          value={formData.phoneNumber}
-          onChange={(e) => setFormData({ ...formData, phoneNumber: e.target.value })}
-          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-          required
-        />
-        <p className="mt-1 text-xs text-gray-500">Format: +61XXXXXXXXX</p>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-700">
-          <User className="inline h-4 w-4 mr-1" />
-          Candidate Name
-        </label>
-        <input
-          type="text"
-          value={formData.candidateName}
-          onChange={(e) => setFormData({ ...formData, candidateName: e.target.value })}
-          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-          required
-        />
-      </div>
-
-      {/* Additional fields... */}
-
-      <button
-        type="submit"
-        disabled={status === "loading"}
-        className="flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
-      >
-        {status === "loading" ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Phone className="h-4 w-4" />
-        )}
-        Trigger Assessment Call
-      </button>
-
-      {status === "success" && result && (
-        <div className="flex items-center gap-2 rounded-md bg-green-50 p-4 text-green-800">
-          <CheckCircle className="h-5 w-5" />
-          Assessment initiated. Session ID: {result.sessionId}
-        </div>
-      )}
-    </form>
-  );
-}
-```
+**Data source:** Admin dashboard calls `GET /api/v1/admin/sessions` with optional filters:
+- Status: `pending`, `dialling`, `in_progress`, `completed`, `failed`, `cancelled`
+- Email: search by candidate WORK EMAIL
+- Date range: `since` / `until`
 
 #### Assessment List
 
 **Route:** `/assessments`
 
 Displays a table of all assessments with:
-- Candidate name
-- Phone number (masked: +61*****678)
-- Status badge (pending, dialling, in_progress, completed, processed, failed)
-- Triggered date/time
+- Candidate work email
+- Phone number (masked: +XX*****XXX)
+- Status badge (pending, dialling, in_progress, completed, processed, failed, cancelled)
+- Started date/time
 - Actions (view detail, trigger processing)
 
 #### Assessment Detail
@@ -363,10 +270,9 @@ export async function submitFinalReview(token: string) {
 
 ## 3. Acceptance Criteria
 
-- [ ] Dashboard: `/assessments` shows a paginated list of assessments.
-- [ ] Dashboard: `/assessments/new` form validates AU phone number format.
-- [ ] Dashboard: Triggering an assessment calls the voice engine API and shows status.
-- [ ] Dashboard: `/assessments/[id]` shows assessment detail with transcript.
+- [ ] Dashboard: `/assessments` shows a paginated list of assessments (read-only, no trigger form).
+- [ ] Dashboard: `/assessments` supports filtering by status, candidate email, and date range.
+- [ ] Dashboard: `/assessments/[id]` shows assessment detail with transcript and recording.
 - [ ] Review: `/review/[token]` loads the correct report for a valid token.
 - [ ] Review: `/review/[token]` shows 404 for invalid/expired tokens.
 - [ ] Review: Claims are displayed with verbatim quote, interpretation, and AI mapping.

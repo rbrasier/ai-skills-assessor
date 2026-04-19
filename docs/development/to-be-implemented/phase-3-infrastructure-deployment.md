@@ -179,8 +179,9 @@ STT_API_KEY=<production_key>
 TTS_PROVIDER=elevenlabs
 TTS_API_KEY=<production_key>
 
-# Basic voice engine config
+# Application URLs
 VOICE_ENGINE_URL=https://api.assessor.example.com
+CANDIDATE_PORTAL_URL=https://assessor.example.com
 ADMIN_DASHBOARD_URL=https://admin.assessor.example.com
 ```
 
@@ -210,25 +211,42 @@ Basic end-to-end test that verifies production is healthy.
 
 ```python
 async def test_smoke_production():
-    """Smoke test: can we trigger a call and track status?"""
+    """Smoke test: candidate intake → call trigger → status polling works end-to-end."""
     client = AsyncClient(base_url="https://api.assessor.example.com")
     
-    # 1. Trigger a call to a test number
+    # 1. Create/lookup candidate (Step 01 of intake form)
+    response = await client.post(
+        "/api/v1/assessment/candidate",
+        json={
+            "work_email": "smoke-test@example.com",
+            "first_name": "Smoke",
+            "last_name": "Test",
+            "employee_id": "SMOKE-001",
+        },
+    )
+    assert response.status_code == 200
+    candidate_id = response.json()["candidate_id"]
+
+    # 2. Trigger call (Step 02 — accepts international numbers)
     response = await client.post(
         "/api/v1/assessment/trigger",
         json={
-            "phone_number": "+61XXXXXXXXX",  # Test number
-            "candidate_id": "test-candidate-001",
+            "candidate_id": candidate_id,
+            "phone_number": "+61400000000",  # Test number
         },
     )
     assert response.status_code == 200
     session_id = response.json()["session_id"]
     
-    # 2. Check status endpoint works
+    # 3. Check status endpoint works
     response = await client.get(f"/api/v1/assessment/{session_id}/status")
     assert response.status_code == 200
     
-    # 3. Verify database is reachable
+    # 4. Check admin sessions endpoint works (read-only monitoring)
+    response = await client.get("/api/v1/admin/sessions?limit=1")
+    assert response.status_code == 200
+
+    # 5. Verify database is reachable
     response = await client.get("/health")
     assert response.status_code == 200
 ```
@@ -307,11 +325,12 @@ async def test_smoke_production():
 ## 7. Success Criteria
 
 By the end of Phase 3:
-- ✅ Admin dashboard is live at a public URL (e.g., `https://admin.assessor.example.com`).
-- ✅ A user can trigger a call from the production admin dashboard.
-- ✅ Call status updates appear in real-time.
+- ✅ Candidate portal is live at a public URL (e.g., `https://assessor.example.com`).
+- ✅ A candidate can self-initiate an assessment call via the intake form in production.
+- ✅ Admin dashboard is live for read-only monitoring (e.g., `https://admin.assessor.example.com`).
+- ✅ Call status updates appear in real-time on the candidate portal.
 - ✅ Call duration is tracked and displayed.
-- ✅ Calls to real Australian phone numbers work (or at least to test numbers).
+- ✅ Calls to real phone numbers work in production (international numbers supported).
 - ✅ Logs are centralized and searchable.
 - ✅ Database is backed up automatically.
 - ✅ Team can deploy new code via `git push main` without manual steps.
