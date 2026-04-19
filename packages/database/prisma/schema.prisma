@@ -1,0 +1,49 @@
+// AI Skills Assessor — Phase 1 schema.
+//
+// Scope: candidates and assessment sessions only. SFIA-specific tables,
+// claims, transcripts, and assessment reports are introduced by later
+// phases (claim extraction, RAG knowledge base, SME review portal).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Candidate {
+  id          String   @id @default(uuid())
+  firstName   String   @db.VarChar(255)
+  lastName    String   @db.VarChar(255)
+  email       String   @unique @db.VarChar(255)
+  phoneNumber String   @db.VarChar(20)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assessmentSessions AssessmentSession[]
+
+  @@index([email])
+  @@index([createdAt])
+  @@map("candidates")
+}
+
+model AssessmentSession {
+  id           String    @id @default(uuid())
+  candidateId  String
+  candidate    Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  phoneNumber  String    @db.VarChar(20)
+  status       String    @default("pending") // pending | dialling | in_progress | completed | failed | cancelled
+  dailyRoomUrl String?
+  recordingUrl String?
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([candidateId])
+  @@index([candidateId, createdAt])
+  @@index([status])
+  @@map("assessment_sessions")
+}
