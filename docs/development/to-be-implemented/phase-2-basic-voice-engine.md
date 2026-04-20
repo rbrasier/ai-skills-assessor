@@ -527,7 +527,7 @@ async def list_sessions(
 
 ### 1.7 Candidate Portal UI (STEP 01 & 02)
 
-**Design reference:** [Resonant Skills Interview mockup](https://api.anthropic.com/v1/design/h/eYopn19yj1-13nKkVwDedg?open_file=index.html)
+**Design reference:** [Resonant Skills Interview mockup](/frontend/public/index.html)
 
 **File:** `apps/web/src/app/page.tsx`
 
@@ -916,6 +916,10 @@ Admin Dashboard (/dashboard/page.tsx)
 - [ ] Unit tests: Phone number normalization
 - [ ] Integration test: form submission → candidate creation → call trigger → status polling
 - [ ] Mock VoiceTransport and Persistence adapters for testing (no real Daily/database needed)
+
+### Documentation
+- [ ] Local setup guide in `/docs/guides/local-setup.md`: Dependencies, environment variables, database initialization, Prisma migrations, Daily API credentials, running voice engine and web app locally
+- [ ] Railway deployment guide in `/docs/guides/deployed-setup.md`: Deploying to Railway (environment variables, Postgres setup, service configuration), Daily region configuration, API endpoint documentation, monitoring/health checks
 
 ---
 
