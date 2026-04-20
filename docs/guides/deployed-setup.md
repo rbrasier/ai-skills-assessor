@@ -5,9 +5,14 @@ This guide walks through deploying the Next.js web app and the Python
 voice engine to [Railway](https://railway.app), backed by Railway's
 managed Postgres.
 
-> The voice engine runs in a single region. Daily rooms are created in
-> `ap-southeast-2` (Sydney) to minimise PSTN latency for Australian
-> candidates — see ADR-004 §2 and the phase doc §1.2.
+> **Region**: Railway deploys to Singapore (`asia-southeast1`). Daily
+> rooms are pinned to the Singapore SFU (`ap-southeast-1`) via
+> `DAILY_GEO` so the voice engine and Daily's media server are
+> co-located — keeping media latency near-zero. PSTN dial-out to
+> Australian +61 numbers is handled by Daily's internal network from
+> their Singapore SFU to their Sydney PSTN gateway.
+> See [ADR-006](../development/adr/ADR-006-deployment-platform.md) for
+> the full Railway vs AWS trade-off analysis.
 
 ---
 
@@ -37,6 +42,7 @@ Set these in Railway's **Variables** panel for each service.
 | `DATABASE_URL`        | `${{postgres.DATABASE_URL}}` (reference)                        |
 | `DAILY_API_KEY`       | From Daily dashboard → Developers                               |
 | `DAILY_DOMAIN`        | `your-team.daily.co`                                            |
+| `DAILY_GEO`           | `ap-southeast-1` (Singapore SFU — co-located with Railway)      |
 | `LOG_LEVEL`           | `INFO`                                                          |
 | `PORT`                | Railway injects this — do not override                          |
 
@@ -85,9 +91,12 @@ pnpm --filter @ai-skills-assessor/database run migrate
 3. Copy the API key from Daily → Developers.
 4. Paste into Railway's `DAILY_API_KEY` variable on the `voice-engine`
    service.
-5. `DailyVoiceTransport` pins rooms to `ap-southeast-2` — no extra
-   configuration needed; overridable via the `CallConfig.region`
-   domain object if you need to experiment.
+5. Set `DAILY_GEO=ap-southeast-1` on the `voice-engine` service.
+   This pins Daily rooms to the Singapore SFU, co-located with Railway.
+   PSTN calls to Australian +61 numbers still work — Daily routes them
+   internally from the Singapore SFU to their Sydney PSTN gateway.
+   To use the Sydney SFU instead (e.g. after migrating to AWS), set
+   `DAILY_GEO=ap-southeast-2`.
 
 ---
 
