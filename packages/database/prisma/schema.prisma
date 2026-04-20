@@ -1,8 +1,11 @@
-// AI Skills Assessor — Phase 1 schema.
+// AI Skills Assessor — Phase 2 schema.
 //
-// Scope: candidates and assessment sessions only. SFIA-specific tables,
-// claims, transcripts, and assessment reports are introduced by later
-// phases (claim extraction, RAG knowledge base, SME review portal).
+// Scope: candidates and assessment sessions, now with JSONB `metadata`
+// columns for forward-compatible fields (employee_id, failureReason,
+// cancelledAt, …). `candidates.email` is the primary key — per
+// phase-2-basic-voice-engine.md §1.9. SFIA-specific tables, claims,
+// transcripts, and assessment reports are introduced by later phases
+// (claim extraction, RAG knowledge base, SME review portal).
 
 generator client {
   provider = "prisma-client-js"
@@ -15,27 +18,30 @@ datasource db {
 }
 
 model Candidate {
-  id          String   @id @default(uuid())
-  firstName   String   @db.VarChar(255)
-  lastName    String   @db.VarChar(255)
-  email       String   @unique @db.VarChar(255)
-  phoneNumber String   @db.VarChar(20)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  email     String   @id @db.VarChar(255)
+  firstName String   @db.VarChar(255)
+  lastName  String   @db.VarChar(255)
+  // JSONB container for optional / extensible fields:
+  //   { "employee_id": "HLX-00481", ... }
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
 
   assessmentSessions AssessmentSession[]
 
-  @@index([email])
   @@index([createdAt])
   @@map("candidates")
 }
 
 model AssessmentSession {
   id           String    @id @default(uuid())
-  candidateId  String
-  candidate    Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  phoneNumber  String    @db.VarChar(20)
-  status       String    @default("pending") // pending | dialling | in_progress | completed | failed | cancelled
+  candidateId  String    @db.VarChar(255)
+  candidate    Candidate @relation(fields: [candidateId], references: [email], onDelete: Cascade)
+  phoneNumber  String    @db.VarChar(32)
+  // pending | dialling | in_progress | completed | failed | cancelled
+  status       String    @default("pending") @db.VarChar(32)
+  // JSONB container for optional / extensible fields:
+  //   { "failureReason": "...", "cancelledAt": "...", ... }
+  metadata     Json      @default("{}")
   dailyRoomUrl String?
   recordingUrl String?
   startedAt    DateTime?
@@ -45,5 +51,6 @@ model AssessmentSession {
   @@index([candidateId])
   @@index([candidateId, createdAt])
   @@index([status])
+  @@index([createdAt])
   @@map("assessment_sessions")
 }
