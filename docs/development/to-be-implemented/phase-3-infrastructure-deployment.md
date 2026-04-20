@@ -431,7 +431,19 @@ By the end of Phase 3:
 
 ---
 
-## 8. Notes
+## 8. Definition of Done
+
+Before closing Phase 3, verify all of the following:
+
+- [ ] All acceptance criteria in Section 2 are checked off.
+- [ ] `docs/guides/deployed-setup.md` reflects the actual deployed configuration — env var names, service layout, Daily region, and migration steps match what is running in production.
+- [ ] `docs/guides/local-setup.md` is accurate against the current codebase — prerequisites, install steps, and smoke test commands all work on a clean checkout.
+- [ ] Any discrepancies found between the guides and the implementation are fixed in the guides (not papered over).
+- [ ] Phase doc moved from `to-be-implemented/` to `implemented/{version}/` with implementation notes.
+
+---
+
+## 9. Notes
 
 - This phase is intentionally **minimal in scope**: get the basic voice engine running in a production environment, nothing more.
 - Feature development (assessment workflow, RAG, claim extraction) happens in Phases 4–7 **on the validated infrastructure**.
