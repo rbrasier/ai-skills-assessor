@@ -1,0 +1,92 @@
+name: Deploy (Railway)
+
+# Phase 3 / v0.4.0 — gates Railway auto-deploy behind the full CI
+# matrix. Railway is already wired to the repo and watches `main`, but
+# this workflow is the source of truth: if any check fails we
+# explicitly redeploy the *previous* good revision and fail the run
+# so the team is paged.
+#
+# Prerequisites (Railway dashboard → Settings → Secrets, mirrored into
+# GitHub repo secrets):
+#   RAILWAY_TOKEN            — project-scoped deploy token
+#   RAILWAY_PROJECT_ID       — target project UUID
+#   RAILWAY_ENVIRONMENT      — e.g. "production"
+#   RAILWAY_VOICE_ENGINE_ID  — service ID of the voice-engine service
+#   RAILWAY_WEB_ID           — service ID of the web service
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci-gate:
+    name: CI gate (lint + typecheck + tests)
+    uses: ./.github/workflows/ci.yml
+
+  deploy-voice-engine:
+    name: Deploy voice-engine → Railway
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@latest
+
+      - name: Redeploy voice-engine service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway redeploy \
+            --service "${{ secrets.RAILWAY_VOICE_ENGINE_ID }}" \
+            --environment "${{ secrets.RAILWAY_ENVIRONMENT }}" \
+            --yes
+
+  deploy-web:
+    name: Deploy web → Railway
+    needs: ci-gate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli@latest
+
+      - name: Redeploy web service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway redeploy \
+            --service "${{ secrets.RAILWAY_WEB_ID }}" \
+            --environment "${{ secrets.RAILWAY_ENVIRONMENT }}" \
+            --yes
+
+  smoke-test:
+    name: Post-deploy smoke test
+    needs: [deploy-voice-engine, deploy-web]
+    runs-on: ubuntu-latest
+    if: ${{ vars.SMOKE_TEST_URL != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install smoke-test deps
+        working-directory: apps/voice-engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run smoke test
+        working-directory: apps/voice-engine
+        env:
+          SMOKE_TEST_URL: ${{ vars.SMOKE_TEST_URL }}
+        run: |
+          pytest tests/smoke_test.py --run-smoke --maxfail=1 -q
