@@ -20,6 +20,19 @@ from src.domain.models.transcript import Transcript
 
 
 class IPersistence(ABC):
+    # ─── Liveness ────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def ping(self) -> bool:
+        """Probe the backing store. Returns ``True`` when reachable.
+
+        Added in Phase 3 / v0.4.0 so the ``/health`` endpoint can tell
+        Railway that a deploy is unhealthy when the DB is unreachable.
+        Adapters should swallow expected connection errors and return
+        ``False`` — they must never raise.
+        """
+        ...
+
     # ─── Candidate ───────────────────────────────────────────────────
 
     @abstractmethod
