@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "voice-engine"
-version = "0.4.0"
+version = "0.4.1"
 description = "AI Skills Assessor — voice engine (FastAPI + Pipecat)."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -23,10 +23,12 @@ dependencies = [
 # native deps. Later phases will require `pip install -e .[voice,dev]`.
 [project.optional-dependencies]
 voice = [
-    "pipecat-ai[daily,openai,anthropic,deepgram]>=0.0.47",
+    "pipecat-ai[daily,anthropic,deepgram,elevenlabs,silero]>=0.0.47",
+    "pipecat-ai-flows>=0.0.10",
     "asyncpg>=0.29.0",
     "pgvector>=0.3.0",
     "anthropic>=0.30.0",
+    "loguru>=0.7.0",
 ]
 dev = [
     "pytest>=8.0",

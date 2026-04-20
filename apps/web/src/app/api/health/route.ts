@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const WEB_VERSION = "0.4.0";
+const WEB_VERSION = "0.4.1";
 
 export async function GET() {
   return NextResponse.json({

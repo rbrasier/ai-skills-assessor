@@ -31,7 +31,7 @@ from src.domain.services.call_manager import (
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
 
-_VOICE_ENGINE_VERSION = "0.4.0"
+_VOICE_ENGINE_VERSION = "0.4.1"
 
 router = APIRouter()
 
