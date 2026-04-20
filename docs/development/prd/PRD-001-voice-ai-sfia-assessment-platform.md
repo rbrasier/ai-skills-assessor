@@ -4,32 +4,37 @@
 Draft
 
 ## Date
-2026-04-18 (Last Updated)
+2026-04-20 (Last Updated)
 
 ## Document Owner
 AI Skills Assessor Team
 
 ## References
-- ADR-001: Hexagonal Architecture (Ports & Adapters)
-- ADR-003: Monorepo Structure with pnpm Workspaces + Turborepo
-- PRD-002: Assessment Interview Workflow (details of how interviews are conducted)
+- **ADR-001**: Hexagonal Architecture (Ports & Adapters)
+- **ADR-004**: Voice Engine Technology (Pipecat, Daily, FastAPI)
+- **ADR-005**: RAG & Vector Store Strategy (pgvector, framework-agnostic chunking)
+- **PRD-002**: Assessment Interview Workflow (interview phases, claim extraction, post-call pipeline)
+- **Phase 2**: Basic Voice Engine & Call Tracking (source of truth for candidate intake form, call state labels, data model)
 
 ---
 
 ## 1. Executive Summary
 
-The Voice-AI Skills Assessment Platform is an automated system that conducts skills assessments via phone call and produces structured reports for Subject Matter Expert (SME) review. 
+The Voice-AI Skills Assessment Platform is an automated system that conducts skills assessments via phone call and produces structured reports for Subject Matter Expert (SME) review.
 
 **High-level workflow:**
-1. Administrator triggers an assessment call for a candidate (via web dashboard).
-2. An AI bot conducts a structured interview with the candidate (see PRD-002 for interview details).
-3. Post-call, the system extracts verifiable work claims and maps them to framework skills.
-4. SME receives a structured report and review portal to approve, adjust, or reject claims.
-5. Final assessment is signed off and stored.
+1. Candidate completes a self-service intake form (name, email, employee ID, phone number).
+2. System places an outbound call to the candidate via Daily PSTN gateway.
+3. An AI bot conducts a structured interview with the candidate (see PRD-002 for interview details).
+4. Post-call, the system extracts verifiable work claims and maps them to framework skills.
+5. SME receives a structured report and review portal to approve, adjust, or reject claims.
+6. Final assessment is signed off and stored.
 
-**Framework Support**: Extensible design supports SFIA 9 initially, with support for TOGAF, ITIL, and other frameworks via metadata tagging (see PRD-002, Data Model section).
+**Intake Model**: **Candidate self-service** — candidates initiate assessments by completing an online intake form and providing their phone number. The system dials them at the number they provided. Administrators can monitor call status via a read-only dashboard.
 
-**Geographic Focus**: Australian market, with telephony optimised for +61 numbers and infrastructure in `ap-southeast-2` (Sydney region).
+**Framework Support**: SFIA 9 in v1. Extensible design via `framework_type` metadata in database supports future frameworks (TOGAF, ITIL, etc.) without schema changes.
+
+**Geographic Focus**: Australian market optimised for +61 phone numbers. Infrastructure deployed to `ap-southeast-2` (Sydney region).
 
 ## 2. Problem Statement
 
@@ -61,13 +66,22 @@ An AI-powered system that:
 ## 4. Core User Journeys
 
 ### 4.1 Assessment Initiation (Candidate Self-Service)
-1. Candidate visits the assessment portal (`/`) and completes the intake form (FIRST NAME, LAST NAME, WORK EMAIL, EMPLOYEE ID, PHONE NUMBER — all mandatory).
-2. System creates or updates the Candidate record (keyed by WORK EMAIL), then creates an AssessmentSession.
-3. The voice engine initiates an outbound call to the candidate's phone number (international format accepted) via Daily transport.
-4. Candidate sees real-time call state transitions (Dialling → Call In Progress → Interview Complete) on the same page.
-5. Administrators can monitor call history and status via a read-only admin dashboard.
+1. Candidate visits the assessment portal (`/`) and completes the intake form with these mandatory fields:
+   - **FIRST NAME** (text)
+   - **LAST NAME** (text)
+   - **WORK EMAIL** (email format; unique identifier for candidate record)
+   - **EMPLOYEE ID** (text; stored in candidate metadata for organisational matching)
+   - **PHONE NUMBER** (international format accepted, e.g., +44 7700 900118 or 44 1234 567890)
+2. System creates or retrieves Candidate record (keyed by WORK EMAIL), stores EMPLOYEE ID in metadata, then creates an AssessmentSession.
+3. The voice engine initiates an outbound call to the candidate's phone number via Daily PSTN gateway (ap-southeast-2 Sydney region).
+4. Candidate sees real-time call state transitions on the same page:
+   - **Dialling**: "Your phone should ring in a moment. Answer when it does — caller ID will show Resonant · Noa."
+   - **Call In Progress**: Waveform animation, timer (HH:MM), "Relax and speak naturally. Noa will guide the conversation."
+   - **Interview Complete**: Checkmark, "Thank you for the assessment. You'll hear back by email within 2 working days."
+   - **Failed**: Error state with failure reason (if available)
+5. Administrators can monitor call history and status via a read-only admin dashboard (not for triggering calls).
 
-**Note:** Calls are candidate-initiated (self-service), not administrator-triggered. The admin dashboard provides monitoring and observability only.
+**Note:** Calls are **candidate-initiated via the self-service form**, not administrator-triggered. Administrators can only view and monitor calls; they cannot initiate assessments for candidates.
 
 ### 4.2 Voice Assessment (Candidate)
 1. Candidate receives a phone call from the AI bot.
@@ -180,29 +194,43 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 - Links expire after 30 days by default (configurable).
 - No PII in URLs; links are access-controlled via database.
 
-### 6.2 Framework-Agnostic Architecture
-- Assessment system supports any framework (SFIA 9, TOGAF, ITIL, etc.) via metadata tagging.
-- Framework type is a property of each assessment session and claim, not a hard-coded choice.
-- New frameworks can be added by loading definitions into the knowledge base; no schema migrations.
+### 6.2 Framework-Agnostic Data Model (Extensibility for v2+)
+- **SFIA 9 in v1**: v1 focuses on SFIA 9 only.
+- **Future framework support**: AssessmentSession and Claim entities store `framework_type` metadata (e.g., "sfia-9", "togaf-2024", "itil-4").
+- **No schema migrations needed**: To add a new framework:
+  1. Load framework definitions (skill codes, levels, descriptions) into the `FrameworkDefinition` table in PostgreSQL via seed script (Phase 5 RAG knowledge base).
+  2. Create vectors via pgvector embedding (one vector per skill + level combination).
+  3. Update assessment intake form to allow framework selection (UI change only).
+  4. Existing claim extraction and SME review logic works unchanged (generic responsibility levels 1–7).
+- **No hard-coded framework knowledge** in code; all framework context lives in the database and is retrieved via RAG (see ADR-005).
 
 ### 6.3 Voice Interview & Claim Extraction Pipeline
 - Interviews are conducted via phone (see PRD-002 for technical details).
-- Claims are extracted post-call using LLM analysis of the transcript.
-- Each claim includes a confidence score; SME reviews and approves/adjusts/rejects.
+- Calls recorded in Daily cloud storage indefinitely.
+- Claims are extracted post-call using LLM analysis of the transcript (within 5 minutes).
+- Each claim includes:
+  - Verbatim quote from transcript
+  - Interpreted claim text
+  - Framework skill code and responsibility level
+  - Confidence score (0.0–1.0); SME reviews, approves, adjusts, or rejects
+  - Evidence segments (timestamp ranges in transcript supporting the claim)
+- Claims are verified against the framework definition via pgvector RAG (relevant skill context injected into extraction prompt).
 
-**For voice engine architecture and technical decisions (Pipecat, Daily, Claude, pgvector), see PRD-002: Assessment Interview Workflow.**
+**For voice engine architecture and technical decisions (Pipecat, Daily, Claude, pgvector), see PRD-002: Assessment Interview Workflow and ADR-005: RAG & Vector Store Strategy.**
 
 ## 7. Non-Functional Requirements
 
 | Requirement | Target | Rationale |
 |-------------|--------|-----------|
-| **Call Latency** | < 500ms round-trip (Sydney region) | Natural conversation feel |
-| **Transcript Processing** | < 5 minutes post-call | Fast turnaround for SME review |
+| **Call Setup Latency** | < 5 seconds from dial to candidate answer | Call must feel immediate |
+| **Call Round-Trip Latency** | < 500ms (Sydney region) | Natural conversation feel |
+| **Claim Extraction Processing** | < 5 minutes post-call | Fast turnaround for SME review |
 | **Concurrent Calls** | 10+ simultaneous | Enterprise pilot scale |
-| **Availability** | 99.5% uptime during business hours (AEST) | Reliability for scheduled assessments |
-| **Data Residency** | Australian region preferred | Compliance with data sovereignty expectations |
-| **Audit Trail** | Full call recordings + transcripts retained for 12 months | Regulatory and quality assurance |
-| **Security** | TLS everywhere, review links with NanoID, no PII in URLs | Data protection |
+| **Availability** | 99.5% uptime during business hours (AEST) | Reliability for assessments |
+| **Data Residency** | Australian region (Sydney ap-southeast-2) | Compliance with data sovereignty expectations |
+| **Call Recording Storage** | Stored indefinitely in Daily cloud storage | Audit trail and regulatory compliance |
+| **Transcript Retention** | Full STT transcripts retained indefinitely (post-call analysis) | Audit trail and quality assurance |
+| **Security** | TLS everywhere, review links with NanoID (non-sequential, non-guessable), no PII in URLs | Data protection |
 
 ## 8. Data Model (Platform Level)
 
@@ -210,11 +238,16 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 
 | Entity | Purpose | Key Fields |
 |--------|---------|-----------|
-| **Candidate** | Person being assessed | `id`, `name`, `email`, `phone` (+61 format), `organisation_id`, `created_at` |
-| **AssessmentSession** | Single assessment call | `id`, `candidate_id`, `status` (pending/dialling/in-progress/completed/failed), `started_at`, `ended_at`, `framework_type` (e.g., "sfia-9") |
+| **Candidate** | Person being assessed | `email` (unique identifier), `first_name`, `last_name`, `metadata` (JSON: {`employee_id`, ...}), `created_at` |
+| **AssessmentSession** | Single assessment call | `id`, `candidate_email` (FK), `phone_number`, `status` (pending/dialling/in_progress/completed/failed/cancelled), `metadata` (JSON: {`failureReason`, `cancelledAt`, ...}), `recording_url` (Daily cloud), `started_at`, `ended_at`, `created_at` |
 | **AssessmentReport** | Output of assessment + SME review | `id`, `session_id`, `review_token` (NanoID), `status` (generated/in-review/completed), `generated_at`, `sme_reviewed_at` |
 
-**Detailed data structures for interviews, transcripts, claims, and framework definitions are in PRD-002.**
+**Notes:**
+- **Candidate.email** is the unique identifier (natural key) for linking intake forms to sessions.
+- **Candidate.metadata** JSON field stores extensible data like `employee_id`, `organisation_id`, etc.
+- **AssessmentSession.metadata** JSON field stores optional state: failure reasons, cancellation timestamps, etc.
+- **AssessmentSession.recording_url** points to Daily's indefinite cloud storage. Retrieval happens at claim extraction time.
+- **Detailed data structures for interviews, transcripts, claims, and framework definitions are in PRD-002.**
 
 ## 9. Platform Integration Points
 
@@ -242,11 +275,12 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| SME review portal availability outage | High | Low | Redundant PostgreSQL, CDN for static assets, graceful degradation |
-| Review link leakage / unauthorized access | High | Low | NanoID provides sufficient entropy; HTTPS only; optional IP whitelisting |
-| SME claim adjustment discrepancies | Medium | Medium | Clear UI with transcript excerpts; audit trail of all changes; training docs |
-| Data residency / compliance violation | High | Low | Deploy to Australian region; call recordings in AU; document retention policy |
-| Framework definition data becomes stale | Medium | Low | Versioning via `framework_type` metadata; annual review cycle planned |
+| SME review portal availability outage | High | Low | Redundant PostgreSQL (ap-southeast-2 region), CDN for static assets, graceful degradation (read-only fallback if API down) |
+| Review link leakage / unauthorized access | High | Low | NanoID provides sufficient entropy (non-guessable, non-sequential); HTTPS only; links expire in 30 days; optional IP whitelisting |
+| SME claim adjustment discrepancies | Medium | Medium | Clear UI with verbatim transcript excerpts; audit trail of all SME changes; training docs for consistency |
+| Data residency / compliance violation | High | Low | **Mandatory deployment to ap-southeast-2 (Sydney)**; call recordings stored in Daily Sydney region indefinitely; compliance review required before Phase 3 |
+| Framework definition data becomes stale | Medium | Low | Versioning via `framework_type` + `framework_ver` metadata in pgvector; annual review + re-embedding cycle; v2 gate for new frameworks |
+| SFIA content licensing issue | High | Medium | **BLOCKING RISK**: Must resolve licensing before Phase 5 RAG knowledge base start. Mitigation: If SFIA definitions restricted, implement framework lookup API + manual entry instead of pgvector embeddings. |
 
 **Interview-level risks (voice pipeline, LLM hallucination, candidate refusal) are in PRD-002.**
 
@@ -265,20 +299,24 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 
 ## 13. Out of Scope (v1)
 
-- Alternative frameworks (TOGAF, ITIL) — SFIA 9 only in v1, but architecture supports others via metadata.
-- Inbound calls (candidate-initiated); administrator-triggered only.
-- Mobile app for candidates.
-- Multi-language support (English only).
-- SSO / enterprise identity integration.
-- Real-time claim extraction (see PRD-002 for scope).
+- **Alternative frameworks** — SFIA 9 only in v1. Architecture supports TOGAF, ITIL, etc. via `framework_type` metadata without schema changes. Multi-framework support deferred to v2.
+- **Inbound calls** — Candidates do not receive inbound links; only outbound calls initiated by the system after intake form submission.
+- **Mobile app** — Web portal only (responsive design for mobile browsers).
+- **Multi-language support** — English only in v1.
+- **SSO / enterprise identity integration** — Email-based candidate lookup only in v1.
+- **Real-time claim extraction** — Claims extracted post-call (asynchronous); not during the call (see PRD-002 for details).
+- **Admin call initiation** — Admins cannot trigger calls directly; candidates self-service only. Admins can only monitor via read-only dashboard.
 
 ## 14. Open Questions
 
-1. **STT/TTS provider selection**: Deepgram, Google Cloud Speech, or Azure? Need latency benchmarks for AU region. (See PRD-002 for details.)
-2. **Daily pricing model**: Per-minute costs for PSTN dial-out to AU numbers — need commercial review. (See PRD-002 for details.)
-3. **SFIA licensing**: Are SFIA 9 skill definitions freely redistributable, or do we need a license from the SFIA Foundation? (See PRD-002 for details.)
-4. **Data retention policy**: What is the regulatory requirement for call recordings in AU? (See PRD-002 for details.)
-5. **SME notification channel**: Email only, or also Slack/Teams webhook?
+| Question | Owner | Deadline | Impact | Mitigation |
+|----------|-------|----------|--------|-----------|
+| **STT/TTS provider selection** | Tech Lead | Before Phase 3 | Phase 3 replaces stub implementations | Phase 2 uses hardcoded responses. If no provider selected by Phase 3 start, defer to Phase 4. |
+| **Daily pricing model** | Product / Finance | Before Phase 2 end | May impact go/no-go for production | Daily pricing is fixed regardless of decision; captured as operational cost. Does not block implementation. |
+| **SFIA 9 licensing** | Legal / Product | Before Phase 5 start | **Blocks Phase 5 RAG knowledge base if restrictions apply** | Must resolve before ingesting SFIA definitions into pgvector. If SFIA content is restricted, implement framework lookup API instead of embedding. |
+| **Data retention policy (call recordings)** | Legal / Compliance | Before Phase 3 end | Affects deletion/archival process | Phase 2–4 store indefinitely in Daily cloud. Phase 5+ can implement retention policy if required. Does not block v1 release. |
+| **SME notification channel** | Product | Before Phase 7 | Phase 7 SME portal design | Default: email only in v1. Slack/Teams integrations deferred to v2. Does not block Phase 7 release. |
+| **Authentication for SME portal** | Tech Lead | Before Phase 7 start | Phase 7 SME review portal security | **Decision: Unauthenticated NanoID-based links** (no login required). Review links are long, random, non-sequential tokens that expire in 30 days. Optional: IP whitelisting for additional security. |
 
 ---
 
@@ -286,6 +324,7 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-04-20 | **Refinement via /doc-refiner**: Align with Phase 2 as source of truth. (1) Clarified **candidate self-service intake form is primary flow** (not admin-triggered). (2) Fixed intake form fields: FIRST NAME, LAST NAME, WORK EMAIL, EMPLOYEE ID, PHONE NUMBER (all mandatory; employee ID stored in metadata). (3) Specified call state labels from Phase 2 design: Dialling, Call In Progress, Interview Complete, Failed, Cancelled. (4) Clarified call recording storage: **indefinite retention in Daily cloud** (not 12 months). (5) Updated data model: Candidate keyed by email, metadata JSON for employee_id, AssessmentSession with phone_number and metadata JSON fields. (6) Expanded "Framework-Agnostic" section to clarify: SFIA 9 only in v1; future frameworks via `framework_type` metadata tag + pgvector + no schema migrations. (7) Converted Open Questions to structured table with owner, deadline, impact, mitigation. (8) Added explicit decision: **SME portal uses unauthenticated NanoID links** (no login required). (9) Added authentication clarification: not needed for v1. (10) Clarified phase sequencing: SFIA licensing question must be resolved before Phase 5 RAG start (blocks framework definition ingestion). | AI Skills Assessor Team |
 | 2026-04-18 | Refactored PRD-001 to focus on platform/SME review; moved interview details to PRD-002 | AI Skills Assessor Team |
 | 2026-04-16 | Initial draft | AI Skills Assessor Team |
 
@@ -294,6 +333,8 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 ## 16. Related Documents
 
 - **PRD-002**: Assessment Interview Workflow — Details of voice interview, claim extraction pipeline, and technical architecture.
-- **Phase 1–8**: Phased delivery plan (see Section 12).
+- **Phase 2: Basic Voice Engine & Call Tracking** — **SOURCE OF TRUTH** for candidate intake form design, call state labels, database schema, and API endpoints.
+- **Phase 1–8**: Phased delivery plan (see Section 12 and `/docs/development/to-be-implemented/`).
 - **ADR-001**: Hexagonal Architecture — System design pattern.
-- **ADR-003**: Monorepo Structure — Repository organization.
+- **ADR-004**: Voice Engine Technology — Pipecat + Daily + FastAPI decisions.
+- **ADR-005**: RAG & Vector Store Strategy — pgvector chunking, framework-agnostic metadata, future extensibility.
