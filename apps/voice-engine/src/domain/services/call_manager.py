@@ -22,6 +22,7 @@ from src.domain.models.assessment import (
     CallConfig,
     Candidate,
 )
+from src.domain.ports.call_lifecycle_listener import ICallLifecycleListener
 from src.domain.ports.persistence import IPersistence
 from src.domain.ports.voice_transport import IVoiceTransport
 from src.domain.utils.phone import InvalidPhoneNumberError, normalise_phone_number
@@ -41,13 +42,13 @@ class SessionNotFoundError(CallManagerError):
     """Raised when a status / cancel lookup hits an unknown session id."""
 
 
-class CallManager:
+class CallManager(ICallLifecycleListener):
     def __init__(
         self,
         persistence: IPersistence,
         voice_transport: IVoiceTransport,
         *,
-        region: str = "ap-southeast-2",
+        region: str = "ap-southeast-1",
     ) -> None:
         self._persistence = persistence
         self._voice_transport = voice_transport
@@ -117,39 +118,95 @@ class CallManager:
         return created
 
     async def _place_call(self, session_id: str, phone_number: str) -> None:
-        """Background worker — dial the candidate and update status."""
+        """Background worker — dial the candidate and update status.
+
+        After ``dial`` returns, ``in_progress`` / ``completed`` /
+        ``failed`` transitions are driven by the transport's own Daily
+        event handlers via the :class:`ICallLifecycleListener`
+        interface (this class). See ``DailyVoiceTransport`` for the
+        event → listener wiring.
+        """
 
         try:
-            await self._persistence.update_session_status(
-                session_id,
-                AssessmentStatus.DIALLING,
-                started_at=datetime.now(UTC),
-            )
-
             config = CallConfig(
                 session_id=session_id,
                 phone_number=phone_number,
-                candidate_id=session_id,  # opaque correlation id for transport
+                candidate_id=session_id,
                 region=self._region,
             )
             connection = await self._voice_transport.dial(config)
 
-            # The transport will (eventually) update the session via its
-            # own event handlers. For the Phase 2 stub transport we
-            # record the room URL immediately so the status endpoint
-            # can expose it if needed.
             await self._persistence.update_session_status(
                 session_id,
                 AssessmentStatus.DIALLING,
                 daily_room_url=connection.room_url,
+                started_at=datetime.now(UTC),
             )
-        except Exception as exc:  # pragma: no cover — adapter failures
+        except Exception as exc:
             logger.exception("CallManager._place_call failed for %s", session_id)
             await self._persistence.update_session_status(
                 session_id,
                 AssessmentStatus.FAILED,
                 metadata={"failureReason": str(exc)},
                 ended_at=datetime.now(UTC),
+            )
+
+    # ─── ICallLifecycleListener ──────────────────────────────────────
+
+    async def on_call_connected(self, session_id: str) -> None:
+        """Candidate picked up; the Pipecat pipeline is live."""
+        logger.info("CallManager.on_call_connected session_id=%s", session_id)
+        try:
+            await self._persistence.update_session_status(
+                session_id,
+                AssessmentStatus.IN_PROGRESS,
+                started_at=datetime.now(UTC),
+            )
+        except Exception:  # pragma: no cover — defensive, listener must not crash pipeline
+            logger.exception(
+                "on_call_connected: persistence update failed for %s",
+                session_id,
+            )
+
+    async def on_call_ended(self, session_id: str) -> None:
+        """Normal hangup — bot finished its script or candidate left."""
+        logger.info("CallManager.on_call_ended session_id=%s", session_id)
+        try:
+            session = await self._persistence.get_session(session_id)
+            if session is not None and session.status in (
+                AssessmentStatus.FAILED,
+                AssessmentStatus.CANCELLED,
+                AssessmentStatus.COMPLETED,
+            ):
+                return  # idempotent — honour terminal statuses
+            await self._persistence.update_session_status(
+                session_id,
+                AssessmentStatus.COMPLETED,
+                ended_at=datetime.now(UTC),
+            )
+        except Exception:  # pragma: no cover
+            logger.exception(
+                "on_call_ended: persistence update failed for %s",
+                session_id,
+            )
+
+    async def on_call_failed(self, session_id: str, *, reason: str) -> None:
+        logger.warning(
+            "CallManager.on_call_failed session_id=%s reason=%s",
+            session_id,
+            reason,
+        )
+        try:
+            await self._persistence.update_session_status(
+                session_id,
+                AssessmentStatus.FAILED,
+                metadata={"failureReason": reason},
+                ended_at=datetime.now(UTC),
+            )
+        except Exception:  # pragma: no cover
+            logger.exception(
+                "on_call_failed: persistence update failed for %s",
+                session_id,
             )
 
     # ─── Status polling (Step 02) ────────────────────────────────────

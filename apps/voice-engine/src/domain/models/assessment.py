@@ -44,7 +44,7 @@ class CallConfig:
     session_id: str
     phone_number: str
     candidate_id: str
-    region: str = "ap-southeast-2"
+    region: str = "ap-southeast-1"
     timeout_seconds: int = 300
 
 
