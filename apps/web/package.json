@@ -1,6 +1,6 @@
 {
   "name": "@ai-skills-assessor/web",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Next.js frontend for the AI Skills Assessor (Phase 1 scaffold).",
   "scripts": {

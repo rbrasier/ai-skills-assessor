@@ -83,9 +83,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="AI Skills Assessor — Voice Engine",
-        version="0.3.0",
+        version="0.4.0",
         description=(
-            "Phase 2: candidate self-service assessment trigger + call tracking."
+            "Phase 3: candidate self-service assessment trigger, call tracking, "
+            "and production Railway (Singapore) deployment."
         ),
         lifespan=_lifespan,
     )
