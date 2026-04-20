@@ -255,7 +255,7 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 |--------|-------------|---------|
 | **Email / Notification System** | Send review links to SME | SME invitations, reminders |
 | **PostgreSQL** | Persistent data store | Candidates, sessions, reports |
-| **Authentication** (TBD) | Access control for SME portal | Secure review link validation |
+| **NanoID** | Access control for SME portal | Generate non-sequential, collision-resistant review tokens; links expire in 30 days |
 
 **Voice engine integrations (Daily, STT/TTS, Claude, pgvector) are detailed in PRD-002.**
 
