@@ -1,11 +1,14 @@
-# Local Setup Guide — Phase 3 (v0.4.0)
+# Local Setup Guide — Phase 3 (v0.4.1)
 
 This guide gets the AI Skills Assessor running end-to-end on a laptop:
-candidate intake form → Python voice engine → Postgres. Phase 3
-(v0.4.0) keeps the Phase 2 candidate self-service flow and adds the
-production deploy plumbing (pgvector, Railway service manifests,
-hardened Dockerfiles, deep health checks, smoke test). The Pipecat
-pipeline (real STT / TTS / LLM) is still stubbed; it lands in Phase 4.
+candidate intake form → Python voice engine → Postgres. v0.4.1
+(Phase 3 Revision 1) adds the basic-call runtime — a greeting, one
+question, an LLM-generated acknowledgement, and a hangup — on top of
+the v0.4.0 deploy plumbing (pgvector, Railway service manifests,
+hardened Dockerfiles, deep health checks, smoke test).
+
+The full structured interview (SFIA, claim extraction, transcripts,
+interjections) is still Phase 4+.
 
 ---
 
@@ -90,9 +93,25 @@ Populate `apps/voice-engine/.env`:
 
 ```bash
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ai_skills_assessor
-DAILY_API_KEY=               # optional — omit to skip real Daily rooms
+
+# Daily (telephony / WebRTC)
+DAILY_API_KEY=               # optional for intake-only dev; required to place a call
 DAILY_DOMAIN=                # e.g. "your-team.daily.co"
 DAILY_GEO=ap-southeast-1     # Singapore SFU — see ADR-006
+DAILY_CALLER_ID=             # optional
+
+# AI providers (Phase 3 Revision 1)
+ANTHROPIC_API_KEY=           # optional — missing key = hard-coded fallback ack
+ANTHROPIC_MODEL=claude-3-5-haiku-latest
+DEEPGRAM_API_KEY=            # required to place a call
+DEEPGRAM_MODEL=nova-2-phonecall
+ELEVENLABS_API_KEY=          # required to place a call
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+
+# Bot identity
+BOT_NAME=Noa
+BOT_ORG_NAME=Resonant
+
 LOG_LEVEL=INFO
 PORT=8000
 
@@ -100,6 +119,16 @@ PORT=8000
 # useful if you want to kick the tyres without running migrations.
 USE_IN_MEMORY_ADAPTERS=0
 ```
+
+> **Soft-fail behaviour.** Missing `DAILY_API_KEY` /
+> `DEEPGRAM_API_KEY` / `ELEVENLABS_API_KEY` at boot is a warning, not a
+> fatal error — the intake + admin endpoints still work. A trigger
+> against a session with missing keys creates the Daily room, skips
+> the Pipecat bot, and transitions the session to `failed` with
+> `metadata.failureReason = "missing_provider_credentials"`. Missing
+> `ANTHROPIC_API_KEY` is non-fatal for the call itself — the bot will
+> use its hard-coded acknowledgement *"Thanks for sharing that."*
+> instead of a Claude-generated line.
 
 And `apps/web/.env.local`:
 
@@ -231,7 +260,9 @@ before landing a PR.
 | Voice engine boots but returns `503` on `/health` | DB probe (`IPersistence.ping()`) failed | Check `DATABASE_URL` and that Postgres is up. |
 | Voice engine boots but returns `503 Voice engine not ready` | `app.state.call_manager` is `None` — lifespan crashed | Check the `uvicorn` stderr for import / DB errors. |
 | Candidate portal shows "Invalid form data" | API validation failed | Check the voice-engine logs; 422 errors come from Pydantic, 400 from domain validation. |
-| No outbound call rings | Expected in Phase 3 | Pipecat pipeline lands in Phase 4; the stub only creates a Daily room. |
+| No outbound call rings | Missing one of `DAILY_API_KEY` / `DEEPGRAM_API_KEY` / `ELEVENLABS_API_KEY` | Set the keys in `.env` and restart the voice engine. The admin dashboard will show `failureReason = "missing_provider_credentials"` until you do. |
+| Call connects but the bot is silent | ElevenLabs rate limit / bad voice ID | Check voice-engine logs for 401/429 from ElevenLabs; override `ELEVENLABS_VOICE_ID` with a voice from your account's library. |
+| Call connects, bot greets, but candidate reply isn't acknowledged | Deepgram returning no transcriptions or LLM timeout | Logs will show either `TranscriptionFrame: (empty)` (check your mic / line quality) or `LLM ack timed out after 10.0s`. The bot still says the goodbye + hangs up, so the call completes. |
 | `docker compose up` fails to build `web` | Running from inside `apps/web` instead of repo root | `cd` to the repo root — the web Dockerfile needs the pnpm workspace. |
 
 ---

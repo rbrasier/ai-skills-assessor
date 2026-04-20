@@ -1,10 +1,13 @@
-# Deployed Setup Guide — Railway (Phase 3 / v0.4.0)
+# Deployed Setup Guide — Railway (Phase 3 / v0.4.1)
 
 Phase 3 promotes the Phase 2 voice engine + Next.js web app to a
-production Railway (Singapore) deployment. This guide is the
-source-of-truth walkthrough: env vars, service layout, migrations,
-healthchecks, and the CI-gated deploy pipeline all match what ships in
-v0.4.0.
+production Railway (Singapore) deployment. v0.4.1 (Phase 3 Revision 1)
+adds the basic-call runtime — a greeting, one question, an
+LLM-generated acknowledgement, and a hangup — on top of that
+infrastructure. This guide is the source-of-truth walkthrough: env
+vars, service layout, migrations, healthchecks, the CI-gated deploy
+pipeline, and the "first live call" runbook all match what ships in
+v0.4.1.
 
 > **Region**: Railway Singapore (`asia-southeast1`). Daily rooms are
 > pinned to the Singapore SFU (`DAILY_GEO=ap-southeast-1`) so the
@@ -122,9 +125,28 @@ with `${{…}}` are Railway variable references.
 | `DAILY_API_KEY`         | From Daily dashboard → Developers                                   |
 | `DAILY_DOMAIN`          | `your-team.daily.co`                                                |
 | `DAILY_GEO`             | `ap-southeast-1` (Singapore SFU — co-located with Railway)          |
+| `DAILY_CALLER_ID`       | Optional — Daily phone-number ID. Blank = use workspace pool.       |
+| `DEEPGRAM_API_KEY`      | From Deepgram dashboard → Projects → API keys                       |
+| `DEEPGRAM_MODEL`        | `nova-2-phonecall` (tuned for 8kHz PSTN audio — recommended)        |
+| `ELEVENLABS_API_KEY`    | From ElevenLabs dashboard → Profile → API Keys                      |
+| `ELEVENLABS_VOICE_ID`   | Voice ID. Default `21m00Tcm4TlvDq8ikWAM` ("Rachel").                |
+| `ANTHROPIC_API_KEY`     | From Anthropic console → API Keys                                   |
+| `ANTHROPIC_MODEL`       | `claude-3-5-haiku-latest` (default — fast + cheap for the ack turn) |
+| `BOT_NAME`              | `Noa` (default — override per-tenant)                               |
+| `BOT_ORG_NAME`          | `Resonant` (default — override per-tenant)                          |
 | `LOG_LEVEL`             | `INFO`                                                              |
 | `USE_IN_MEMORY_ADAPTERS`| `0` (leave unset or `0` — in-memory adapter is dev-only)            |
 | `PORT`                  | Railway injects this — do not override                              |
+
+> **Soft-fail behaviour.** If `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`,
+> or `DAILY_API_KEY` is missing, the voice engine still boots and the
+> intake / admin endpoints work, but triggering a call will create the
+> Daily room, skip the Pipecat bot, and transition the session to
+> `failed` with `metadata.failureReason =
+> "missing_provider_credentials"`. The admin dashboard surfaces this
+> immediately. If `ANTHROPIC_API_KEY` is missing, the call still works
+> but uses a hard-coded fallback acknowledgement
+> (*"Thanks for sharing that."*) instead of a Claude-generated line.
 
 ### `web`
 
@@ -270,6 +292,84 @@ pytest tests/smoke_test.py --run-smoke -q
 
 The same command runs automatically in the `smoke-test` job of
 `.github/workflows/deploy.yml` when `vars.SMOKE_TEST_URL` is set.
+
+---
+
+## 10a. First live call runbook (v0.4.1)
+
+Once deploys are green and all four provider keys are set, run this
+once against the deployed voice engine to prove the basic-call
+runtime works end-to-end. You'll need a phone you can answer.
+
+**Pre-flight:**
+
+1. `DAILY_API_KEY`, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`,
+   `ANTHROPIC_API_KEY` all set on the `voice-engine` Railway service.
+2. Daily workspace has **PSTN dial-out** enabled (Daily → Support).
+3. You have at least one number purchased in Daily (for caller ID) or
+   are comfortable with Daily rotating the workspace pool.
+4. The Next.js web app's `VOICE_ENGINE_URL` points at the internal
+   Railway hostname of the voice-engine service.
+
+**Run:**
+
+```bash
+# 1. Candidate intake (your own email — this is a smoke test)
+curl -X POST https://<voice-engine-railway-url>/api/v1/assessment/candidate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "work_email":"you@example.com",
+    "first_name":"You",
+    "last_name":"Tester",
+    "employee_id":"TEST-001"
+  }'
+
+# 2. Trigger the call to your own phone (+61 ... for AU)
+curl -X POST https://<voice-engine-railway-url>/api/v1/assessment/trigger \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "candidate_id":"you@example.com",
+    "phone_number":"+61 4XX XXX XXX"
+  }'
+# => { "session_id": "...", "status": "pending" }
+
+# 3. Poll status while your phone rings
+curl https://<voice-engine-railway-url>/api/v1/assessment/<session_id>/status
+```
+
+**Expected sequence:**
+
+| Second | Your side                    | API status         | Railway logs (voice-engine)               |
+|--------|------------------------------|--------------------|-------------------------------------------|
+| 0      | —                            | `pending`          | `CallManager._place_call` dial start      |
+| ~2     | —                            | `dialling`         | `BasicCallBot … start_dialout → +61…`     |
+| ~5–15  | Phone rings                  | `dialling`         | Daily WebSocket: `on_joined`              |
+| answer | You pick up, hear greeting   | `in_progress`      | `CallManager.on_call_connected`           |
+| +1–2s  | Bot asks the question        | `in_progress`      | `ScriptedConversation` → `SPEAKING_QUESTION` |
+| you    | You answer (1 sentence)      | `in_progress`      | Deepgram `TranscriptionFrame` received    |
+| +1.5s  | Bot says an ack line         | `in_progress`      | `ScriptedConversation` → `SPEAKING_ACK`   |
+| +2–4s  | Bot says goodbye and hangs up| `completed`        | `CallManager.on_call_ended`               |
+
+**If something sticks at `dialling` for >30 s:**
+- Check voice-engine logs for `dialout error` — usually PSTN isn't
+  allow-listed for the target country (contact Daily support).
+- Check for `missing_provider_credentials` — one of the four API keys
+  isn't set.
+- Check the Daily dashboard → Rooms — the room should exist and be
+  joinable.
+
+**If the session transitions to `failed`:**
+
+The admin dashboard surfaces `metadata.failureReason` via
+`GET /api/v1/admin/sessions`. Common values:
+
+| `failureReason`                   | Fix                                                        |
+|-----------------------------------|------------------------------------------------------------|
+| `missing_provider_credentials`    | Set `DAILY_API_KEY`, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY` |
+| `dial_out_start_failed: …`        | Check Daily PSTN enablement + caller ID                    |
+| `dialout_error: busy`             | Candidate's line busy — try again                          |
+| `dialout_error: no-answer`        | Candidate didn't pick up within Daily's ring window        |
+| `pipeline_crashed: …`             | Voice-engine logs will have a full traceback               |
 
 ---
 
