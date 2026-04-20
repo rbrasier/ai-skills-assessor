@@ -1,71 +1,145 @@
-"""Minimal Pipecat Flows greeting state machine — Phase 2.
+"""Basic-call script (Phase 3 Revision 1).
 
-The Phase 2 scope only requires the bot to (1) introduce itself,
-(2) confirm two-way audio, (3) thank the candidate, and (4) end the
-call. The config below is consumed by the Pipecat Flows runtime when
-Phase 3 wires it up; in Phase 2 we expose it purely for unit-test
-assertions.
+Defines the minimum viable conversation the bot runs end-to-end:
 
-Design reference: ``phase-2-basic-voice-engine.md`` §1.3.
+  1. TTS: greeting.
+  2. TTS: one question.
+  3. Wait for the candidate's reply (STT).
+  4. LLM: a single one-shot acknowledgement based on the reply.
+  5. TTS: goodbye.
+  6. Hangup.
+
+No SFIA, no skill mapping, no interjections — those live in Phase 4.
+
+The module is carefully import-safe: it never imports Pipecat at module
+level so the lean CI image (which doesn't install the ``[voice]``
+extras) can still load it. Pipecat is imported lazily inside the
+helpers that actually need it.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, field
 
 BOT_NAME = "Noa"
 BOT_CALLER_ID = "Resonant · Noa"
 
 GREETING_INTRO = (
-    f"Hi, I'm {BOT_NAME} from Resonant. "
-    "I'm here to conduct a brief skills assessment interview."
+    f"Hi, I'm {BOT_NAME} calling on behalf of Resonant about your "
+    "skills assessment. Is now still a good time to chat for a minute?"
 )
-GREETING_CONFIRMATION = "Can you hear me clearly?"
-GREETING_THANKS = "Thank you for taking the time to do this assessment."
+QUESTION_PROMPT = (
+    "Great. In one sentence, what's your current role and what do you "
+    "spend most of your time on day to day?"
+)
+GOODBYE = (
+    "Thanks, that's all we need for today. We'll be in touch with "
+    "next steps. Goodbye."
+)
 
-
+# Kept for backward-compat with Phase 2 tests that imported these.
+GREETING_CONFIRMATION = GREETING_INTRO
+GREETING_THANKS = GOODBYE
 STUB_RESPONSES: dict[str, str] = {
     "intro": GREETING_INTRO,
-    "confirm": GREETING_CONFIRMATION,
-    "thanks": GREETING_THANKS,
+    "question": QUESTION_PROMPT,
+    "goodbye": GOODBYE,
 }
 
 
-def build_flow_config() -> dict[str, Any]:
-    """Return the Pipecat Flows config dict for the Phase 2 greeting.
+@dataclass
+class BasicCallScript:
+    """The bot's deterministic dialogue plan for a single call.
 
-    Kept as a function (rather than a module-level constant) so tests
-    can assert on the shape without importing Pipecat.
+    Pipecat's :class:`BasicCallBot` reads this to drive the
+    conversation. Keeping it a plain dataclass means it is trivially
+    unit-testable without importing Pipecat.
     """
 
-    system_prompt = (
-        f"You are {BOT_NAME}, an AI assessment interviewer from Resonant. "
-        "Your job is to: "
-        f"1. Introduce yourself: '{GREETING_INTRO}' "
-        f"2. Ask a simple confirmation question: '{GREETING_CONFIRMATION}' "
-        f"3. Thank them: '{GREETING_THANKS}' "
-        "4. End the call gracefully."
+    bot_name: str = BOT_NAME
+    org_name: str = "Resonant"
+    greeting: str = GREETING_INTRO
+    question: str = QUESTION_PROMPT
+    goodbye: str = GOODBYE
+    ack_system_prompt: str = field(
+        default_factory=lambda: (
+            f"You are {BOT_NAME}, a warm AI phone interviewer. The candidate "
+            "has just answered your first question. Reply with ONE short, "
+            "natural, acknowledging sentence (max 20 words). Do not ask a "
+            "follow-up question, do not summarise, do not use lists. Keep "
+            "it conversational — your reply will be spoken aloud."
+        )
     )
 
-    return {
-        "initial_node": "greeting",
-        "nodes": {
-            "greeting": {
-                "role_messages": [
-                    {"role": "system", "content": system_prompt},
-                ],
-                "post_actions": [{"type": "end_conversation"}],
+    def intro_messages(self) -> list[str]:
+        """Messages the bot speaks before listening for the candidate.
+
+        Emitted in order. The bot speaks each one, then transitions
+        into listening mode for the reply.
+        """
+        return [self.greeting, self.question]
+
+    def build_ack_messages(self, candidate_reply: str) -> list[dict[str, str]]:
+        """System + user prompt to feed :meth:`ILLMProvider.complete`."""
+        return [
+            {"role": "system", "content": self.ack_system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    f"The candidate replied: \"{candidate_reply.strip()}\"\n\n"
+                    "Acknowledge them in one short sentence."
+                ),
             },
-        },
+        ]
+
+    def fallback_ack(self) -> str:
+        """Safe acknowledgement when the LLM call fails or is skipped."""
+        return "Thanks for sharing that."
+
+
+def build_script(
+    bot_name: str = BOT_NAME,
+    org_name: str = "Resonant",
+) -> BasicCallScript:
+    return BasicCallScript(
+        bot_name=bot_name,
+        org_name=org_name,
+        greeting=(
+            f"Hi, I'm {bot_name} calling on behalf of {org_name} about your "
+            "skills assessment. Is now still a good time to chat for a minute?"
+        ),
+    )
+
+
+# Backwards compatibility: Phase 2 tests import ``build_flow_config``.
+def build_flow_config(
+    bot_name: str = BOT_NAME,
+    org_name: str = "Resonant",
+) -> dict[str, object]:
+    """Return a plain dict describing the basic-call script.
+
+    Kept so the Phase 2 unit tests (``test_greeting_flow.py``) continue
+    to work. Downstream code should prefer :func:`build_script`.
+    """
+    script = build_script(bot_name=bot_name, org_name=org_name)
+    return {
+        "bot_name": script.bot_name,
+        "org_name": script.org_name,
+        "intro_messages": script.intro_messages(),
+        "goodbye": script.goodbye,
     }
 
 
 __all__ = [
     "BOT_CALLER_ID",
     "BOT_NAME",
+    "GOODBYE",
     "GREETING_CONFIRMATION",
     "GREETING_INTRO",
     "GREETING_THANKS",
+    "QUESTION_PROMPT",
     "STUB_RESPONSES",
+    "BasicCallScript",
     "build_flow_config",
+    "build_script",
 ]
