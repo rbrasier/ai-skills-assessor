@@ -171,3 +171,13 @@ before landing a PR.
 | Voice engine boots but returns `503 Voice engine not ready` | `app.state.call_manager` is `None` — lifespan crashed | Check the `uvicorn` stderr for import / DB errors. |
 | Candidate portal shows "Invalid form data" | API validation failed | Check the voice-engine logs; 422 errors come from Pydantic, 400 from domain validation. |
 | No outbound call rings | Expected in Phase 2 | Pipecat pipeline lands in Phase 3; the stub only creates a Daily room. |
+
+---
+
+## 9. Deploying to production
+
+See [`docs/guides/deployed-setup.md`](./deployed-setup.md) for the
+Railway deployment walkthrough (Singapore region, `DAILY_GEO=ap-southeast-1`).
+
+For the decision rationale on why Railway Singapore was chosen over AWS
+Sydney, see [ADR-006](../development/adr/ADR-006-deployment-platform.md).
