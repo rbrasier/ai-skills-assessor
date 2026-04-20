@@ -1,5 +1,12 @@
 export type {
+  AssessmentStatus,
   AssessmentTriggerRequest,
   AssessmentTriggerResponse,
-  AssessmentStatus,
+  CallStatusResponse,
+  CandidateRequest,
+  CandidateResponse,
+  SessionListQuery,
+  SessionSummary,
+  TriggerCallRequest,
+  TriggerCallResponse,
 } from "@ai-skills-assessor/shared-types";
