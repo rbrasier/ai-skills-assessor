@@ -5,6 +5,7 @@ from src.domain.models.assessment import (
     AssessmentStatus,
     CallConfig,
     CallConnection,
+    Candidate,
 )
 from src.domain.models.claim import Claim, ClaimMapping
 from src.domain.models.skill import SFIALevel, SkillDefinition
@@ -15,6 +16,7 @@ __all__ = [
     "AssessmentStatus",
     "CallConfig",
     "CallConnection",
+    "Candidate",
     "Claim",
     "ClaimMapping",
     "SFIALevel",

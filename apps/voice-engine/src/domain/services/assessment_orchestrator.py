@@ -1,9 +1,9 @@
 """High-level assessment orchestration (Phase 1 skeleton).
 
-This service composes the persistence and voice-transport ports and exposes a
-single ``trigger`` entry point. Phase 1 only provides the ``AssessmentOrchestrator``
-shape; richer state-machine behaviour (retries, recording, analysis hand-off)
-is added by later phases.
+Phase 2 supersedes this class with :class:`CallManager` in
+``src.domain.services.call_manager``; ``AssessmentOrchestrator`` is
+kept for backwards compatibility with the Phase 1 unit tests that
+demonstrated the hexagonal pattern.
 """
 
 from __future__ import annotations
@@ -33,15 +33,19 @@ class AssessmentOrchestrator:
         self._transport = transport
 
     async def trigger(self, config: CallConfig) -> AssessmentSession:
+        session_id = config.session_id or str(uuid4())
         session = AssessmentSession(
-            id=str(uuid4()),
+            id=session_id,
             candidate_id=config.candidate_id,
             phone_number=config.phone_number,
             status=AssessmentStatus.PENDING,
+            created_at=datetime.now(UTC),
         )
         await self._persistence.save_session(session)
 
-        connection = await self._transport.dial(config)
+        # Ensure the transport sees the same session id.
+        transport_config = replace(config, session_id=session_id)
+        connection = await self._transport.dial(transport_config)
 
         started_session = replace(
             session,
