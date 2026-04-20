@@ -931,7 +931,7 @@ Admin Dashboard (/dashboard/page.tsx)
 - **Claim extraction**: Post-call LLM analysis, claim mapping, confidence scoring (deferred to Phase 5+)
 - **RAG/Knowledge base**: Vector store, framework definitions, dynamic skill retrieval (deferred to Phase 5)
 - **SME review portal**: Claim approval/adjustment workflow (deferred to Phase 7)
-- **Transcript processing**: Speech-to-text output, segmentation by phase, transcription (recording URL only in Phase 2)
+- **Transcript processing**: Speech-to-text output, segmentation by phase, transcription with speaker labels and timestamps (mm:ss format). Phase 2 stores recording URL only; structured transcript processing deferred to Phase 3+ (see PRD-001 for transcript structure requirements: each transcribed line must include `timestamp` in mm:ss format and `speaker` label for claim evidence attribution)
 - **Real STT/TTS/LLM providers**: Deepgram, ElevenLabs, Claude APIs (stub implementations in Phase 2; real providers in Phase 3+)
 - **Multi-language support**: English only in Phase 2
 - **Email domain whitelisting**: Candidate filtering by domain (deferred to Phase 3; admin toggle configuration)

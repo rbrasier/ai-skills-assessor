@@ -95,9 +95,10 @@ _For detailed interview flow, see PRD-002: Assessment Interview Workflow._
 
 ### 4.3 Claim Extraction & Report Generation (Automated)
 1. Post-call, the system extracts verifiable work claims from the transcript.
-2. Each claim is mapped to a framework skill and responsibility level with a confidence score.
-3. Claims are grouped into a structured report, ready for SME review.
-4. A unique review link (NanoID-based) is generated for secure SME access.
+2. Transcript is processed with **timestamps (mm:ss format) and speaker labels** for each transcribed line, enabling precise evidence referencing.
+3. Each claim is mapped to a framework skill and responsibility level with a confidence score.
+4. Claims are grouped into a structured report, ready for SME review.
+5. A unique review link (NanoID-based) is generated for secure SME access.
 
 _For detailed extraction pipeline, see PRD-002: Assessment Interview Workflow._
 
@@ -239,15 +240,58 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 | Entity | Purpose | Key Fields |
 |--------|---------|-----------|
 | **Candidate** | Person being assessed | `email` (unique identifier), `first_name`, `last_name`, `metadata` (JSON: {`employee_id`, ...}), `created_at` |
-| **AssessmentSession** | Single assessment call | `id`, `candidate_email` (FK), `phone_number`, `status` (pending/dialling/in_progress/completed/failed/cancelled), `metadata` (JSON: {`failureReason`, `cancelledAt`, ...}), `recording_url` (Daily cloud), `started_at`, `ended_at`, `created_at` |
+| **AssessmentSession** | Single assessment call | `id`, `candidate_email` (FK), `phone_number`, `status` (pending/dialling/in_progress/completed/failed/cancelled), `metadata` (JSON: {`failureReason`, `cancelledAt`, ...}), `recording_url` (Daily cloud), `transcript_url` (structured transcript with speaker labels & timestamps), `started_at`, `ended_at`, `created_at` |
+| **AssessmentTranscript** | Full call transcript with metadata | `id`, `session_id` (FK), `raw_transcript` (JSON array of timestamped, speaker-labeled lines), `generated_at` |
 | **AssessmentReport** | Output of assessment + SME review | `id`, `session_id`, `review_token` (NanoID), `status` (generated/in-review/completed), `generated_at`, `sme_reviewed_at` |
+
+### Transcript Structure
+
+All transcripts include **speaker labels** and **timestamps (mm:ss format)** for each line to enable precise evidence referencing and claim attribution:
+
+```json
+{
+  "session_id": "abc123",
+  "transcript": [
+    {
+      "timestamp": "00:12",
+      "speaker": "bot",
+      "speaker_name": "Noa",
+      "text": "Hi, I'm Noa. Can you hear me clearly?"
+    },
+    {
+      "timestamp": "00:15",
+      "speaker": "candidate",
+      "speaker_name": "Candidate",
+      "text": "Yes, I can hear you fine."
+    },
+    {
+      "timestamp": "00:18",
+      "speaker": "bot",
+      "speaker_name": "Noa",
+      "text": "Great. Let's start with your background..."
+    }
+  ]
+}
+```
+
+**Transcript fields:**
+- `timestamp`: Format `mm:ss` indicating position in the call
+- `speaker`: `"bot"` (AI bot) or `"candidate"` (the person being assessed)
+- `speaker_name`: Human-readable name ("Noa" for bot, candidate's name if available)
+- `text`: Verbatim transcribed text from STT output
+
+**Usage in claim extraction:**
+- Claims reference transcript segments by timestamp ranges (e.g., "00:45–01:12") for SME verification
+- Speaker label ensures clarity on who said what during evidence gathering
+- Timestamps enable quick navigation to relevant portions in recorded call
 
 **Notes:**
 - **Candidate.email** is the unique identifier (natural key) for linking intake forms to sessions.
 - **Candidate.metadata** JSON field stores extensible data like `employee_id`, `organisation_id`, etc.
 - **AssessmentSession.metadata** JSON field stores optional state: failure reasons, cancellation timestamps, etc.
 - **AssessmentSession.recording_url** points to Daily's indefinite cloud storage. Retrieval happens at claim extraction time.
-- **Detailed data structures for interviews, transcripts, claims, and framework definitions are in PRD-002.**
+- **AssessmentTranscript** entity stores the structured, speaker-labeled transcript with timestamps; generated post-call via STT processing.
+- **Detailed data structures for interviews, claims, and framework definitions are in PRD-002.**
 
 ## 9. Platform Integration Points
 
