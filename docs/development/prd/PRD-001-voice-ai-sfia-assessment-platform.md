@@ -1,7 +1,7 @@
 # PRD-001: Voice-AI SFIA Skills Assessment Platform
 
 ## Status
-Draft
+Approved
 
 ## Date
 2026-04-20 (Last Updated)
