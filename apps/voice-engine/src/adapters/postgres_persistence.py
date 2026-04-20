@@ -84,6 +84,20 @@ class PostgresPersistence(IPersistence):
             await self._pool.close()
             self._pool = None
 
+    # ─── Liveness ────────────────────────────────────────────────────
+
+    async def ping(self) -> bool:
+        """Run ``SELECT 1`` against the pool; swallow connection errors."""
+        if asyncpg is None:  # pragma: no cover — lean CI
+            return False
+        try:
+            pool = await self._get_pool()
+            async with pool.acquire() as conn:
+                result = await conn.fetchval("SELECT 1")
+            return result == 1
+        except Exception:  # pragma: no cover — exercised on real DB
+            return False
+
     # ─── Candidate ───────────────────────────────────────────────────
 
     async def get_or_create_candidate(

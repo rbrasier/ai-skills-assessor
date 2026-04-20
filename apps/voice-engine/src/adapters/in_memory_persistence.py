@@ -29,6 +29,9 @@ class InMemoryPersistence(IPersistence):
         self._transcripts: dict[str, Transcript] = {}
         self._lock = asyncio.Lock()
 
+    async def ping(self) -> bool:
+        return True
+
     async def get_or_create_candidate(
         self,
         email: str,

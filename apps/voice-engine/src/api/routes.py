@@ -20,15 +20,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
+from src.domain.ports.persistence import IPersistence
 from src.domain.services.call_manager import (
     CallManager,
     CallManagerError,
     SessionNotFoundError,
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
+
+_VOICE_ENGINE_VERSION = "0.4.1"
 
 router = APIRouter()
 
@@ -45,9 +48,46 @@ def _manager(request: Request) -> CallManager:
 # ─── Health ──────────────────────────────────────────────────────────
 
 
-@router.get("/health", tags=["meta"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+class HealthPayload(BaseModel):
+    status: str
+    version: str
+    database: str
+
+
+@router.get("/health", tags=["meta"], response_model=HealthPayload)
+async def health(request: Request, response: Response) -> HealthPayload:
+    """Deep health check.
+
+    Returns HTTP 200 only when the voice engine *and* its persistence
+    backend are reachable. Railway's healthcheck uses this to roll back
+    deploys with an unreachable database — see Phase 3 / ADR-006.
+    """
+
+    persistence: IPersistence | None = getattr(
+        request.app.state, "persistence", None
+    )
+
+    db_status = "unknown"
+    if persistence is not None:
+        try:
+            db_status = "ok" if await persistence.ping() else "unreachable"
+        except Exception:  # pragma: no cover — ping must not raise, but
+            # still treat surprises as unhealthy.
+            db_status = "unreachable"
+
+    if db_status != "ok":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return HealthPayload(
+            status="degraded",
+            version=_VOICE_ENGINE_VERSION,
+            database=db_status,
+        )
+
+    return HealthPayload(
+        status="ok",
+        version=_VOICE_ENGINE_VERSION,
+        database=db_status,
+    )
 
 
 # ─── Candidate intake (Step 01) ──────────────────────────────────────

@@ -14,6 +14,37 @@ from src.domain.ports.voice_transport import IVoiceTransport
 from src.domain.services.call_manager import CallManager
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    # Phase 3 / v0.4.0 — gate the production smoke test behind an
+    # explicit flag so ``pytest`` from the repo root doesn't try to
+    # reach a live Railway URL during local dev or CI.
+    parser.addoption(
+        "--run-smoke",
+        action="store_true",
+        default=False,
+        help="Run the production smoke test against SMOKE_TEST_URL.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "smoke: post-deploy smoke tests (require --run-smoke + SMOKE_TEST_URL)",
+    )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    if config.getoption("--run-smoke"):
+        return
+    skip_smoke = pytest.mark.skip(reason="smoke test — pass --run-smoke to enable")
+    for item in items:
+        if "smoke" in item.keywords:
+            item.add_marker(skip_smoke)
+
+
 class _FakeVoiceTransport(IVoiceTransport):
     """Test-only transport. Records calls and exposes deterministic timing."""
 
