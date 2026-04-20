@@ -1,25 +1,21 @@
-"""Daily transport adapter (Phase 2 stub).
+"""Daily transport adapter.
 
-Implements :class:`IVoiceTransport` by talking to Daily's REST API
-(``/v1/rooms`` and ``/v1/meeting-tokens``). The *actual* Pipecat
-pipeline — PSTN dial-out, STT/TTS/LLM wiring, event handlers — is
-explicitly deferred to Phase 3 per the phase document (§1.3).
+Phase 3 Revision 1: this adapter creates Daily rooms + meeting tokens
+via the REST API, launches a :class:`BasicCallBot` Pipecat pipeline as
+a background task for each session, and relays Daily event handlers
+back into the domain via an :class:`ICallLifecycleListener`.
 
-For Phase 2 the adapter:
-
-* Normalises the candidate phone number to E.164 before dialling.
-* Creates a Daily room in the configured region with cloud recording
-  enabled.
-* Creates a meeting token for the bot "Noa".
-* Returns a :class:`CallConnection` so ``CallManager`` can persist
-  the room URL.
-* Tracks per-session ``started_at`` / ``ended_at`` so
-  ``get_call_duration`` can report live progress to the candidate UI.
+The adapter is import-safe without the ``[voice]`` extras: the Pipecat
+pipeline (in ``src/flows/bot_runner.py``) is imported lazily when
+``dial`` actually runs. Room + token creation only requires ``httpx``,
+which is in the lean CI install, so unit tests can exercise the REST
+client with ``respx`` and never touch Pipecat.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -27,15 +23,21 @@ from uuid import uuid4
 
 import httpx
 
+from src.config import Settings, get_settings
 from src.domain.models.assessment import CallConfig, CallConnection
+from src.domain.ports.call_lifecycle_listener import ICallLifecycleListener
+from src.domain.ports.llm_provider import ILLMProvider
 from src.domain.ports.voice_transport import IVoiceTransport
 from src.domain.utils.phone import normalise_phone_number
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class _ActiveCall:
     connection: CallConnection
     room_name: str
+    bot: Any = None  # BasicCallBot — Any to avoid the Pipecat import
     recording_url: str | None = None
 
 
@@ -49,6 +51,9 @@ class DailyVoiceTransport(IVoiceTransport):
         room_ttl_seconds: int = 7200,
         bot_name: str = "Noa",
         http_client: httpx.AsyncClient | None = None,
+        settings: Settings | None = None,
+        listener: ICallLifecycleListener | None = None,
+        llm_provider: ILLMProvider | None = None,
     ) -> None:
         self._api_key = api_key
         self._daily_domain = daily_domain
@@ -57,8 +62,24 @@ class DailyVoiceTransport(IVoiceTransport):
         self._bot_name = bot_name
         self._http_client = http_client
         self._owns_client = http_client is None
+        self._settings = settings
+        self._listener = listener
+        self._llm_provider = llm_provider
         self._active: dict[str, _ActiveCall] = {}
         self._lock = asyncio.Lock()
+
+    # ─── Dependency setters (wired in main.py lifespan) ──────────────
+
+    def set_listener(self, listener: ICallLifecycleListener) -> None:
+        self._listener = listener
+
+    def set_llm_provider(self, provider: ILLMProvider | None) -> None:
+        self._llm_provider = provider
+
+    def set_settings(self, settings: Settings) -> None:
+        self._settings = settings
+
+    # ─── HTTP plumbing ───────────────────────────────────────────────
 
     async def _client(self) -> httpx.AsyncClient:
         if self._http_client is None:
@@ -69,6 +90,14 @@ class DailyVoiceTransport(IVoiceTransport):
         return self._http_client
 
     async def close(self) -> None:
+        # Cancel any in-flight bots before closing the HTTP client.
+        async with self._lock:
+            bots = [c.bot for c in self._active.values() if c.bot is not None]
+        for bot in bots:
+            try:
+                await bot.cancel()
+            except Exception:  # pragma: no cover — defensive
+                logger.exception("DailyVoiceTransport.close: bot.cancel failed")
         if self._owns_client and self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
@@ -76,10 +105,11 @@ class DailyVoiceTransport(IVoiceTransport):
     # ─── IVoiceTransport ─────────────────────────────────────────────
 
     async def dial(self, config: CallConfig) -> CallConnection:
+        settings = self._settings or get_settings()
         normalised = normalise_phone_number(config.phone_number)
 
         room = await self._create_room(region=config.region)
-        await self._create_meeting_token(room["name"])
+        token = await self._create_meeting_token(room["name"])
 
         connection = CallConnection(
             session_id=config.session_id,
@@ -89,18 +119,61 @@ class DailyVoiceTransport(IVoiceTransport):
             started_at=datetime.now(UTC),
         )
 
+        bot: Any = None
+        if self._listener is None:
+            logger.warning(
+                "DailyVoiceTransport.dial: no lifecycle listener wired — "
+                "skipping Pipecat pipeline (session %s)",
+                config.session_id,
+            )
+        elif not self._has_provider_keys(settings):
+            logger.warning(
+                "DailyVoiceTransport.dial: missing one of DEEPGRAM / "
+                "ELEVENLABS / DAILY API keys — skipping Pipecat pipeline "
+                "(session %s). The Daily room was created so the audit "
+                "trail is visible, but no bot will join.",
+                config.session_id,
+            )
+            # Surface this as a failure so the UI doesn't hang.
+            asyncio.create_task(
+                self._listener.on_call_failed(
+                    config.session_id,
+                    reason="missing_provider_credentials",
+                )
+            )
+        else:
+            from src.flows.bot_runner import BasicCallBot
+
+            bot = BasicCallBot(
+                session_id=config.session_id,
+                phone_number=normalised,
+                room_url=room["url"],
+                room_token=token,
+                settings=settings,
+                listener=self._listener,
+                llm_provider=self._llm_provider,
+            )
+            try:
+                await bot.start()
+            except Exception as exc:  # pragma: no cover — runtime
+                logger.exception(
+                    "BasicCallBot.start failed for session %s",
+                    config.session_id,
+                )
+                asyncio.create_task(
+                    self._listener.on_call_failed(
+                        config.session_id,
+                        reason=f"bot_start_failed: {exc}",
+                    )
+                )
+                bot = None
+
         async with self._lock:
             self._active[config.session_id] = _ActiveCall(
                 connection=connection,
                 room_name=room["name"],
+                bot=bot,
             )
-
-        # Phase 2 stub: we create the room + token so the audit trail is
-        # visible in Daily's dashboard, but do NOT yet invoke the
-        # Pipecat pipeline / PSTN dial-out. Phase 3 will replace this
-        # block with a real Pipecat ``DailyTransport`` + outbound SIP
-        # invite using ``normalised``.
-        _ = normalised
 
         return connection
 
@@ -111,6 +184,14 @@ class DailyVoiceTransport(IVoiceTransport):
                 return
             active.connection.is_active = False
             active.connection.ended_at = datetime.now(UTC)
+            bot = active.bot
+        if bot is not None:
+            try:
+                await bot.cancel()
+            except Exception:  # pragma: no cover — defensive
+                logger.exception(
+                    "DailyVoiceTransport.hangup: bot.cancel failed"
+                )
 
     async def get_call_duration(self, session_id: str) -> float:
         async with self._lock:
@@ -128,6 +209,16 @@ class DailyVoiceTransport(IVoiceTransport):
             active = self._active.get(session_id)
         return active.recording_url if active is not None else None
 
+    # ─── Helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _has_provider_keys(settings: Settings) -> bool:
+        return bool(
+            settings.daily_api_key
+            and settings.deepgram_api_key
+            and settings.elevenlabs_api_key
+        )
+
     # ─── Daily REST helpers ──────────────────────────────────────────
 
     async def _create_room(self, *, region: str) -> dict[str, Any]:
@@ -138,6 +229,9 @@ class DailyVoiceTransport(IVoiceTransport):
                 "geo": region,
                 "exp": int(datetime.now(UTC).timestamp()) + self._room_ttl_seconds,
                 "max_participants": 2,
+                "start_audio_off": False,
+                "start_video_off": True,
+                "enable_dialout": True,
             }
         }
         response = await client.post(f"{self._api_url}/rooms", json=payload)
