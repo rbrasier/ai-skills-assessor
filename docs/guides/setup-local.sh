@@ -204,9 +204,6 @@ fi
 PIP="$VENV_DIR/bin/pip"
 PY_VENV="$VENV_DIR/bin/python"
 
-# Upgrade pip silently
-"$PIP" install --upgrade pip -q
-
 # Detect whether Pipecat (voice extras) is already installed
 if "$PY_VENV" -c "import pipecat" 2>/dev/null; then
   ok "Pipecat (voice extras) already installed"
