@@ -48,13 +48,23 @@ python3 -m venv .venv
 ## 3. Database (Postgres with pgvector)
 
 Phase 3 requires the pgvector extension. The simplest path is the
-community `pgvector/pgvector` image:
+community `pgvector/pgvector` image. Use the automated `setup-local.sh`
+script (see §2) which handles Docker creation and permissions correctly.
+
+Alternatively, set up manually:
 
 ```bash
+# Create container with postgres DB, then create app DB as superuser
 docker run --name ai-skills-pg \
+  -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=ai_skills_assessor \
+  -e POSTGRES_DB=postgres \
   -p 5432:5432 -d pgvector/pgvector:pg16
+
+# Wait for startup, then create the app database
+sleep 5
+docker exec ai-skills-pg psql -U postgres -d postgres -c \
+  "CREATE DATABASE ai_skills_assessor OWNER postgres;"
 ```
 
 Then from the repo root:
@@ -255,7 +265,9 @@ before landing a PR.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `prisma generate` complains about missing Postgres | `DATABASE_URL` not set | Export it in the shell before running. |
+| Migration fails with `P1010: User postgres was denied access` | pgvector/pgvector Docker image permission issue — DB created with restricted owner | Use the manual setup (§3) or `setup-local.sh`; ensure the app database is created with `OWNER postgres`. |
 | Migration fails at `CREATE EXTENSION vector` | Running against a vanilla `postgres:16` image | Use `pgvector/pgvector:pg16` (see §3). |
+| `setup-local.sh` fails with `sed: command a expects` | macOS `sed -i` requires empty string argument for in-place edit | Already fixed in `setup-local.sh` (uses `sed -i ''`). Re-run the script. |
 | `pip install -e ".[dev]"` fails with `ensurepip` error | Missing `python3.XX-venv` OS package | `sudo apt install python3.12-venv` (or the matching version). |
 | Voice engine boots but returns `503` on `/health` | DB probe (`IPersistence.ping()`) failed | Check `DATABASE_URL` and that Postgres is up. |
 | Voice engine boots but returns `503 Voice engine not ready` | `app.state.call_manager` is `None` — lifespan crashed | Check the `uvicorn` stderr for import / DB errors. |

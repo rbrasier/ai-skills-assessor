@@ -141,7 +141,7 @@ section "2/7  Environment files"
 if [ ! -f "apps/voice-engine/.env" ]; then
   cp apps/voice-engine/.env.example apps/voice-engine/.env
   # Patch the placeholder DATABASE_URL to the local default
-  sed -i "s|DATABASE_URL=.*|DATABASE_URL=${LOCAL_DB_URL}|" apps/voice-engine/.env
+  sed -i '' "s|DATABASE_URL=.*|DATABASE_URL=${LOCAL_DB_URL}|" apps/voice-engine/.env
   ok "Created apps/voice-engine/.env (patched DATABASE_URL)"
   add_manual "Open apps/voice-engine/.env and fill in the API keys needed for calls:
      DAILY_API_KEY     — daily.co → Developers  (required for outbound calls)
@@ -171,7 +171,7 @@ fi
 if [ ! -f "packages/database/.env" ]; then
   if [ -f "packages/database/.env.example" ]; then
     cp packages/database/.env.example packages/database/.env
-    sed -i "s|DATABASE_URL=.*|DATABASE_URL=\"${LOCAL_DB_URL}\"|" packages/database/.env
+    sed -i '' "s|DATABASE_URL=.*|DATABASE_URL=\"${LOCAL_DB_URL}\"|" packages/database/.env
   else
     echo "DATABASE_URL=\"${LOCAL_DB_URL}\"" > packages/database/.env
   fi
@@ -245,10 +245,24 @@ else
     docker run --name "$CONTAINER_NAME" \
       -e POSTGRES_USER=postgres \
       -e POSTGRES_PASSWORD=postgres \
-      -e POSTGRES_DB=ai_skills_assessor \
+      -e POSTGRES_DB=postgres \
       -p 5432:5432 \
       -d pgvector/pgvector:pg16
     ok "Postgres container '$CONTAINER_NAME' created and started"
+
+    # Create the application database as the superuser to avoid permission issues
+    info "Creating application database..."
+    for i in $(seq 1 10); do
+      if docker exec "$CONTAINER_NAME" psql -U postgres -d postgres -c "CREATE DATABASE ai_skills_assessor OWNER postgres; GRANT ALL PRIVILEGES ON DATABASE ai_skills_assessor TO postgres;" 2>/dev/null; then
+        ok "Application database created"
+        break
+      fi
+      if [ "$i" -eq 10 ]; then
+        err "Could not create database — check: docker logs $CONTAINER_NAME"
+        exit 1
+      fi
+      sleep 1
+    done
   fi
 
   info "Waiting for Postgres to be ready..."
