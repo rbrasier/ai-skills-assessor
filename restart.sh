@@ -29,6 +29,7 @@ USE_DOCKER=false
 for arg in "$@"; do [ "$arg" = "--docker" ] && USE_DOCKER=true; done
 
 CONTAINER_NAME="ai-skills-pg"
+LIVEKIT_CONTAINER_NAME="${LIVEKIT_CONTAINER_NAME:-ai-skills-livekit}"
 LOCAL_DB_URL="postgresql://postgres:postgres@localhost:5432/ai_skills_assessor"
 LOG_DIR="/tmp/ai-skills-logs"
 mkdir -p "$LOG_DIR"
@@ -99,6 +100,26 @@ ensure_postgres() {
     [ "$i" -eq 20 ] && { err "Postgres did not become ready — check: docker logs $CONTAINER_NAME"; exit 1; }
     sleep 1
   done
+}
+
+ensure_livekit() {
+  if [ "${DOCKER_LIVEKIT_SKIP:-0}" = "1" ]; then
+    return 0
+  fi
+  if [ ! -f "$REPO_ROOT/docs/guides/ensure-docker-livekit.sh" ]; then
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/docs/guides/ensure-docker-livekit.sh"
+  if ! ensure_docker_livekit; then
+    warn "Could not start LiveKit container — check: docker logs $LIVEKIT_CONTAINER_NAME"
+    return 0
+  fi
+  if ! wait_for_livekit; then
+    warn "LiveKit :7880 not ready in time — check: docker logs $LIVEKIT_CONTAINER_NAME"
+  else
+    ok "LiveKit ready (WebSocket: ws://127.0.0.1:7880)"
+  fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -175,6 +196,9 @@ fi
 # Postgres
 ensure_postgres
 
+# Self-hosted LiveKit (same as setup-local; docs/guides/ensure-docker-livekit.sh)
+ensure_livekit
+
 # Prisma migrate (apply any pending migrations; safe to run on every restart)
 if [ -f "packages/database/prisma/schema.prisma" ]; then
   export DATABASE_URL="$LOCAL_DB_URL"
@@ -244,4 +268,4 @@ echo "    tail -f $WEB_LOG"
 echo
 echo "  To stop:"
 echo "    kill \$(cat $LOG_DIR/voice-engine.pid $LOG_DIR/web.pid 2>/dev/null)"
-echo "    docker stop $CONTAINER_NAME"
+echo "    docker stop $CONTAINER_NAME $LIVEKIT_CONTAINER_NAME"

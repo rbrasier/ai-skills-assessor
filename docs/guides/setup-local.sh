@@ -10,7 +10,8 @@
 #   3. Installs pnpm workspace dependencies
 #   4. Creates the Python virtual environment and installs the voice engine
 #   5. Starts (or creates) the pgvector Postgres container
-#   6. Runs Prisma generate + migrate
+#   6. Starts (or creates) the self-hosted LiveKit server container (see docs/guides/ensure-docker-livekit.sh)
+#   7. Runs Prisma generate + migrate
 #
 # Manual steps that cannot be automated are printed at the end.
 
@@ -45,7 +46,7 @@ echo -e "\n${BOLD}AI Skills Assessor — Local Setup${RESET}"
 echo "Working directory: $REPO_ROOT"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "1/7  Prerequisites"
+section "1/8  Prerequisites"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 PREREQ_OK=true
@@ -134,7 +135,7 @@ if [ "$PREREQ_OK" = false ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "2/7  Environment files"
+section "2/8  Environment files"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # apps/voice-engine/.env
@@ -190,14 +191,14 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "3/7  Node.js dependencies (pnpm install)"
+section "3/8  Node.js dependencies (pnpm install)"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 pnpm install --frozen-lockfile
 ok "pnpm workspace installed"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "4/7  Python virtual environment"
+section "4/8  Python virtual environment"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 VENV_DIR="apps/voice-engine/.venv"
@@ -230,7 +231,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "5/7  PostgreSQL (pgvector Postgres container)"
+section "5/8  PostgreSQL (pgvector Postgres container)"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if [ "$DOCKER_OK" = false ]; then
@@ -289,7 +290,45 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "6/7  Prisma generate + migrate"
+section "6/8  LiveKit (self-hosted, Docker; browser mode / DIALING_METHOD=browser)"
+# ═══════════════════════════════════════════════════════════════════════════════
+# Same pattern as Postgres: image livekit/livekit-server --dev (devkey/secret);
+#   see docs/guides/ensure-docker-livekit.sh. Skip with DOCKER_LIVEKIT_SKIP=1.
+
+if [ "$DOCKER_OK" = false ]; then
+  warn "Docker unavailable — skipping LiveKit server container"
+  add_manual "Start LiveKit yourself or use LiveKit Cloud; set LIVEKIT_URL / API keys in apps/voice-engine/.env"
+else
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT/docs/guides/ensure-docker-livekit.sh"
+  if ensure_docker_livekit; then
+    if wait_for_livekit; then
+      ok "LiveKit container '$LIVEKIT_CONTAINER_NAME' is up (WebSocket: ws://127.0.0.1:7880)"
+    else
+      warn "LiveKit container exists but :7880 did not become ready in time — check: docker logs $LIVEKIT_CONTAINER_NAME"
+    fi
+  else
+    warn "Could not start LiveKit container — is port 7880 in use?"
+  fi
+
+  # If using browser mode but LIVEKIT_URL is still blank, add local --dev credentials (matches container).
+  if [ -f "apps/voice-engine/.env" ]; then
+    _dm_v=$(grep -E '^DIALING_METHOD=' apps/voice-engine/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d ' \r' || true)
+    if [ "$_dm_v" = "browser" ] && ! grep -qE '^LIVEKIT_URL=.' apps/voice-engine/.env 2>/dev/null; then
+      {
+        echo ""
+        echo "# Local Docker LiveKit (livekit-server --dev; see docs/guides/ensure-docker-livekit.sh)"
+        echo "LIVEKIT_URL=ws://127.0.0.1:7880"
+        echo "LIVEKIT_API_KEY=devkey"
+        echo "LIVEKIT_API_SECRET=secret"
+      } >> "apps/voice-engine/.env"
+      ok "Appended local LiveKit dev credentials to apps/voice-engine/.env (browser mode)"
+    fi
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+section "7/8  Prisma generate + migrate"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 export DATABASE_URL="$LOCAL_DB_URL"
@@ -306,7 +345,7 @@ ok "All migrations applied:
      v0_4_0_phase_3_infrastructure (Phase 3 — pgvector + skill_embeddings + assessment_reports)"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-section "7/7  Done"
+section "8/8  Done"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 echo

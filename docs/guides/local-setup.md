@@ -19,7 +19,7 @@ interjections) is still Phase 4+.
 | Node.js      | ≥ 20.x     | `.nvmrc` pins `20`.                              |
 | pnpm         | ≥ 10.x     | `packageManager` pins `pnpm@10.33.0`.            |
 | Python       | 3.11+      | Voice engine targets 3.11 but runs on 3.12.      |
-| Docker       | any        | Easiest way to run Postgres locally.             |
+| Docker       | any        | Local Postgres (pgvector) and optional LiveKit server. |
 | `make` / bash| —          | Some helper scripts are POSIX shell.             |
 
 **Transport:** set `DIALING_METHOD` in `apps/voice-engine/.env` to `daily`
@@ -27,6 +27,14 @@ interjections) is still Phase 4+.
 Daily API key and domain are **required** at process startup. In `browser` mode,
 use `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` instead; Daily
 variables are not read.
+
+`bash docs/guides/setup-local.sh` starts a **LiveKit** Docker container the same
+way it starts **Postgres** (create-or-start, fixed name `ai-skills-livekit`, image
+`livekit/livekit-server` with `--dev`). The built-in dev credentials are
+`API Key: devkey` / `API Secret: secret` and WebSocket
+`ws://127.0.0.1:7880` — see
+[LiveKit: Starting LiveKit](https://github.com/livekit/livekit#starting-livekit). Skip the container with `DOCKER_LIVEKIT_SKIP=1` if you use
+LiveKit Cloud or run the server another way. Helper script: `docs/guides/ensure-docker-livekit.sh`.
 
 ---
 
@@ -90,6 +98,34 @@ purely additive, so it is also safe against a populated v0.3.0 DB.
 
 ---
 
+## 3b. LiveKit (browser mode, self-hosted in Docker)
+
+When `DIALING_METHOD=browser`, the voice engine needs a LiveKit server. The
+automated setup and `bash restart.sh` use the same pattern as Postgres: Docker
+**create-or-start** for container `ai-skills-livekit` (see
+`docs/guides/ensure-docker-livekit.sh` — ports 7880 TCP, 7881 TCP, 50000–50050 UDP).
+
+- After `setup-local.sh`, with `DIALING_METHOD=browser` and a blank
+  `LIVEKIT_URL` in a **new** `.env`, the script can append
+  `LIVEKIT_URL=ws://127.0.0.1:7880`, `LIVEKIT_API_KEY=devkey`,
+  `LIVEKIT_API_SECRET=secret` to match the `--dev` server. If you already
+  have values in `.env`, set them to match the container, or use your
+  own server and skip the local container (`DOCKER_LIVEKIT_SKIP=1`).
+
+- Manual one-off: `bash docs/guides/ensure-docker-livekit.sh` from the repo
+  root, or `source docs/guides/ensure-docker-livekit.sh` then
+  `ensure_docker_livekit`.
+
+```bash
+docker start ai-skills-livekit  # if it already exists
+docker ps --filter name=ai-skills-livekit
+```
+
+`bash restart.sh` (native mode) starts this container before the voice engine,
+alongside Postgres.
+
+---
+
 ## 4. Environment variables
 
 Copy the per-package `.env.example` files:
@@ -115,9 +151,14 @@ DAILY_GEO=ap-southeast-1     # Singapore SFU — see ADR-006
 DAILY_CALLER_ID=             # optional
 
 # LiveKit (only when DIALING_METHOD=browser)
-# LIVEKIT_URL=wss://your-server:7880
-# LIVEKIT_API_KEY=
-# LIVEKIT_API_SECRET=
+# Local Docker (setup-local / docs/guides/ensure-docker-livekit.sh --dev):
+#   LIVEKIT_URL=ws://127.0.0.1:7880
+#   LIVEKIT_API_KEY=devkey
+#   LIVEKIT_API_SECRET=secret
+# LiveKit cloud or remote: use wss:// and keys from the project
+# LIVEKIT_URL=ws://127.0.0.1:7880
+# LIVEKIT_API_KEY=devkey
+# LIVEKIT_API_SECRET=secret
 # LIVEKIT_MEET_URL=https://meet.livekit.io/custom
 
 # AI providers (Phase 3 Revision 1)
@@ -285,6 +326,8 @@ before landing a PR.
 | Call connects but the bot is silent | ElevenLabs rate limit / bad voice ID | Check voice-engine logs for 401/429 from ElevenLabs; override `ELEVENLABS_VOICE_ID` with a voice from your account's library. |
 | Call connects, bot greets, but candidate reply isn't acknowledged | Deepgram returning no transcriptions or LLM timeout | Logs will show either `TranscriptionFrame: (empty)` (check your mic / line quality) or `LLM ack timed out after 10.0s`. The bot still says the goodbye + hangs up, so the call completes. |
 | `docker compose up` fails to build `web` | Running from inside `apps/web` instead of repo root | `cd` to the repo root — the web Dockerfile needs the pnpm workspace. |
+| Browser call / WebRTC cannot connect to LiveKit | Port 7880 blocked, or UDP range not published | With `ai-skills-livekit`, check `docker logs ai-skills-livekit` and that host firewall allows 7880/TCP and 50000–50050/UDP. Set `DOCKER_LIVEKIT_SKIP=1` and point `LIVEKIT_*` at LiveKit Cloud or another server. |
+| `devkey` / `secret` rejected by voice engine | `.env` does not match the server | Use the same key pair as the container (`--dev` → devkey/secret) or your own `LIVEKIT_KEYS` in production. |
 
 ---
 
