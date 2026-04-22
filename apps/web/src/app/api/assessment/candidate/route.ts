@@ -24,10 +24,15 @@ export async function POST(request: NextRequest) {
     }),
   });
 
-  const data = await upstream.json();
   if (!upstream.ok) {
-    return NextResponse.json(data, { status: upstream.status });
+    const errorText = await upstream.text();
+    return NextResponse.json(
+      { error: `Voice engine error: ${errorText}` },
+      { status: upstream.status },
+    );
   }
+
+  const data = await upstream.json();
   return NextResponse.json(
     {
       candidateId: data.candidate_id,

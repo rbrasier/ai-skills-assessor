@@ -12,8 +12,15 @@ without requiring a live database.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
+
+
+def _to_naive(dt: datetime | None) -> datetime | None:
+    """Convert timezone-aware datetime to naive (strip timezone info)."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 from src.domain.models.assessment import (
     AssessmentSession,
@@ -127,7 +134,7 @@ class PostgresPersistence(IPersistence):
                 first_name,
                 last_name,
                 json.dumps(metadata),
-                datetime.now(UTC),
+                datetime.now(),
             )
             return _row_to_candidate(row)
 
@@ -153,9 +160,9 @@ class PostgresPersistence(IPersistence):
                 json.dumps(session.metadata or {}),
                 session.daily_room_url,
                 session.recording_url,
-                session.started_at,
-                session.ended_at,
-                session.created_at or datetime.now(UTC),
+                _to_naive(session.started_at),
+                _to_naive(session.ended_at),
+                _to_naive(session.created_at) or datetime.now(),
             )
             return _row_to_session(row)
 
@@ -234,8 +241,8 @@ class PostgresPersistence(IPersistence):
                 session_id,
                 status_value,
                 merge_json,
-                started_at,
-                ended_at,
+                _to_naive(started_at),
+                _to_naive(ended_at),
                 daily_room_url,
                 recording_url,
             )
