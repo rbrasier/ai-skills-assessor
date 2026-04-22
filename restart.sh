@@ -262,10 +262,27 @@ echo "  Voice engine:  http://localhost:8000"
 echo "  Web app:       http://localhost:3000"
 echo "  Admin dash:    http://localhost:3000/dashboard"
 echo
-echo "  Log files:"
-echo "    tail -f $VOICE_LOG"
-echo "    tail -f $WEB_LOG"
+echo -e "${BOLD}Streaming logs (press Ctrl+C to stop):${RESET}"
 echo
-echo "  To stop:"
-echo "    kill \$(cat $LOG_DIR/voice-engine.pid $LOG_DIR/web.pid 2>/dev/null)"
-echo "    docker stop $CONTAINER_NAME $LIVEKIT_CONTAINER_NAME"
+
+# Colors for log prefixes
+VOICE_COLOR='\033[0;36m'  # Cyan
+WEB_COLOR='\033[0;35m'    # Magenta
+
+# Tail logs with colored prefixes
+tail_with_prefix() {
+  local logfile=$1 prefix=$2 color=$3
+  tail -f "$logfile" 2>/dev/null | while IFS= read -r line; do
+    printf "${color}[%s]${RESET} %s\n" "$prefix" "$line"
+  done &
+}
+
+# Start tail processes
+tail_with_prefix "$VOICE_LOG" "voice" "$VOICE_COLOR"
+tail_with_prefix "$WEB_LOG" "web" "$WEB_COLOR"
+
+# Trap Ctrl+C to kill tail processes cleanly
+trap 'kill $(jobs -p) 2>/dev/null; echo; info "Stopped"; exit 0' INT
+
+# Wait for tail processes (will exit on Ctrl+C via trap)
+wait

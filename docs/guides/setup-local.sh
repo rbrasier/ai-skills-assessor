@@ -158,12 +158,12 @@ else
   DM=$(grep -E '^DIALING_METHOD=' apps/voice-engine/.env 2>/dev/null | cut -d= -f2- | tr -d ' \r' || true)
   if [ -z "$DM" ] || [ "$DM" = "daily" ]; then
     for KEY in DAILY_API_KEY DEEPGRAM_API_KEY ELEVENLABS_API_KEY; do
-      VAL=$(grep "^${KEY}=" apps/voice-engine/.env | cut -d= -f2-)
+      VAL=$(grep "^${KEY}=" apps/voice-engine/.env 2>/dev/null | cut -d= -f2- || true)
       [ -z "$VAL" ] && warn "  $KEY is blank in apps/voice-engine/.env (calls will fail in daily mode)"
     done
   else
     for KEY in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET DEEPGRAM_API_KEY ELEVENLABS_API_KEY; do
-      VAL=$(grep "^${KEY}=" apps/voice-engine/.env | cut -d= -f2-)
+      VAL=$(grep "^${KEY}=" apps/voice-engine/.env 2>/dev/null | cut -d= -f2- || true)
       [ -z "$VAL" ] && warn "  $KEY is blank in apps/voice-engine/.env (browser mode will fail)"
     done
   fi
