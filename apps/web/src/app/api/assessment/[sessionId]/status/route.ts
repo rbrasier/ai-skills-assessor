@@ -25,6 +25,9 @@ export async function GET(
       failureReason: data.failure_reason,
       dialingMethod: data.dialing_method ?? "daily",
       browserJoinUrl: data.browser_join_url ?? null,
+      livekitRoomName: data.livekit_room_name ?? null,
+      livekitParticipantToken: data.livekit_participant_token ?? null,
+      livekitUrl: data.livekit_url ?? null,
     },
     { status: upstream.status },
   );

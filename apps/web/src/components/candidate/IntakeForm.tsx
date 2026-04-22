@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export interface IntakeFormValues {
   firstName: string;
@@ -27,6 +27,28 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
   const [values, setValues] = useState<IntakeFormValues>(EMPTY);
   const [errors, setErrors] = useState<Partial<Record<keyof IntakeFormValues, string>>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [dialingMethod, setDialingMethod] = useState<string | null>(null);
+  const [configError, setConfigError] = useState(false);
+
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const res = await fetch("/api/config");
+        if (res.ok) {
+          const data = await res.json();
+          setDialingMethod(data.dialingMethod || "browser");
+        } else {
+          setConfigError(true);
+          setDialingMethod("browser");
+        }
+      } catch {
+        setConfigError(true);
+        setDialingMethod("browser");
+      }
+    };
+
+    fetchConfig();
+  }, []);
 
   const set = <K extends keyof IntakeFormValues>(key: K, value: string) =>
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -37,9 +59,11 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
     if (!values.lastName.trim()) next.lastName = "Required";
     if (!values.workEmail.includes("@")) next.workEmail = "Invalid email";
     if (!values.employeeId.trim()) next.employeeId = "Required";
-    // Accept +format with spaces, hyphens, parentheses; require ≥10 characters.
-    const phoneRegex = /^\+?[\d\s\-().]{10,}$/;
-    if (!phoneRegex.test(values.phoneNumber.trim())) next.phoneNumber = "Invalid phone";
+    // Only validate phone number if not using browser dialing
+    if (dialingMethod !== "browser") {
+      const phoneRegex = /^\+?[\d\s\-().]{10,}$/;
+      if (!phoneRegex.test(values.phoneNumber.trim())) next.phoneNumber = "Invalid phone";
+    }
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -106,16 +130,18 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
           onChange={(v) => set("employeeId", v)}
           error={errors.employeeId}
         />
-        <Field
-          label="Phone number"
-          name="phoneNumber"
-          type="tel"
-          placeholder="+44 7700 900118"
-          value={values.phoneNumber}
-          onChange={(v) => set("phoneNumber", v)}
-          error={errors.phoneNumber}
-          autoComplete="tel"
-        />
+        {dialingMethod !== "browser" && (
+          <Field
+            label="Phone number"
+            name="phoneNumber"
+            type="tel"
+            placeholder="+44 7700 900118"
+            value={values.phoneNumber}
+            onChange={(v) => set("phoneNumber", v)}
+            error={errors.phoneNumber}
+            autoComplete="tel"
+          />
+        )}
       </div>
 
       {submitError ? (
@@ -129,7 +155,11 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
         disabled={submitting}
         className="w-full rounded-full bg-slate-900 py-3 text-sm font-semibold uppercase tracking-wider text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {submitting ? "Starting…" : "Start the call"}
+        {submitting
+          ? "Starting…"
+          : dialingMethod === "browser"
+            ? "Start the call (In-browser)"
+            : "Start the call"}
       </button>
 
       <p className="text-xs leading-relaxed text-slate-500">

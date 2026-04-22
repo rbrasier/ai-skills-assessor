@@ -121,7 +121,12 @@ class LiveKitVoiceTransport(IVoiceTransport):
     async def dial(self, config: CallConfig) -> CallConnection:
         settings = self._settings or get_settings()
         room_name = f"as-{config.session_id.replace('-', '')[:32]}"
-        normalised = normalise_phone_number(config.phone_number)
+
+        # For browser dialing (empty phone number), use candidate_id as the name
+        if config.phone_number:
+            normalised = normalise_phone_number(config.phone_number)
+        else:
+            normalised = config.candidate_id
 
         bot_token = _mint_token(
             settings=settings,

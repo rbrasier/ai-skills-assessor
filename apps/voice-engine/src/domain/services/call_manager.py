@@ -79,6 +79,7 @@ class CallManager(ICallLifecycleListener):
         self,
         candidate_email: str,
         phone_number: str,
+        dialing_method: str | None = None,
     ) -> AssessmentSession:
         """Create a pending session and fire off an async dial.
 
@@ -91,7 +92,11 @@ class CallManager(ICallLifecycleListener):
         does not match an existing candidate.
         """
 
-        normalised = normalise_phone_number(phone_number)
+        # For browser dialing, skip phone normalization
+        if dialing_method == "browser":
+            normalised = ""
+        else:
+            normalised = normalise_phone_number(phone_number)
 
         candidate = await self._persistence.get_or_create_candidate(
             email=candidate_email,
@@ -107,17 +112,20 @@ class CallManager(ICallLifecycleListener):
             candidate_id=candidate.email,
             phone_number=normalised,
             status=AssessmentStatus.PENDING,
+            metadata={"dialing_method": dialing_method or "pstn"},
             created_at=datetime.now(UTC),
         )
         created = await self._persistence.create_session(session)
 
-        task = asyncio.create_task(self._place_call(created.id, normalised))
+        task = asyncio.create_task(self._place_call(created.id, normalised, dialing_method))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
         return created
 
-    async def _place_call(self, session_id: str, phone_number: str) -> None:
+    async def _place_call(
+        self, session_id: str, phone_number: str, dialing_method: str | None = None
+    ) -> None:
         """Background worker — dial the candidate and update status.
 
         After ``dial`` returns, ``in_progress`` / ``completed`` /
@@ -140,6 +148,9 @@ class CallManager(ICallLifecycleListener):
                 call_meta = {
                     "dialingMethod": "browser",
                     "browserJoinUrl": connection.browser_join_url,
+                    "livekitRoomName": connection.livekit_room_name,
+                    "livekitParticipantToken": connection.livekit_participant_token,
+                    "livekitUrl": connection.room_url,
                 }
             else:
                 call_meta = {"dialingMethod": "daily"}
@@ -237,6 +248,9 @@ class CallManager(ICallLifecycleListener):
             "failure_reason": session.metadata.get("failureReason") if session.metadata else None,
             "dialing_method": meta.get("dialingMethod", "daily"),
             "browser_join_url": meta.get("browserJoinUrl"),
+            "livekit_room_name": meta.get("livekitRoomName"),
+            "livekit_participant_token": meta.get("livekitParticipantToken"),
+            "livekit_url": meta.get("livekitUrl"),
         }
 
     # ─── Candidate-initiated cancel ──────────────────────────────────

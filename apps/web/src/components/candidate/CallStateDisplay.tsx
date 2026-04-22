@@ -79,14 +79,7 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
       </header>
 
       {status?.dialingMethod === "browser" && status?.browserJoinUrl ? (
-        <a
-          href={status.browserJoinUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block w-full rounded-2xl border-2 border-teal-500 bg-teal-50 px-4 py-4 text-center text-sm font-semibold text-teal-900 transition hover:bg-teal-100"
-        >
-          Open the interview in your browser
-        </a>
+        <LiveKitIframe joinUrl={status.browserJoinUrl} />
       ) : null}
 
       <StateVisual
@@ -222,6 +215,20 @@ function Waveform() {
           }}
         />
       ))}
+    </div>
+  );
+}
+
+function LiveKitIframe({ joinUrl }: { joinUrl: string }) {
+  return (
+    <div className="aspect-video w-full overflow-hidden rounded-2xl border border-slate-200 shadow-sm">
+      <iframe
+        src={joinUrl}
+        title="Interview Call"
+        allow="microphone; camera; usb"
+        sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation-by-user-activation"
+        className="h-full w-full border-none"
+      />
     </div>
   );
 }

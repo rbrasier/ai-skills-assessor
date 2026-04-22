@@ -140,7 +140,8 @@ async def create_candidate(
 
 class TriggerCallPayload(BaseModel):
     candidate_id: str = Field(..., description="Candidate email")
-    phone_number: str = Field(..., min_length=1, max_length=32)
+    phone_number: str | None = Field(default=None, min_length=1, max_length=32)
+    dialing_method: str | None = Field(default=None, description="'browser' or 'pstn'")
 
 
 class TriggerCallResult(BaseModel):
@@ -159,10 +160,16 @@ async def trigger_assessment_call(
     request: Request,
 ) -> TriggerCallResult:
     manager = _manager(request)
+
+    # Phone number is required for PSTN dialing
+    if payload.dialing_method != "browser" and not payload.phone_number:
+        raise HTTPException(status_code=400, detail=_INVALID_FORM)
+
     try:
         session = await manager.trigger_call(
             candidate_email=payload.candidate_id,
-            phone_number=payload.phone_number,
+            phone_number=payload.phone_number or "",
+            dialing_method=payload.dialing_method,
         )
     except InvalidPhoneNumberError as exc:
         raise HTTPException(status_code=400, detail=_INVALID_FORM) from exc
@@ -187,6 +194,9 @@ class CallStatusPayload(BaseModel):
     failure_reason: str | None = None
     dialing_method: str | None = None
     browser_join_url: str | None = None
+    livekit_room_name: str | None = None
+    livekit_participant_token: str | None = None
+    livekit_url: str | None = None
 
 
 @router.get(

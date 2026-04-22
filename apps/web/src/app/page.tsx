@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 import { CallStateDisplay } from "@/components/candidate/CallStateDisplay";
 import { IntakeForm, type IntakeFormValues } from "@/components/candidate/IntakeForm";
@@ -12,6 +12,25 @@ export default function CandidatePortalPage() {
   const [step, setStep] = useState<Step>("intake");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [dialingMethod, setDialingMethod] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const res = await fetch("/api/config");
+        if (res.ok) {
+          const data = await res.json();
+          setDialingMethod(data.dialingMethod || "browser");
+        } else {
+          setDialingMethod("browser");
+        }
+      } catch {
+        setDialingMethod("browser");
+      }
+    };
+
+    fetchConfig();
+  }, []);
 
   const handleIntake = async (values: IntakeFormValues) => {
     setSubmitError(null);
@@ -24,7 +43,8 @@ export default function CandidatePortalPage() {
       });
       const call = await triggerCall({
         candidateId: candidate.candidateId,
-        phoneNumber: values.phoneNumber.trim(),
+        phoneNumber: values.phoneNumber.trim() || undefined,
+        dialingMethod,
       });
       setSessionId(call.sessionId);
       setStep("calling");

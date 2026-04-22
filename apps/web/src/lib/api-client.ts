@@ -37,7 +37,8 @@ export async function createCandidate(
 
 export interface TriggerCallPayload {
   candidateId: string;
-  phoneNumber: string;
+  phoneNumber?: string;
+  dialingMethod?: string;
 }
 
 export async function triggerCall(payload: TriggerCallPayload): Promise<TriggerCallResponse> {

@@ -75,6 +75,12 @@ export interface CallStatusResponse {
   dialingMethod?: string | null;
   /** When dialingMethod is "browser", URL for the candidate to open in the browser. */
   browserJoinUrl?: string | null;
+  /** LiveKit room name (when dialingMethod is "browser"). */
+  livekitRoomName?: string | null;
+  /** LiveKit participant token (when dialingMethod is "browser"). */
+  livekitParticipantToken?: string | null;
+  /** LiveKit server URL. */
+  livekitUrl?: string | null;
 }
 
 // ─── Admin dashboard ─────────────────────────────────────────────────
