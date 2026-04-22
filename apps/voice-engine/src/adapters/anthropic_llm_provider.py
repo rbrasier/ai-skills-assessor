@@ -23,9 +23,11 @@ logger = logging.getLogger(__name__)
 
 _anthropic_module: Any
 try:  # ``anthropic`` is part of the [voice] extras; CI's lean install skips it.
-    import anthropic as _anthropic_module
+    import anthropic as _anthropic_sdk
 except ImportError:  # pragma: no cover — exercised in lean CI only
     _anthropic_module = None
+else:
+    _anthropic_module = _anthropic_sdk
 
 anthropic: Any = _anthropic_module
 
