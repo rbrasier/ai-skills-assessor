@@ -106,11 +106,11 @@ ensure_livekit() {
   if [ "${DOCKER_LIVEKIT_SKIP:-0}" = "1" ]; then
     return 0
   fi
-  if [ ! -f "$REPO_ROOT/scripts/ensure-docker-livekit.sh" ]; then
+  if [ ! -f "$REPO_ROOT/docs/guides/ensure-docker-livekit.sh" ]; then
     return 0
   fi
   # shellcheck source=/dev/null
-  source "$REPO_ROOT/scripts/ensure-docker-livekit.sh"
+  source "$REPO_ROOT/docs/guides/ensure-docker-livekit.sh"
   if ! ensure_docker_livekit; then
     warn "Could not start LiveKit container — check: docker logs $LIVEKIT_CONTAINER_NAME"
     return 0
@@ -196,7 +196,7 @@ fi
 # Postgres
 ensure_postgres
 
-# Self-hosted LiveKit (same as setup-local; scripts/ensure-docker-livekit.sh)
+# Self-hosted LiveKit (same as setup-local; docs/guides/ensure-docker-livekit.sh)
 ensure_livekit
 
 # Prisma migrate (apply any pending migrations; safe to run on every restart)

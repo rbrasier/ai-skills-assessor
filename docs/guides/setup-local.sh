@@ -10,7 +10,7 @@
 #   3. Installs pnpm workspace dependencies
 #   4. Creates the Python virtual environment and installs the voice engine
 #   5. Starts (or creates) the pgvector Postgres container
-#   6. Starts (or creates) the self-hosted LiveKit server container (see scripts/ensure-docker-livekit.sh)
+#   6. Starts (or creates) the self-hosted LiveKit server container (see docs/guides/ensure-docker-livekit.sh)
 #   7. Runs Prisma generate + migrate
 #
 # Manual steps that cannot be automated are printed at the end.
@@ -293,14 +293,14 @@ fi
 section "6/8  LiveKit (self-hosted, Docker; browser mode / DIALING_METHOD=browser)"
 # ═══════════════════════════════════════════════════════════════════════════════
 # Same pattern as Postgres: image livekit/livekit-server --dev (devkey/secret);
-#   see scripts/ensure-docker-livekit.sh. Skip with DOCKER_LIVEKIT_SKIP=1.
+#   see docs/guides/ensure-docker-livekit.sh. Skip with DOCKER_LIVEKIT_SKIP=1.
 
 if [ "$DOCKER_OK" = false ]; then
   warn "Docker unavailable — skipping LiveKit server container"
   add_manual "Start LiveKit yourself or use LiveKit Cloud; set LIVEKIT_URL / API keys in apps/voice-engine/.env"
 else
   # shellcheck source=/dev/null
-  source "$REPO_ROOT/scripts/ensure-docker-livekit.sh"
+  source "$REPO_ROOT/docs/guides/ensure-docker-livekit.sh"
   if ensure_docker_livekit; then
     if wait_for_livekit; then
       ok "LiveKit container '$LIVEKIT_CONTAINER_NAME' is up (WebSocket: ws://127.0.0.1:7880)"
@@ -317,7 +317,7 @@ else
     if [ "$_dm_v" = "browser" ] && ! grep -qE '^LIVEKIT_URL=.' apps/voice-engine/.env 2>/dev/null; then
       {
         echo ""
-        echo "# Local Docker LiveKit (livekit-server --dev; see scripts/ensure-docker-livekit.sh)"
+        echo "# Local Docker LiveKit (livekit-server --dev; see docs/guides/ensure-docker-livekit.sh)"
         echo "LIVEKIT_URL=ws://127.0.0.1:7880"
         echo "LIVEKIT_API_KEY=devkey"
         echo "LIVEKIT_API_SECRET=secret"

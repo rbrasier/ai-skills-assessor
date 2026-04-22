@@ -34,7 +34,7 @@ way it starts **Postgres** (create-or-start, fixed name `ai-skills-livekit`, ima
 `API Key: devkey` / `API Secret: secret` and WebSocket
 `ws://127.0.0.1:7880` — see
 [LiveKit: Starting LiveKit](https://github.com/livekit/livekit#starting-livekit). Skip the container with `DOCKER_LIVEKIT_SKIP=1` if you use
-LiveKit Cloud or run the server another way. Helper script: `scripts/ensure-docker-livekit.sh`.
+LiveKit Cloud or run the server another way. Helper script: `docs/guides/ensure-docker-livekit.sh`.
 
 ---
 
@@ -103,7 +103,7 @@ purely additive, so it is also safe against a populated v0.3.0 DB.
 When `DIALING_METHOD=browser`, the voice engine needs a LiveKit server. The
 automated setup and `bash restart.sh` use the same pattern as Postgres: Docker
 **create-or-start** for container `ai-skills-livekit` (see
-`scripts/ensure-docker-livekit.sh` — ports 7880 TCP, 7881 TCP, 50000–50050 UDP).
+`docs/guides/ensure-docker-livekit.sh` — ports 7880 TCP, 7881 TCP, 50000–50050 UDP).
 
 - After `setup-local.sh`, with `DIALING_METHOD=browser` and a blank
   `LIVEKIT_URL` in a **new** `.env`, the script can append
@@ -112,8 +112,8 @@ automated setup and `bash restart.sh` use the same pattern as Postgres: Docker
   have values in `.env`, set them to match the container, or use your
   own server and skip the local container (`DOCKER_LIVEKIT_SKIP=1`).
 
-- Manual one-off: `bash scripts/ensure-docker-livekit.sh` from the repo
-  root, or `source scripts/ensure-docker-livekit.sh` then
+- Manual one-off: `bash docs/guides/ensure-docker-livekit.sh` from the repo
+  root, or `source docs/guides/ensure-docker-livekit.sh` then
   `ensure_docker_livekit`.
 
 ```bash
@@ -151,7 +151,7 @@ DAILY_GEO=ap-southeast-1     # Singapore SFU — see ADR-006
 DAILY_CALLER_ID=             # optional
 
 # LiveKit (only when DIALING_METHOD=browser)
-# Local Docker (setup-local / scripts/ensure-docker-livekit.sh --dev):
+# Local Docker (setup-local / docs/guides/ensure-docker-livekit.sh --dev):
 #   LIVEKIT_URL=ws://127.0.0.1:7880
 #   LIVEKIT_API_KEY=devkey
 #   LIVEKIT_API_SECRET=secret

@@ -9,10 +9,10 @@
 #               LIVEKIT_API_SECRET=secret
 #
 # Usage: from repo root (or any cwd):
-#   source scripts/ensure-docker-livekit.sh
+#   source docs/guides/ensure-docker-livekit.sh
 #   ensure_docker_livekit
 #
-# Or:  bash scripts/ensure-docker-livekit.sh
+# Or:  bash docs/guides/ensure-docker-livekit.sh
 
 LIVEKIT_CONTAINER_NAME="${LIVEKIT_CONTAINER_NAME:-ai-skills-livekit}"
 # Pin for reproducible local dev; override to pull latest: LIVEKIT_DOCKER_TAG=latest
@@ -65,7 +65,7 @@ wait_for_livekit() {
   return 1
 }
 
-# Run as a tiny CLI (e.g. bash scripts/ensure-docker-livekit.sh)
+# Run as a tiny CLI (e.g. bash docs/guides/ensure-docker-livekit.sh)
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   set -euo pipefail
   if ensure_docker_livekit; then
