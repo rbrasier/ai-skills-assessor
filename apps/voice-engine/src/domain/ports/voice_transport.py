@@ -8,11 +8,19 @@ endpoint can surface progress without knowing about Daily.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from src.domain.models.assessment import CallConfig, CallConnection
 
+if TYPE_CHECKING:
+    from src.domain.ports.call_lifecycle_listener import ICallLifecycleListener
+
 
 class IVoiceTransport(ABC):
+    def set_listener(self, listener: ICallLifecycleListener) -> None:  # noqa: ARG002
+        """Transports that notify the call manager (Daily, LiveKit) implement this."""
+        return
+
     @abstractmethod
     async def dial(self, config: CallConfig) -> CallConnection:
         """Place an outbound call and return connection details."""

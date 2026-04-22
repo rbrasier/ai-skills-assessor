@@ -15,13 +15,6 @@ import json
 from datetime import datetime
 from typing import Any
 
-
-def _to_naive(dt: datetime | None) -> datetime | None:
-    """Convert timezone-aware datetime to naive (strip timezone info)."""
-    if dt is None:
-        return None
-    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
-
 from src.domain.models.assessment import (
     AssessmentSession,
     AssessmentStatus,
@@ -29,6 +22,14 @@ from src.domain.models.assessment import (
 )
 from src.domain.models.transcript import Transcript
 from src.domain.ports.persistence import IPersistence
+
+
+def _to_naive(dt: datetime | None) -> datetime | None:
+    """Convert timezone-aware datetime to naive (strip timezone info)."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
 
 try:  # ``asyncpg`` is part of the ``voice`` extras and may be absent in
     # CI's lean install. We import defensively so the module still loads

@@ -22,7 +22,8 @@
 #   - Creating the three services (postgres plugin + voice-engine + web)
 #   - Setting root directories and Dockerfile paths per service
 #   - Adding GitHub Actions secrets for the CI/CD pipeline
-#   - Enabling PSTN dial-out on your Daily workspace
+#   - Enabling PSTN dial-out on your Daily workspace (daily mode) or
+#     provisioning a self-hosted LiveKit server (browser mode)
 
 set -euo pipefail
 
@@ -185,6 +186,7 @@ set_var() {
 
 info "Setting fixed defaults on voice-engine..."
 railway variables set \
+  "DIALING_METHOD=daily" \
   "DAILY_GEO=ap-southeast-1" \
   "DAILY_CALLER_ID=" \
   "DEEPGRAM_MODEL=nova-2-phonecall" \
@@ -282,7 +284,13 @@ add_manual "Verify pgvector is available on the Railway Postgres instance:
      CREATE EXTENSION IF NOT EXISTS vector;
      -- If this fails, re-provision using the Railway 'Postgres (pgvector)' template"
 
-add_manual "Enable PSTN dial-out on your Daily workspace (required for outbound calls):
+add_manual "Set DIALING_METHOD in Railway → voice-engine → Variables:
+     • daily (default) — telephone via Daily. Enable PSTN dial-out on your Daily
+       workspace (daily.co support) and set DAILY_API_KEY / DAILY_DOMAIN.
+     • browser — self-hosted LiveKit. Set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+       (and optionally LIVEKIT_MEET_URL). Omit or blank Daily keys when not used."
+
+add_manual "If using Daily (DIALING_METHOD=daily), enable PSTN dial-out on your Daily workspace (required for outbound phone calls):
      Log in to daily.co → contact Daily support → request PSTN dial-out for your workspace.
      Set DAILY_DOMAIN in Railway dashboard → voice-engine → Variables."
 

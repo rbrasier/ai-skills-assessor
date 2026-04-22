@@ -44,6 +44,7 @@ from src.api.routes import router
 from src.config import Settings, get_settings
 from src.domain.ports.llm_provider import ILLMProvider
 from src.domain.ports.persistence import IPersistence
+from src.domain.ports.voice_transport import IVoiceTransport
 from src.domain.services.call_manager import CallManager
 
 logger = logging.getLogger(__name__)
@@ -80,42 +81,64 @@ def _build_llm_provider(settings: Settings) -> ILLMProvider | None:
     )
 
 
+def _validate_dialing_env(settings: Settings) -> None:
+    """Enforce that the selected transport has the env vars it needs to run."""
+    if settings.dialing_method == "browser":
+        if not (settings.livekit_url and settings.livekit_api_key and settings.livekit_api_secret):
+            raise ValueError(
+                "DIALING_METHOD=browser requires LIVEKIT_URL, LIVEKIT_API_KEY, "
+                "and LIVEKIT_API_SECRET."
+            )
+    else:
+        if not (settings.daily_api_key and settings.daily_domain):
+            raise ValueError(
+                "DIALING_METHOD=daily requires DAILY_API_KEY and DAILY_DOMAIN."
+            )
+
+
 def _warn_on_missing_provider_keys(settings: Settings) -> None:
-    missing = [
-        name
-        for name, value in (
-            ("DAILY_API_KEY", settings.daily_api_key),
-            ("DEEPGRAM_API_KEY", settings.deepgram_api_key),
-            ("ELEVENLABS_API_KEY", settings.elevenlabs_api_key),
-        )
-        if not value
-    ]
-    if missing:
+    stt_tts: list[str] = []
+    if not settings.deepgram_api_key:
+        stt_tts.append("DEEPGRAM_API_KEY")
+    if not settings.elevenlabs_api_key:
+        stt_tts.append("ELEVENLABS_API_KEY")
+    if settings.dialing_method == "daily" and not settings.daily_api_key:
+        stt_tts.append("DAILY_API_KEY")
+    if stt_tts:
+        where = "Daily" if settings.dialing_method == "daily" else "LiveKit"
         logger.warning(
             "Missing provider credentials %s — /api/v1/assessment/trigger "
-            "calls will create a Daily room but the Pipecat bot pipeline "
-            "will be skipped and the session will fail with "
+            "(%s) will be skipped and the session will fail with "
             "metadata.failureReason='missing_provider_credentials'.",
-            missing,
+            stt_tts,
+            where,
         )
 
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
-
+    _validate_dialing_env(settings)
     _warn_on_missing_provider_keys(settings)
 
     persistence = _build_persistence(settings)
     llm_provider = _build_llm_provider(settings)
 
-    transport = DailyVoiceTransport(
-        api_key=settings.daily_api_key,
-        daily_domain=settings.daily_domain,
-        bot_name=settings.bot_name,
-        settings=settings,
-        llm_provider=llm_provider,
-    )
+    if settings.dialing_method == "browser":
+        from src.adapters.livekit_transport import LiveKitVoiceTransport
+
+        transport: IVoiceTransport = LiveKitVoiceTransport(
+            settings=settings,
+            llm_provider=llm_provider,
+        )
+    else:
+        transport = DailyVoiceTransport(
+            api_key=settings.daily_api_key,
+            daily_domain=settings.daily_domain,
+            bot_name=settings.bot_name,
+            settings=settings,
+            llm_provider=llm_provider,
+        )
 
     call_manager = CallManager(
         persistence=persistence,
@@ -124,7 +147,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     # Circular dependency resolved via setter injection: the transport
-    # needs to notify the CallManager of Daily events, but the
+    # notifies the CallManager of transport events, while the
     # CallManager needs the transport to place the call.
     transport.set_listener(call_manager)
 
@@ -149,10 +172,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     app = FastAPI(
         title="AI Skills Assessor — Voice Engine",
-        version="0.4.1",
+        version="0.4.2",
         description=(
-            "Phase 3 Revision 1: basic live call (greeting → one question → "
-            "LLM ack → hangup) on top of the Railway (Singapore) deployment."
+            "Phase 3 Revision 2: basic live call via Daily (telephone) or "
+            "self-hosted LiveKit (browser) — greeting, one question, "
+            "LLM ack, hangup."
         ),
         lifespan=_lifespan,
     )

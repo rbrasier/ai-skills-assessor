@@ -1,16 +1,18 @@
-"""Basic-call bot runner — Pipecat pipeline + Daily PSTN dial-out.
+"""Basic-call bot runner — Pipecat pipeline + transport (Daily or LiveKit).
 
-Phase 3 Revision 1: this module owns the Pipecat pipeline construction
-and Daily event wiring. Everything here imports the ``[voice]`` extras;
-it must be imported lazily so the lean CI image still boots.
+This module owns the Pipecat pipeline construction and transport event wiring.
+Everything here imports the ``[voice]`` extras; it must be imported lazily so
+the lean CI image still boots.
 
 Public entry point:
 
     bot = BasicCallBot(
         session_id=..., phone_number=..., room_url=..., room_token=...,
+        room_name=...,
         settings=..., listener=..., llm_provider=...,
+        transport_mode="daily" | "livekit",
     )
-    await bot.start()   # kicks off pipeline + dial-out
+    await bot.start()   # kicks off pipeline + (Daily dial-out or LiveKit wait)
     await bot.wait()    # blocks until the pipeline terminates
 """
 
@@ -39,17 +41,21 @@ class BasicCallBot:
         phone_number: str,
         room_url: str,
         room_token: str,
+        room_name: str = "",
         settings: Settings,
         listener: ICallLifecycleListener,
         llm_provider: ILLMProvider | None,
+        transport_mode: str = "daily",
     ) -> None:
         self._session_id = session_id
         self._phone_number = phone_number
         self._room_url = room_url
         self._room_token = room_token
+        self._room_name = room_name
         self._settings = settings
         self._listener = listener
         self._llm = llm_provider
+        self._transport_mode = transport_mode
 
         self._transport: Any = None
         self._task: Any = None
@@ -63,15 +69,10 @@ class BasicCallBot:
     def _build(self) -> Any:
         """Import Pipecat and assemble the pipeline + task."""
         # Lazy imports keep the lean CI image (no [voice] extras) happy.
-        from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.task import PipelineParams, PipelineTask
         from pipecat.services.deepgram.stt import DeepgramSTTService
         from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
-        from pipecat.transports.daily.transport import (
-            DailyParams,
-            DailyTransport,
-        )
 
         stt = DeepgramSTTService(
             api_key=self._settings.deepgram_api_key,
@@ -82,18 +83,38 @@ class BasicCallBot:
             voice_id=self._settings.elevenlabs_voice_id,
         )
 
-        transport = DailyTransport(
-            self._room_url,
-            self._room_token,
-            f"{self._settings.bot_name} — Assessment Bot",
-            params=DailyParams(
-                api_key=self._settings.daily_api_key,
-                audio_in_enabled=True,
-                audio_out_enabled=True,
-                vad_analyzer=SileroVADAnalyzer(),
-                transcription_enabled=False,
-            ),
-        )
+        if self._transport_mode == "livekit":
+            from pipecat.transports.livekit.transport import (
+                LiveKitParams,
+                LiveKitTransport,
+            )
+
+            transport: Any = LiveKitTransport(
+                url=self._room_url,
+                token=self._room_token,
+                room_name=self._room_name,
+                params=LiveKitParams(
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                ),
+            )
+        else:
+            from pipecat.transports.daily.transport import (
+                DailyParams,
+                DailyTransport,
+            )
+
+            transport = DailyTransport(
+                self._room_url,
+                self._room_token,
+                f"{self._settings.bot_name} — Assessment Bot",
+                params=DailyParams(
+                    api_key=self._settings.daily_api_key,
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                    transcription_enabled=False,
+                ),
+            )
         self._transport = transport
 
         script = build_script(
@@ -105,6 +126,9 @@ class BasicCallBot:
             llm_provider=self._llm,
             on_call_ended=self._handle_bot_initiated_hangup,
         )
+
+        in_sr = 16000 if self._transport_mode == "livekit" else 8000
+        out_sr = 24000 if self._transport_mode == "livekit" else 8000
 
         pipeline = Pipeline(
             [
@@ -119,14 +143,41 @@ class BasicCallBot:
         task = PipelineTask(
             pipeline,
             params=PipelineParams(
-                audio_in_sample_rate=8000,
-                audio_out_sample_rate=8000,
+                audio_in_sample_rate=in_sr,
+                audio_out_sample_rate=out_sr,
             ),
         )
         self._task = task
 
-        self._wire_daily_events(transport, task)
+        if self._transport_mode == "livekit":
+            self._wire_livekit_events(transport, task)
+        else:
+            self._wire_daily_events(transport, task)
         return task
+
+    def _wire_livekit_events(self, transport: Any, task: Any) -> None:
+        """LiveKit: treat first remote participant as the candidate (browser)."""
+
+        listener = self._listener
+        session_id = self._session_id
+
+        @transport.event_handler("on_first_participant_joined")
+        async def _on_first_joined(_transport: Any, participant_id: str) -> None:  # noqa: ARG001
+            if not self._connected_notified:
+                self._connected_notified = True
+                await listener.on_call_connected(session_id)
+            logger.info(
+                "BasicCallBot session_id=%s: LiveKit first participant %s",
+                session_id,
+                participant_id,
+            )
+
+        @transport.event_handler("on_participant_left")
+        async def _on_participant_left(
+            _transport: Any, _participant: Any, _reason: Any
+        ) -> None:
+            await listener.on_call_ended(session_id)
+            await task.cancel()
 
     # ─── Daily event handlers → listener port ───────────────────────
 

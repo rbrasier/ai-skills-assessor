@@ -7,7 +7,11 @@ rather than reading ``os.environ`` directly.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DialingMethod = Literal["daily", "browser"]
 
 
 class Settings(BaseSettings):
@@ -20,7 +24,13 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://user:password@localhost:5432/ai_skills_assessor"
 
-    # ─── Daily ─────────────────────────────────────────────────────
+    # ─── Transport selection ───────────────────────────────────────
+    # ``daily`` — Pipecat DailyTransport with PSTN dial-out (default).
+    # ``browser`` — self-hosted LiveKit; candidate joins from the browser
+    # (no Daily API keys required).
+    dialing_method: DialingMethod = "daily"
+
+    # ─── Daily (required when dialing_method == daily) ─────────────
     daily_api_key: str = ""
     daily_domain: str = ""
     # Daily SFU region. Phase 3 / ADR-006 deploys to Railway Singapore,
@@ -32,6 +42,17 @@ class Settings(BaseSettings):
     # on PSTN dial-out. When empty, Daily rotates through a random
     # number from the workspace's pool.
     daily_caller_id: str = ""
+
+    # ─── LiveKit (required when dialing_method == browser) ────────
+    # WebSocket URL of your LiveKit server, e.g. wss://livekit.example.com
+    livekit_url: str = ""
+    livekit_api_key: str = ""
+    livekit_api_secret: str = ""
+    # Public page used to open a browser call. Default is LiveKit’s hosted
+    # “custom server” join UI; self-host a meet app and point this at it if needed.
+    livekit_meet_url: str = "https://meet.livekit.io/custom"
+    # Token TTL (seconds) for both bot and browser participant.
+    livekit_token_ttl_seconds: int = 3600
 
     # ─── AI providers (Phase 3 Revision 1) ────────────────────────
     # All three are optional at boot — missing keys cause a 503 at

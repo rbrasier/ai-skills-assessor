@@ -58,6 +58,11 @@ class CallConnection:
     is_active: bool
     started_at: datetime | None = None
     ended_at: datetime | None = None
+    # LiveKit (browser) — ``room_url`` is the wss:// server URL. Token and
+    # pre-built join page URL are for the *human* participant.
+    livekit_room_name: str | None = None
+    livekit_participant_token: str | None = None
+    browser_join_url: str | None = None
 
 
 @dataclass

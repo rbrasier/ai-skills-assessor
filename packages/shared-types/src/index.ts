@@ -71,6 +71,10 @@ export interface CallStatusResponse {
   startedAt: string | null;
   endedAt: string | null;
   failureReason?: string | null;
+  /** "daily" (PSTN) or "browser" (LiveKit). */
+  dialingMethod?: string | null;
+  /** When dialingMethod is "browser", URL for the candidate to open in the browser. */
+  browserJoinUrl?: string | null;
 }
 
 // ─── Admin dashboard ─────────────────────────────────────────────────

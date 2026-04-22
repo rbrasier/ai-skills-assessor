@@ -1,13 +1,13 @@
-# Deployed Setup Guide — Railway (Phase 3 / v0.4.1)
+# Deployed Setup Guide — Railway (Phase 3 / v0.4.2)
 
 Phase 3 promotes the Phase 2 voice engine + Next.js web app to a
-production Railway (Singapore) deployment. v0.4.1 (Phase 3 Revision 1)
+production Railway (Singapore) deployment. v0.4.2 (Phase 3 Revision 2 adds optional browser / LiveKit)
 adds the basic-call runtime — a greeting, one question, an
 LLM-generated acknowledgement, and a hangup — on top of that
 infrastructure. This guide is the source-of-truth walkthrough: env
 vars, service layout, migrations, healthchecks, the CI-gated deploy
 pipeline, and the "first live call" runbook all match what ships in
-v0.4.1.
+v0.4.2.
 
 > **Region**: Railway Singapore (`asia-southeast1`). Daily rooms are
 > pinned to the Singapore SFU (`DAILY_GEO=ap-southeast-1`) so the
@@ -122,10 +122,16 @@ with `${{…}}` are Railway variable references.
 | Key                     | Value / source                                                      |
 |-------------------------|---------------------------------------------------------------------|
 | `DATABASE_URL`          | `${{postgres.DATABASE_URL}}`                                        |
-| `DAILY_API_KEY`         | From Daily dashboard → Developers                                   |
-| `DAILY_DOMAIN`          | `your-team.daily.co`                                                |
+| `DIALING_METHOD`        | `daily` (telephone, default) or `browser` (self-hosted LiveKit)     |
+| `DAILY_API_KEY`         | Required when `DIALING_METHOD=daily` — Daily → Developers         |
+| `DAILY_DOMAIN`          | Required when `DIALING_METHOD=daily` — e.g. `your-team.daily.co`  |
 | `DAILY_GEO`             | `ap-southeast-1` (Singapore SFU — co-located with Railway)          |
 | `DAILY_CALLER_ID`       | Optional — Daily phone-number ID. Blank = use workspace pool.       |
+| `LIVEKIT_URL`           | Required when `DIALING_METHOD=browser` — WebSocket URL of your server |
+| `LIVEKIT_API_KEY`       | Required when `DIALING_METHOD=browser` — from LiveKit project      |
+| `LIVEKIT_API_SECRET`    | Required when `DIALING_METHOD=browser`                            |
+| `LIVEKIT_MEET_URL`      | Optional — join page base (default `https://meet.livekit.io/custom`) |
+| `LIVEKIT_TOKEN_TTL_SECONDS` | Optional — participant JWT lifetime (default `3600`)          |
 | `DEEPGRAM_API_KEY`      | From Deepgram dashboard → Projects → API keys                       |
 | `DEEPGRAM_MODEL`        | `nova-2-phonecall` (tuned for 8kHz PSTN audio — recommended)        |
 | `ELEVENLABS_API_KEY`    | From ElevenLabs dashboard → Profile → API Keys                      |
@@ -138,15 +144,15 @@ with `${{…}}` are Railway variable references.
 | `USE_IN_MEMORY_ADAPTERS`| `0` (leave unset or `0` — in-memory adapter is dev-only)            |
 | `PORT`                  | Railway injects this — do not override                              |
 
-> **Soft-fail behaviour.** If `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`,
-> or `DAILY_API_KEY` is missing, the voice engine still boots and the
-> intake / admin endpoints work, but triggering a call will create the
-> Daily room, skip the Pipecat bot, and transition the session to
-> `failed` with `metadata.failureReason =
-> "missing_provider_credentials"`. The admin dashboard surfaces this
-> immediately. If `ANTHROPIC_API_KEY` is missing, the call still works
-> but uses a hard-coded fallback acknowledgement
-> (*"Thanks for sharing that."*) instead of a Claude-generated line.
+> **Credentials.** The process will **refuse to start** if
+> `DIALING_METHOD=daily` and `DAILY_API_KEY` or `DAILY_DOMAIN` is empty,
+> or if `DIALING_METHOD=browser` and any of `LIVEKIT_URL` /
+> `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` is empty. **STT/TTS** remain
+> soft-fail: with missing `DEEPGRAM_API_KEY` or `ELEVENLABS_API_KEY` the
+> service boots, but a trigger will fail the session with
+> `metadata.failureReason = "missing_provider_credentials"`. If
+> `ANTHROPIC_API_KEY` is missing, the bot uses a hard-coded
+> acknowledgement (*"Thanks for sharing that."*).
 
 ### `web`
 

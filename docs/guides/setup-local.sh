@@ -143,20 +143,29 @@ if [ ! -f "apps/voice-engine/.env" ]; then
   # Patch the placeholder DATABASE_URL to the local default
   sed -i '' "s|DATABASE_URL=.*|DATABASE_URL=${LOCAL_DB_URL}|" apps/voice-engine/.env
   ok "Created apps/voice-engine/.env (patched DATABASE_URL)"
-  add_manual "Open apps/voice-engine/.env and fill in the API keys needed for calls:
-     DAILY_API_KEY     — daily.co → Developers  (required for outbound calls)
-     DAILY_DOMAIN      — your Daily workspace domain, e.g. yourteam.daily.co
-     DEEPGRAM_API_KEY  — deepgram.com → Projects → API keys  (required for calls)
-     ELEVENLABS_API_KEY — elevenlabs.io → Profile → API Keys  (required for calls)
+  add_manual "Open apps/voice-engine/.env and set DIALING_METHOD and the keys for that mode:
+     DIALING_METHOD    — 'daily' (default, telephone) or 'browser' (self-hosted LiveKit)
+     If daily:  DAILY_API_KEY, DAILY_DOMAIN  (daily.co → Developers)
+     If browser: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET  (your LiveKit server)
+     DEEPGRAM_API_KEY  — deepgram.com  (required for the Pipecat pipeline in both modes)
+     ELEVENLABS_API_KEY — elevenlabs.io  (required for the pipeline in both modes)
      ANTHROPIC_API_KEY — console.anthropic.com  (optional; bot falls back to hard-coded ack)
-   Without these the service boots fine and intake/admin endpoints work, but
-   triggering a call will fail with failureReason='missing_provider_credentials'."
+   Without STT/TTS keys the service boots, but trigger will fail with
+   failureReason='missing_provider_credentials'."
 else
   ok "apps/voice-engine/.env already exists"
-  for KEY in DAILY_API_KEY DEEPGRAM_API_KEY ELEVENLABS_API_KEY; do
-    VAL=$(grep "^${KEY}=" apps/voice-engine/.env | cut -d= -f2-)
-    [ -z "$VAL" ] && warn "  $KEY is blank in apps/voice-engine/.env (calls will fail)"
-  done
+  DM=$(grep -E '^DIALING_METHOD=' apps/voice-engine/.env 2>/dev/null | cut -d= -f2- | tr -d ' \r' || true)
+  if [ -z "$DM" ] || [ "$DM" = "daily" ]; then
+    for KEY in DAILY_API_KEY DEEPGRAM_API_KEY ELEVENLABS_API_KEY; do
+      VAL=$(grep "^${KEY}=" apps/voice-engine/.env | cut -d= -f2-)
+      [ -z "$VAL" ] && warn "  $KEY is blank in apps/voice-engine/.env (calls will fail in daily mode)"
+    done
+  else
+    for KEY in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET DEEPGRAM_API_KEY ELEVENLABS_API_KEY; do
+      VAL=$(grep "^${KEY}=" apps/voice-engine/.env | cut -d= -f2-)
+      [ -z "$VAL" ] && warn "  $KEY is blank in apps/voice-engine/.env (browser mode will fail)"
+    done
+  fi
 fi
 
 # apps/web/.env.local

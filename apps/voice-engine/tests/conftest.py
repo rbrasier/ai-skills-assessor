@@ -8,6 +8,11 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+# Minimal Daily env so :func:`_validate_dialing_env` passes in tests
+# (``create_app`` lifespan); override with ``DIALING_METHOD=browser`` if needed.
+os.environ.setdefault("DAILY_API_KEY", "test")
+os.environ.setdefault("DAILY_DOMAIN", "test.daily.co")
+
 from src.adapters.in_memory_persistence import InMemoryPersistence
 from src.domain.models.assessment import CallConfig, CallConnection
 from src.domain.ports.voice_transport import IVoiceTransport
