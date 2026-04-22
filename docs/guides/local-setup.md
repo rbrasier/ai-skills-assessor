@@ -1,4 +1,4 @@
-# Local Setup Guide — Phase 3 (v0.4.1)
+# Local Setup Guide — Phase 3 (v0.4.2)
 
 This guide gets the AI Skills Assessor running end-to-end on a laptop:
 candidate intake form → Python voice engine → Postgres. v0.4.1
@@ -22,10 +22,11 @@ interjections) is still Phase 4+.
 | Docker       | any        | Easiest way to run Postgres locally.             |
 | `make` / bash| —          | Some helper scripts are POSIX shell.             |
 
-A Daily API key is **optional** for local dev. Without it, the voice
-engine will still accept trigger requests but Daily room creation
-will fail. Sign up at [daily.co](https://www.daily.co) when you need
-the real adapter.
+**Transport:** set `DIALING_METHOD` in `apps/voice-engine/.env` to `daily`
+(telephone via Daily) or `browser` (self-hosted LiveKit). In `daily` mode, a
+Daily API key and domain are **required** at process startup. In `browser` mode,
+use `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` instead; Daily
+variables are not read.
 
 ---
 
@@ -104,11 +105,20 @@ Populate `apps/voice-engine/.env`:
 ```bash
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ai_skills_assessor
 
-# Daily (telephony / WebRTC)
-DAILY_API_KEY=               # optional for intake-only dev; required to place a call
+# How the candidate connects: daily = telephone, browser = WebRTC in browser (LiveKit)
+DIALING_METHOD=daily
+
+# Daily (only when DIALING_METHOD=daily; required in that case)
+DAILY_API_KEY=
 DAILY_DOMAIN=                # e.g. "your-team.daily.co"
 DAILY_GEO=ap-southeast-1     # Singapore SFU — see ADR-006
 DAILY_CALLER_ID=             # optional
+
+# LiveKit (only when DIALING_METHOD=browser)
+# LIVEKIT_URL=wss://your-server:7880
+# LIVEKIT_API_KEY=
+# LIVEKIT_API_SECRET=
+# LIVEKIT_MEET_URL=https://meet.livekit.io/custom
 
 # AI providers (Phase 3 Revision 1)
 ANTHROPIC_API_KEY=           # optional — missing key = hard-coded fallback ack
@@ -130,12 +140,11 @@ PORT=8000
 USE_IN_MEMORY_ADAPTERS=0
 ```
 
-> **Soft-fail behaviour.** Missing `DAILY_API_KEY` /
-> `DEEPGRAM_API_KEY` / `ELEVENLABS_API_KEY` at boot is a warning, not a
-> fatal error — the intake + admin endpoints still work. A trigger
-> against a session with missing keys creates the Daily room, skips
-> the Pipecat bot, and transitions the session to `failed` with
-> `metadata.failureReason = "missing_provider_credentials"`. Missing
+> **Soft-fail (STT/TTS).** Missing `DEEPGRAM_API_KEY` / `ELEVENLABS_API_KEY` at
+> boot is a warning (not fatal). A trigger with those missing skips the bot. For
+> **Daily vs LiveKit** credentials, the process fails fast on startup if the
+> wrong set is empty (e.g. `DIALING_METHOD=daily` with blank `DAILY_API_KEY`).
+> Missing
 > `ANTHROPIC_API_KEY` is non-fatal for the call itself — the bot will
 > use its hard-coded acknowledgement *"Thanks for sharing that."*
 > instead of a Claude-generated line.

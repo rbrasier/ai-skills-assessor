@@ -51,7 +51,11 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
   }, [sessionId]);
 
   const label = labelFor(status?.status ?? "pending");
-  const description = descriptionFor(status?.status ?? "pending", status?.failureReason);
+  const description = descriptionFor(
+    status?.status ?? "pending",
+    status?.failureReason,
+    status?.dialingMethod,
+  );
 
   const handleCancel = async () => {
     if (!onCancel) return;
@@ -74,7 +78,22 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
         <p className="text-sm text-slate-600">{description}</p>
       </header>
 
-      <StateVisual status={status?.status ?? "pending"} durationSeconds={status?.durationSeconds ?? 0} />
+      {status?.dialingMethod === "browser" && status?.browserJoinUrl ? (
+        <a
+          href={status.browserJoinUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block w-full rounded-2xl border-2 border-teal-500 bg-teal-50 px-4 py-4 text-center text-sm font-semibold text-teal-900 transition hover:bg-teal-100"
+        >
+          Open the interview in your browser
+        </a>
+      ) : null}
+
+      <StateVisual
+        status={status?.status ?? "pending"}
+        durationSeconds={status?.durationSeconds ?? 0}
+        dialingMethod={status?.dialingMethod}
+      />
 
       {error ? (
         <p role="alert" className="text-sm font-medium text-amber-600">
@@ -112,10 +131,17 @@ function labelFor(s: AssessmentStatus): string {
   }
 }
 
-function descriptionFor(s: AssessmentStatus, failureReason?: string | null): string {
+function descriptionFor(
+  s: AssessmentStatus,
+  failureReason?: string | null,
+  dialingMethod?: string | null,
+): string {
   switch (s) {
     case "pending":
     case "dialling":
+      if (dialingMethod === "browser") {
+        return "Open the link above in this browser (or another on the same device). Microphone access is required. Noa will start once you are connected.";
+      }
       return "Your phone should ring in a moment. Answer when it does — caller ID will show Resonant · Noa.";
     case "in_progress":
       return "Relax and speak naturally. Noa will guide the conversation through three short phases — there are no wrong answers.";
@@ -131,9 +157,11 @@ function descriptionFor(s: AssessmentStatus, failureReason?: string | null): str
 function StateVisual({
   status,
   durationSeconds,
+  dialingMethod,
 }: {
   status: AssessmentStatus;
   durationSeconds: number;
+  dialingMethod?: string | null;
 }) {
   const timer = useMemo(() => formatDuration(durationSeconds), [durationSeconds]);
 
@@ -170,9 +198,11 @@ function StateVisual({
   return (
     <div className="flex flex-col items-center gap-3 rounded-2xl bg-slate-100 py-12 text-center">
       <div className="flex h-16 w-16 animate-pulse items-center justify-center rounded-full bg-teal-500 text-3xl text-white">
-        📞
+        {dialingMethod === "browser" ? "🌐" : "📞"}
       </div>
-      <p className="text-sm font-medium text-slate-700">Calling your phone…</p>
+      <p className="text-sm font-medium text-slate-700">
+        {dialingMethod === "browser" ? "Waiting for you to join…" : "Calling your phone…"}
+      </p>
     </div>
   );
 }

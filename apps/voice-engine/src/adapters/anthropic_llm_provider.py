@@ -21,6 +21,7 @@ from src.domain.ports.llm_provider import ILLMProvider, LLMMessage
 
 logger = logging.getLogger(__name__)
 
+_anthropic_module: Any
 try:  # ``anthropic`` is part of the [voice] extras; CI's lean install skips it.
     import anthropic as _anthropic_module
 except ImportError:  # pragma: no cover — exercised in lean CI only

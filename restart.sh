@@ -9,6 +9,8 @@
 # Docker mode streams health status and exits; use `docker compose logs -f` for output.
 #
 # Run docs/guides/setup-local.sh first if this is a fresh clone.
+#
+# Voice engine reads apps/voice-engine/.env (see DIALING_METHOD=daily|browser).
 
 set -euo pipefail
 

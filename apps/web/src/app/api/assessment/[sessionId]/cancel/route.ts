@@ -23,6 +23,8 @@ export async function POST(
       startedAt: data.started_at,
       endedAt: data.ended_at,
       failureReason: data.failure_reason,
+      dialingMethod: data.dialing_method ?? "daily",
+      browserJoinUrl: data.browser_join_url ?? null,
     },
     { status: upstream.status },
   );

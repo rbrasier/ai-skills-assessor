@@ -173,6 +173,7 @@ REQUIRED_PORTS=(
 
 REQUIRED_ADAPTERS=(
   "$VOICE_ENGINE_DIR/src/adapters/daily_transport.py"
+  "$VOICE_ENGINE_DIR/src/adapters/livekit_transport.py"
   "$VOICE_ENGINE_DIR/src/adapters/postgres_persistence.py"
   "$VOICE_ENGINE_DIR/src/adapters/pgvector_knowledge_base.py"
   "$VOICE_ENGINE_DIR/src/adapters/anthropic_llm_provider.py"

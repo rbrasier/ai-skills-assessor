@@ -31,7 +31,7 @@ from src.domain.services.call_manager import (
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
 
-_VOICE_ENGINE_VERSION = "0.4.1"
+_VOICE_ENGINE_VERSION = "0.4.2"
 
 router = APIRouter()
 
@@ -185,6 +185,8 @@ class CallStatusPayload(BaseModel):
     started_at: str | None = None
     ended_at: str | None = None
     failure_reason: str | None = None
+    dialing_method: str | None = None
+    browser_join_url: str | None = None
 
 
 @router.get(

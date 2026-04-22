@@ -136,11 +136,19 @@ class CallManager(ICallLifecycleListener):
             )
             connection = await self._voice_transport.dial(config)
 
+            if connection.browser_join_url is not None:
+                call_meta = {
+                    "dialingMethod": "browser",
+                    "browserJoinUrl": connection.browser_join_url,
+                }
+            else:
+                call_meta = {"dialingMethod": "daily"}
             await self._persistence.update_session_status(
                 session_id,
                 AssessmentStatus.DIALLING,
                 daily_room_url=connection.room_url,
                 started_at=datetime.now(UTC),
+                metadata=call_meta,
             )
         except Exception as exc:
             logger.exception("CallManager._place_call failed for %s", session_id)
@@ -217,7 +225,7 @@ class CallManager(ICallLifecycleListener):
             raise SessionNotFoundError(session_id)
 
         duration = await self._voice_transport.get_call_duration(session_id)
-
+        meta = session.metadata or {}
         return {
             "session_id": session.id,
             "status": session.status.value
@@ -227,6 +235,8 @@ class CallManager(ICallLifecycleListener):
             "started_at": session.started_at.isoformat() if session.started_at else None,
             "ended_at": session.ended_at.isoformat() if session.ended_at else None,
             "failure_reason": session.metadata.get("failureReason") if session.metadata else None,
+            "dialing_method": meta.get("dialingMethod", "daily"),
+            "browser_join_url": meta.get("browserJoinUrl"),
         }
 
     # ─── Candidate-initiated cancel ──────────────────────────────────

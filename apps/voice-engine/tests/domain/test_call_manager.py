@@ -57,6 +57,7 @@ async def test_trigger_call_creates_pending_session_and_normalises_phone() -> No
     assert stored is not None
     assert stored.status == AssessmentStatus.DIALLING
     assert stored.daily_room_url is not None
+    assert (stored.metadata or {}).get("dialingMethod") == "daily"
     assert transport.dialled[0].phone_number == "+447700900118"
 
 
@@ -90,6 +91,7 @@ async def test_get_call_status_returns_duration_from_transport() -> None:
     assert status["session_id"] == session.id
     assert status["duration_seconds"] == 1.25
     assert status["status"] in {"pending", "dialling"}
+    assert status.get("dialing_method") == "daily"
 
 
 async def test_get_call_status_raises_for_unknown_session() -> None:
