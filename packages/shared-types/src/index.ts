@@ -40,6 +40,7 @@ export interface CandidateResponse {
 export interface TriggerCallRequest {
   candidateId: string;
   phoneNumber: string;
+  dialingMethod?: string;
 }
 
 export interface TriggerCallResponse {

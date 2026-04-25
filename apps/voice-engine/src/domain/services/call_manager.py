@@ -322,7 +322,10 @@ class CallManager(ICallLifecycleListener):
 
         if not self._tasks:
             return
-        await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        # Filter to pending tasks in the current loop to avoid event loop mismatch
+        pending = [t for t in self._tasks if not t.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
 
 __all__ = [
