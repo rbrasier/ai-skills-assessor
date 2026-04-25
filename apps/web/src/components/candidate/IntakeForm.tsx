@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 export interface IntakeFormValues {
   firstName: string;
@@ -11,6 +11,7 @@ export interface IntakeFormValues {
 }
 
 interface IntakeFormProps {
+  dialingMethod: string | null;
   onSubmit: (values: IntakeFormValues) => Promise<void>;
   submitError?: string | null;
 }
@@ -23,32 +24,12 @@ const EMPTY: IntakeFormValues = {
   phoneNumber: "",
 };
 
-export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
+export function IntakeForm({ dialingMethod, onSubmit, submitError }: IntakeFormProps) {
   const [values, setValues] = useState<IntakeFormValues>(EMPTY);
   const [errors, setErrors] = useState<Partial<Record<keyof IntakeFormValues, string>>>({});
   const [submitting, setSubmitting] = useState(false);
-  const [dialingMethod, setDialingMethod] = useState<string | null>(null);
-  const [configError, setConfigError] = useState(false);
 
-  useEffect(() => {
-    const fetchConfig = async () => {
-      try {
-        const res = await fetch("/api/config");
-        if (res.ok) {
-          const data = await res.json();
-          setDialingMethod(data.dialingMethod || "browser");
-        } else {
-          setConfigError(true);
-          setDialingMethod("browser");
-        }
-      } catch {
-        setConfigError(true);
-        setDialingMethod("browser");
-      }
-    };
-
-    fetchConfig();
-  }, []);
+  const isBrowser = dialingMethod === "browser";
 
   const set = <K extends keyof IntakeFormValues>(key: K, value: string) =>
     setValues((prev) => ({ ...prev, [key]: value }));
@@ -59,8 +40,7 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
     if (!values.lastName.trim()) next.lastName = "Required";
     if (!values.workEmail.includes("@")) next.workEmail = "Invalid email";
     if (!values.employeeId.trim()) next.employeeId = "Required";
-    // Only validate phone number if not using browser dialing
-    if (dialingMethod !== "browser") {
+    if (!isBrowser) {
       const phoneRegex = /^\+?[\d\s\-().]{10,}$/;
       if (!phoneRegex.test(values.phoneNumber.trim())) next.phoneNumber = "Invalid phone";
     }
@@ -80,20 +60,8 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6" noValidate>
-      <header className="space-y-2">
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-          Step 01 of 02
-        </p>
-        <h2 className="text-3xl font-bold text-slate-900">
-          A few <span className="italic text-teal-600">quick details.</span>
-        </h2>
-        <p className="text-sm text-slate-600">
-          We use these to reach you and match your interview to the right review panel.
-        </p>
-      </header>
-
-      <div className="space-y-5">
+    <form onSubmit={handleSubmit} noValidate>
+      <div className="field-grid">
         <Field
           label="First name"
           name="firstName"
@@ -121,50 +89,71 @@ export function IntakeForm({ onSubmit, submitError }: IntakeFormProps) {
           onChange={(v) => set("workEmail", v)}
           error={errors.workEmail}
           autoComplete="email"
+          className="full"
         />
-        <Field
-          label="Employee ID"
-          name="employeeId"
-          placeholder="HLX-00481"
-          value={values.employeeId}
-          onChange={(v) => set("employeeId", v)}
-          error={errors.employeeId}
-        />
-        {dialingMethod !== "browser" && (
+        {isBrowser ? (
           <Field
-            label="Phone number"
-            name="phoneNumber"
-            type="tel"
-            placeholder="+44 7700 900118"
-            value={values.phoneNumber}
-            onChange={(v) => set("phoneNumber", v)}
-            error={errors.phoneNumber}
-            autoComplete="tel"
+            label="Employee ID"
+            name="employeeId"
+            placeholder="HLX-00481"
+            value={values.employeeId}
+            onChange={(v) => set("employeeId", v)}
+            error={errors.employeeId}
+            className="full"
           />
+        ) : (
+          <>
+            <Field
+              label="Employee ID"
+              name="employeeId"
+              placeholder="HLX-00481"
+              value={values.employeeId}
+              onChange={(v) => set("employeeId", v)}
+              error={errors.employeeId}
+            />
+            <PhoneField
+              value={values.phoneNumber}
+              onChange={(v) => set("phoneNumber", v)}
+              error={errors.phoneNumber}
+            />
+          </>
         )}
       </div>
 
-      {submitError ? (
-        <p role="alert" className="text-sm font-medium text-red-600">
-          {submitError}
+      <div className="form-actions">
+        {submitError ? (
+          <p role="alert" className="submit-error">
+            {submitError}
+          </p>
+        ) : null}
+
+        <button type="submit" disabled={submitting} className="btn-start">
+          {submitting ? (
+            "Starting…"
+          ) : (
+            <>
+              {isBrowser ? "Start the call (browser)" : "Start the call"}
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M5 4h3l2 5-2 1a11 11 0 0 0 6 6l1-2 5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z" />
+              </svg>
+            </>
+          )}
+        </button>
+
+        <p className="consent">
+          By starting, you agree to the call being recorded and analysed for this assessment.{" "}
+          <a href="#">Read our privacy notice.</a>
         </p>
-      ) : null}
-
-      <button
-        type="submit"
-        disabled={submitting}
-        className="w-full rounded-full bg-slate-900 py-3 text-sm font-semibold uppercase tracking-wider text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        {submitting
-          ? "Starting…"
-          : dialingMethod === "browser"
-            ? "Start the call (In-browser)"
-            : "Start the call"}
-      </button>
-
-      <p className="text-xs leading-relaxed text-slate-500">
-        By starting, you agree to the call being recorded and analysed for this assessment.
-      </p>
+      </div>
     </form>
   );
 }
@@ -178,6 +167,7 @@ interface FieldProps {
   onChange: (value: string) => void;
   error?: string;
   autoComplete?: string;
+  className?: string;
 }
 
 function Field({
@@ -189,16 +179,12 @@ function Field({
   onChange,
   error,
   autoComplete,
+  className,
 }: FieldProps) {
   const id = `intake-${name}`;
   return (
-    <div className="space-y-1">
-      <label
-        htmlFor={id}
-        className="block text-xs font-semibold uppercase tracking-wider text-slate-600"
-      >
-        {label}
-      </label>
+    <div className={`field${className ? ` ${className}` : ""}`}>
+      <label htmlFor={id}>{label}</label>
       <input
         id={id}
         name={name}
@@ -209,14 +195,48 @@ function Field({
         autoComplete={autoComplete}
         aria-invalid={Boolean(error)}
         aria-describedby={error ? `${id}-error` : undefined}
-        className={`w-full rounded-xl border bg-white px-4 py-3 text-sm text-slate-900 shadow-sm transition focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100 ${
-          error ? "border-red-400" : "border-slate-200"
-        }`}
+        className={`input${error ? " has-error" : ""}`}
       />
       {error ? (
-        <p id={`${id}-error`} className="text-xs font-medium text-red-600">
+        <span id={`${id}-error`} className="field-error">
           {error}
-        </p>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function PhoneField({
+  value,
+  onChange,
+  error,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  error?: string;
+}) {
+  return (
+    <div className="field">
+      <label htmlFor="intake-phoneNumber">Phone number</label>
+      <div className="input-wrap">
+        <span className="prefix">+</span>
+        <input
+          id="intake-phoneNumber"
+          name="phoneNumber"
+          type="tel"
+          placeholder="44 7700 900118"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          autoComplete="tel"
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? "intake-phoneNumber-error" : undefined}
+          className={`input with-prefix${error ? " has-error" : ""}`}
+        />
+      </div>
+      {error ? (
+        <span id="intake-phoneNumber-error" className="field-error">
+          {error}
+        </span>
       ) : null}
     </div>
   );
