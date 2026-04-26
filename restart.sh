@@ -221,7 +221,8 @@ fi
 VOICE_LOG="$LOG_DIR/voice-engine.log"
 info "Starting voice engine (FastAPI + hot reload on :8000)..."
 # cd into apps/voice-engine so pydantic-settings picks up .env and src.main resolves
-nohup bash -c "cd '$REPO_ROOT/apps/voice-engine' && exec '$VENV_UVICORN' src.main:app --reload --port 8000 2>&1 | grep -v '/api.*assessment.*status'" \
+# PYTHONUNBUFFERED=1 disables Python's block-buffering so logs appear immediately
+nohup bash -c "cd '$REPO_ROOT/apps/voice-engine' && PYTHONUNBUFFERED=1 exec '$VENV_UVICORN' src.main:app --reload --port 8000" \
   > "$VOICE_LOG" 2>&1 &
 VOICE_PID=$!
 echo "$VOICE_PID" > "$LOG_DIR/voice-engine.pid"
@@ -272,7 +273,7 @@ WEB_COLOR='\033[0;35m'    # Magenta
 # Tail logs with colored prefixes (filter status polls)
 tail_with_prefix() {
   local logfile=$1 prefix=$2 color=$3
-  tail -f "$logfile" 2>/dev/null | grep -v '/api.*assessment.*status' | while IFS= read -r line; do
+  tail -f "$logfile" 2>/dev/null | grep --line-buffered -v '/api.*assessment.*status' | while IFS= read -r line; do
     printf "${color}[%s]${RESET} %s\n" "$prefix" "$line"
   done &
 }
