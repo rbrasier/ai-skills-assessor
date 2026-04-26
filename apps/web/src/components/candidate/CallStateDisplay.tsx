@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AssessmentStatus, CallStatusResponse } from "@ai-skills-assessor/shared-types";
 
@@ -90,13 +90,13 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
       {/* Badge progression */}
       <div className="badges">
         {BADGE_LABELS.map((label, i) => (
-          <>
+          <Fragment key={label}>
             {i > 0 && <div key={`sep-${i}`} className="badge-sep" />}
             <div key={label} className={`badge ${getBadgeClass(i, badgeIndex)}`}>
               <span className="badge-dot" />
               {label}
             </div>
-          </>
+          </Fragment>
         ))}
       </div>
 

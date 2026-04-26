@@ -182,7 +182,7 @@ def build_scripted_conversation(
     llm_provider: ILLMProvider | None,
     on_call_ended: Callable[[], Awaitable[None] | None] | None = None,
     ack_timeout_seconds: float = 10.0,
-    reply_timeout_seconds: float = 30.0,
+    reply_timeout_seconds: float = 90.0,
     reply_pause_seconds: float = 1.5,
 ) -> Any:
     """Instantiate the ScriptedConversation Pipecat FrameProcessor."""

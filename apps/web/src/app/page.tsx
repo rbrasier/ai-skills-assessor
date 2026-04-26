@@ -103,7 +103,7 @@ export default function CandidatePortalPage() {
       <section className="hero">
         <div className="hero-bg" aria-hidden="true">
           {heroBars.map((bar, i) => (
-            <span key={i} className="b" style={{ height: `${bar.height}px` }} />
+            <span key={i} className="b" style={{ height: `${bar.height}px` }} suppressHydrationWarning />
           ))}
         </div>
         <div className="hero-inner">

@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr, Field
 
 from src.domain.ports.persistence import IPersistence
@@ -281,3 +282,138 @@ async def list_admin_sessions(
         offset=offset,
     )
     return [SessionSummaryPayload(**s) for s in summaries]
+
+
+# ─── LiveKit join page ───────────────────────────────────────────
+
+
+@router.get("/join", response_class=HTMLResponse, tags=["livekit"])
+async def livekit_join_page(
+    url: str = Query(..., description="LiveKit WebSocket URL"),
+    token: str = Query(..., description="LiveKit participant token"),
+    room: str = Query(..., description="LiveKit room name"),
+) -> str:
+    """Serve a simple HTML page to join a LiveKit room.
+
+    This page can be used as LIVEKIT_MEET_URL when self-hosting
+    the join page locally (e.g., LIVEKIT_MEET_URL=http://localhost:8000/join).
+    """
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interview Call</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 16px;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }}
+        #container {{
+            width: 100%;
+            max-width: 800px;
+        }}
+        #status {{
+            text-align: center;
+            margin-bottom: 24px;
+            font-size: 18px;
+        }}
+        .error {{
+            color: #ff6b6b;
+            padding: 16px;
+            background: #2a1a1a;
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }}
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="status">Loading interview...</div>
+    </div>
+
+    <script>
+        const url = '{url}';
+        const token = '{token}';
+        const roomName = '{room}';
+
+        function loadLiveKitSDK() {{
+            return new Promise((resolve, reject) => {{
+                const script = document.createElement('script');
+                script.src = 'https://unpkg.com/livekit-client@latest/dist/livekit-client.umd.js';
+                script.onload = () => {{
+                    console.log('LiveKit SDK loaded');
+                    if (window.LivekitClient) {{
+                        resolve();
+                    }} else {{
+                        reject(new Error('LiveKit SDK did not load properly'));
+                    }}
+                }};
+                script.onerror = (err) => {{
+                    console.error('Failed to load LiveKit SDK from CDN:', err);
+                    reject(new Error('Failed to load LiveKit SDK'));
+                }};
+                document.head.appendChild(script);
+            }});
+        }}
+
+        async function connectToRoom() {{
+            try {{
+                document.getElementById('status').textContent = 'Loading LiveKit SDK...';
+                await loadLiveKitSDK();
+
+                if (!window.LivekitClient || !window.LivekitClient.Room) {{
+                    console.error('LiveKit object:', window.LivekitClient);
+                    throw new Error('LiveKit SDK did not load properly. Please refresh the page.');
+                }}
+
+                document.getElementById('status').textContent = 'Connecting to interview...';
+
+                const room = new window.LivekitClient.Room({{
+                    adaptiveStream: true,
+                    dynacast: true,
+                }});
+
+                room.on('disconnected', () => {{
+                    document.getElementById('status').textContent = 'Call ended.';
+                }});
+
+                room.on('reconnecting', () => {{
+                    document.getElementById('status').textContent = 'Reconnecting...';
+                }});
+
+                room.on('reconnected', () => {{
+                    document.getElementById('status').textContent = 'Connected • Interview in progress';
+                }});
+
+                await room.connect(url, token, {{
+                    name: 'Candidate',
+                    autoSubscribe: true,
+                }});
+
+                document.getElementById('status').textContent = 'Connected • Microphone active';
+
+                // Audio only — no camera
+                await room.localParticipant.setMicrophoneEnabled(true);
+            }} catch (error) {{
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error';
+                errorDiv.textContent = 'Failed to connect: ' + error.message;
+                document.getElementById('container').insertBefore(errorDiv, document.getElementById('status'));
+                console.error('Connection error:', error);
+            }}
+        }}
+
+        connectToRoom();
+    </script>
+</body>
+</html>
+"""
