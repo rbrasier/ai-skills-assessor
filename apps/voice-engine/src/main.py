@@ -50,6 +50,28 @@ from src.domain.services.call_manager import CallManager
 logger = logging.getLogger(__name__)
 
 
+def _configure_logging() -> None:
+    """Configure Python logging level from the LOG_LEVEL environment variable.
+
+    INFO (default): external service connections, all bot dialog (TTS sent,
+    STT received, LLM responses), call lifecycle events.
+    DEBUG: full Pipecat frame traces — very verbose.
+
+    Uvicorn sets its own log level via --log-level; this function controls
+    the application (src.*) and Pipecat loggers.
+    """
+    level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_str, logging.INFO)
+
+    # Application loggers at the requested level
+    logging.getLogger("src").setLevel(level)
+
+    # Pipecat is extremely chatty at DEBUG (one log per audio frame).
+    # Only lower it when the caller explicitly asks for debug mode.
+    pipecat_level = level if level <= logging.DEBUG else logging.WARNING
+    logging.getLogger("pipecat").setLevel(pipecat_level)
+
+
 def _build_persistence(settings: Settings) -> IPersistence:
     if os.environ.get("USE_IN_MEMORY_ADAPTERS") == "1":
         logger.info("Using InMemoryPersistence (USE_IN_MEMORY_ADAPTERS=1)")
@@ -170,6 +192,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    _configure_logging()
     app = FastAPI(
         title="AI Skills Assessor — Voice Engine",
         version="0.4.2",

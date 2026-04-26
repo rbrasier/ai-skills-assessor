@@ -308,49 +308,84 @@ async def livekit_join_page(
         body {{
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             margin: 0;
-            padding: 16px;
-            background: #0f0f0f;
-            color: #e0e0e0;
+            padding: 8px 0;
+            background: transparent;
+            color: #1b1a17;
+            font-size: 13px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
-            min-height: 100vh;
         }}
-        #container {{
-            width: 100%;
-            max-width: 800px;
+        #join-btn {{
+            background: #1b1a17;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 10px 28px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            letter-spacing: 0.01em;
         }}
+        #join-btn:hover {{ background: #333; }}
+        #join-btn:disabled {{ opacity: 0.5; cursor: default; }}
         #status {{
+            padding: 6px 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
             text-align: center;
-            margin-bottom: 24px;
-            font-size: 18px;
+            font-style: italic;
+            display: none;
         }}
         .error {{
-            color: #ff6b6b;
-            padding: 16px;
-            background: #2a1a1a;
-            border-radius: 8px;
-            margin-bottom: 16px;
+            color: #c0392b;
+            font-size: 12px;
+            margin-top: 6px;
+            text-align: center;
         }}
     </style>
 </head>
 <body>
-    <div id="container">
-        <div id="status">Loading interview...</div>
-    </div>
+    <!-- Button is required: browser AudioContext stays suspended until a user
+         gesture occurs inside this frame. Connecting automatically (no click)
+         means room.startAudio() and audioEl.play() are both rejected silently,
+         so the candidate hears nothing even though TTS is generated server-side. -->
+    <button id="join-btn">Join Interview</button>
+    <div id="status">Loading…</div>
 
     <script>
         const url = '{url}';
         const token = '{token}';
         const roomName = '{room}';
 
+        document.getElementById('join-btn').addEventListener('click', async function () {{
+            const btn = this;
+            btn.disabled = true;
+            btn.textContent = 'Connecting…';
+
+            // Resume AudioContext synchronously while the user-gesture token is
+            // still active. This must happen before any awaited network calls.
+            try {{
+                const ac = new AudioContext();
+                await ac.resume();
+                console.log('[LK] AudioContext state after resume:', ac.state);
+            }} catch (e) {{
+                console.warn('[LK] AudioContext resume failed:', e.message);
+            }}
+
+            btn.style.display = 'none';
+            document.getElementById('status').style.display = 'block';
+
+            await connectToRoom();
+        }});
+
         function loadLiveKitSDK() {{
             return new Promise((resolve, reject) => {{
                 const script = document.createElement('script');
                 script.src = 'https://unpkg.com/livekit-client@latest/dist/livekit-client.umd.js';
                 script.onload = () => {{
-                    console.log('LiveKit SDK loaded');
+                    console.log('[LK] SDK loaded');
                     if (window.LivekitClient) {{
                         resolve();
                     }} else {{
@@ -358,7 +393,7 @@ async def livekit_join_page(
                     }}
                 }};
                 script.onerror = (err) => {{
-                    console.error('Failed to load LiveKit SDK from CDN:', err);
+                    console.error('[LK] Failed to load SDK from CDN:', err);
                     reject(new Error('Failed to load LiveKit SDK'));
                 }};
                 document.head.appendChild(script);
@@ -367,15 +402,15 @@ async def livekit_join_page(
 
         async function connectToRoom() {{
             try {{
-                document.getElementById('status').textContent = 'Loading LiveKit SDK...';
+                document.getElementById('status').textContent = 'Loading LiveKit SDK…';
                 await loadLiveKitSDK();
 
                 if (!window.LivekitClient || !window.LivekitClient.Room) {{
-                    console.error('LiveKit object:', window.LivekitClient);
+                    console.error('[LK] LivekitClient object:', window.LivekitClient);
                     throw new Error('LiveKit SDK did not load properly. Please refresh the page.');
                 }}
 
-                document.getElementById('status').textContent = 'Connecting to interview...';
+                document.getElementById('status').textContent = 'Connecting to interview…';
 
                 const room = new window.LivekitClient.Room({{
                     adaptiveStream: true,
@@ -385,13 +420,50 @@ async def livekit_join_page(
                 room.on('disconnected', () => {{
                     document.getElementById('status').textContent = 'Call ended.';
                 }});
-
                 room.on('reconnecting', () => {{
-                    document.getElementById('status').textContent = 'Reconnecting...';
+                    document.getElementById('status').textContent = 'Reconnecting…';
                 }});
-
                 room.on('reconnected', () => {{
                     document.getElementById('status').textContent = 'Connected • Interview in progress';
+                }});
+
+                const attachedSids = new Set();
+
+                function attachAudioTrack(track) {{
+                    if (track.kind !== 'audio') return;
+                    if (attachedSids.has(track.sid)) {{
+                        console.log('[LK] skip duplicate attach for', track.sid);
+                        return;
+                    }}
+                    attachedSids.add(track.sid);
+                    console.log('[LK] attaching audio track', track.sid,
+                        'muted:', track.mediaStreamTrack ? track.mediaStreamTrack.muted : 'n/a');
+
+                    const stream = new MediaStream([track.mediaStreamTrack]);
+                    const audioEl = document.createElement('audio');
+                    audioEl.srcObject = stream;
+                    audioEl.autoplay = true;
+                    audioEl.volume = 1.0;
+                    document.body.appendChild(audioEl);
+
+                    const tryPlay = () => {{
+                        audioEl.play()
+                            .then(() => console.log('[LK] play() resolved, readyState:', audioEl.readyState))
+                            .catch(e => console.warn('[LK] play() rejected:', e.name, e.message));
+                    }};
+                    tryPlay();
+
+                    // Re-attempt when track unmutes (first audio frames arrive)
+                    track.mediaStreamTrack.addEventListener('unmute', () => {{
+                        console.log('[LK] track unmuted — re-triggering play');
+                        tryPlay();
+                    }});
+                }}
+
+                room.on('trackSubscribed', (track, pub, participant) => {{
+                    console.log('[LK] trackSubscribed kind=%s sid=%s participant=%s',
+                        track.kind, track.sid, participant.identity);
+                    attachAudioTrack(track);
                 }});
 
                 await room.connect(url, token, {{
@@ -399,20 +471,35 @@ async def livekit_join_page(
                     autoSubscribe: true,
                 }});
 
+                console.log('[LK] connected — remoteParticipants=%d', room.remoteParticipants.size);
+
+                // Ask LiveKit SDK to resume its internal AudioContext too
+                try {{
+                    if (typeof room.startAudio === 'function') await room.startAudio();
+                }} catch (e) {{
+                    console.warn('[LK] startAudio threw:', e.message);
+                }}
+
                 document.getElementById('status').textContent = 'Connected • Microphone active';
 
-                // Audio only — no camera
                 await room.localParticipant.setMicrophoneEnabled(true);
+                console.log('[LK] microphone enabled');
             }} catch (error) {{
+                // Show retry button on failure
+                const btn = document.getElementById('join-btn');
+                if (btn) {{
+                    btn.style.display = 'block';
+                    btn.disabled = false;
+                    btn.textContent = 'Retry';
+                }}
+                document.getElementById('status').style.display = 'none';
                 const errorDiv = document.createElement('div');
                 errorDiv.className = 'error';
                 errorDiv.textContent = 'Failed to connect: ' + error.message;
-                document.getElementById('container').insertBefore(errorDiv, document.getElementById('status'));
-                console.error('Connection error:', error);
+                document.body.appendChild(errorDiv);
+                console.error('[LK] Connection error:', error);
             }}
         }}
-
-        connectToRoom();
     </script>
 </body>
 </html>

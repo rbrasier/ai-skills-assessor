@@ -63,6 +63,7 @@ class ScriptedConversationMixin:
         ack_timeout_seconds: float,
         reply_timeout_seconds: float,
         reply_pause_seconds: float,
+        wait_for_participant: bool = False,
     ) -> None:
         self._state: ConversationState = ConversationState.IDLE
         self._script = script
@@ -74,6 +75,10 @@ class ScriptedConversationMixin:
         self._reply_buffer: list[str] = []
         self._reply_waiter: asyncio.Task[None] | None = None
         self._ended = False
+        # When True, _start_conversation waits until on_participant_joined() is called
+        self._participant_ready: asyncio.Event | None = (
+            asyncio.Event() if wait_for_participant else None
+        )
 
     # Overridden at runtime by the concrete FrameProcessor subclass.
     async def _push_frame(self, frame: Any, direction: Any) -> None:
@@ -87,12 +92,28 @@ class ScriptedConversationMixin:
 
     # ─── State transitions ───────────────────────────────────────────
 
+    def on_participant_joined(self) -> None:
+        """Unblock _start_conversation when wait_for_participant=True."""
+        if self._participant_ready is not None:
+            self._participant_ready.set()
+
     async def _start_conversation(self) -> None:
         if self._state != ConversationState.IDLE:
             return
+        if self._participant_ready is not None:
+            logger.info("ScriptedConversation: waiting for participant to join…")
+            await self._participant_ready.wait()
+            # Brief pause so the browser can subscribe to the bot's audio track
+            # before we start speaking — without this the first ~500ms of the
+            # greeting may be missed because the track subscription hasn't
+            # completed on the client side yet.
+            await asyncio.sleep(1.0)
+            logger.info("ScriptedConversation: participant joined — starting conversation")
         self._state = ConversationState.SPEAKING_GREETING
+        logger.info("→ TTS [greeting]: %s", self._script.greeting[:120])
         await self._emit_tts(self._script.greeting)
         self._state = ConversationState.SPEAKING_QUESTION
+        logger.info("→ TTS [question]: %s", self._script.question[:120])
         await self._emit_tts(self._script.question)
         self._state = ConversationState.WAITING_FOR_REPLY
         asyncio.create_task(self._reply_timeout_guard())
@@ -103,6 +124,7 @@ class ScriptedConversationMixin:
         cleaned = text.strip()
         if not cleaned:
             return
+        logger.info("← STT [candidate]: %s", cleaned[:200])
         self._reply_buffer.append(cleaned)
         if self._reply_waiter is not None:
             self._reply_waiter.cancel()
@@ -132,10 +154,14 @@ class ScriptedConversationMixin:
 
     async def _on_reply_complete(self, reply: str) -> None:
         self._state = ConversationState.GENERATING_ACK
+        if reply:
+            logger.info("← STT [candidate, final]: %s", reply[:200])
         ack = await self._generate_ack(reply)
         self._state = ConversationState.SPEAKING_ACK
+        logger.info("→ TTS [ack]: %s", ack[:120])
         await self._emit_tts(ack)
         self._state = ConversationState.SPEAKING_GOODBYE
+        logger.info("→ TTS [goodbye]: %s", self._script.goodbye[:120])
         await self._emit_tts(self._script.goodbye)
         self._state = ConversationState.ENDING
         await self._end()
@@ -147,6 +173,7 @@ class ScriptedConversationMixin:
         messages = [
             LLMMessage(role=m["role"], content=m["content"]) for m in prompt
         ]
+        logger.info("→ LLM [ack request]: generating acknowledgement for %d-char reply", len(reply))
         try:
             ack = await asyncio.wait_for(
                 self._llm.complete(messages, max_tokens=80),
@@ -160,6 +187,7 @@ class ScriptedConversationMixin:
             return self._script.fallback_ack()
 
         ack = (ack or "").strip()
+        logger.info("← LLM [ack response]: %s", ack[:120])
         return ack or self._script.fallback_ack()
 
     async def _end(self) -> None:
@@ -184,6 +212,7 @@ def build_scripted_conversation(
     ack_timeout_seconds: float = 10.0,
     reply_timeout_seconds: float = 90.0,
     reply_pause_seconds: float = 1.5,
+    wait_for_participant: bool = False,
 ) -> Any:
     """Instantiate the ScriptedConversation Pipecat FrameProcessor."""
 
@@ -216,6 +245,7 @@ def build_scripted_conversation(
                 ack_timeout_seconds=ack_timeout_seconds,
                 reply_timeout_seconds=reply_timeout_seconds,
                 reply_pause_seconds=reply_pause_seconds,
+                wait_for_participant=wait_for_participant,
             )
 
         async def process_frame(

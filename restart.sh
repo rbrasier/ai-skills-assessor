@@ -4,6 +4,11 @@
 # Usage (from repo root):
 #   bash restart.sh           # native processes — uvicorn + pnpm dev (hot reload)
 #   bash restart.sh --docker  # docker compose (exercises the full image-build path)
+#   bash restart.sh --debug   # native processes with DEBUG log level (verbose)
+#
+# Default log level is INFO — connections to external services and all bot
+# dialog (TTS sent, STT received, LLM responses) are logged at this level.
+# Use --debug for full Pipecat frame-level traces.
 #
 # Native mode writes logs to /tmp/ai-skills-logs/.
 # Docker mode streams health status and exits; use `docker compose logs -f` for output.
@@ -26,7 +31,20 @@ err()  { echo -e "${RED}✗${RESET} $*"; }
 info() { echo -e "${CYAN}→${RESET} $*"; }
 
 USE_DOCKER=false
-for arg in "$@"; do [ "$arg" = "--docker" ] && USE_DOCKER=true; done
+USE_DEBUG=false
+for arg in "$@"; do
+  [ "$arg" = "--docker" ] && USE_DOCKER=true
+  [ "$arg" = "--debug" ] && USE_DEBUG=true
+done
+
+# Logging level for the voice engine (uvicorn + Python root logger)
+LOG_LEVEL="info"
+UVICORN_LOG_LEVEL="info"
+if [ "$USE_DEBUG" = true ]; then
+  LOG_LEVEL="debug"
+  UVICORN_LOG_LEVEL="debug"
+  warn "Debug mode enabled — verbose Pipecat frame traces will appear in voice-engine.log"
+fi
 
 CONTAINER_NAME="ai-skills-pg"
 LIVEKIT_CONTAINER_NAME="${LIVEKIT_CONTAINER_NAME:-ai-skills-livekit}"
@@ -219,10 +237,11 @@ if [ ! -f "$VENV_UVICORN" ]; then
 fi
 
 VOICE_LOG="$LOG_DIR/voice-engine.log"
-info "Starting voice engine (FastAPI + hot reload on :8000)..."
+info "Starting voice engine (FastAPI + hot reload on :8000, log-level=$LOG_LEVEL)..."
 # cd into apps/voice-engine so pydantic-settings picks up .env and src.main resolves
 # PYTHONUNBUFFERED=1 disables Python's block-buffering so logs appear immediately
-nohup bash -c "cd '$REPO_ROOT/apps/voice-engine' && PYTHONUNBUFFERED=1 exec '$VENV_UVICORN' src.main:app --reload --port 8000" \
+# LOG_LEVEL is read by main.py to configure the Python root logger
+nohup bash -c "cd '$REPO_ROOT/apps/voice-engine' && PYTHONUNBUFFERED=1 LOG_LEVEL='$LOG_LEVEL' exec '$VENV_UVICORN' src.main:app --reload --port 8000 --log-level '$UVICORN_LOG_LEVEL'" \
   > "$VOICE_LOG" 2>&1 &
 VOICE_PID=$!
 echo "$VOICE_PID" > "$LOG_DIR/voice-engine.pid"

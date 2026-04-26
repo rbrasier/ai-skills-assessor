@@ -106,7 +106,7 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
           <iframe
             src={status.browserJoinUrl}
             title="Interview Call"
-            allow="microphone; camera; usb"
+            allow="microphone; autoplay"
             sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation-by-user-activation"
           />
         </div>

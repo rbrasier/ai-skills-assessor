@@ -58,6 +58,7 @@ class BasicCallBot:
         self._transport_mode = transport_mode
 
         self._transport: Any = None
+        self._conversation: Any = None
         self._task: Any = None
         self._runner_task: asyncio.Task[None] | None = None
         self._dial_attempted = False
@@ -74,9 +75,15 @@ class BasicCallBot:
         from pipecat.services.deepgram.stt import DeepgramSTTService
         from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 
+        logger.info(
+            "Connecting to Deepgram STT (model=%s)", self._settings.deepgram_model
+        )
         stt = DeepgramSTTService(
             api_key=self._settings.deepgram_api_key,
             model=self._settings.deepgram_model,
+        )
+        logger.info(
+            "Connecting to ElevenLabs TTS (voice_id=%s)", self._settings.elevenlabs_voice_id
         )
         tts = ElevenLabsTTSService(
             api_key=self._settings.elevenlabs_api_key,
@@ -89,6 +96,11 @@ class BasicCallBot:
                 LiveKitTransport,
             )
 
+            logger.info(
+                "Connecting to LiveKit transport (url=%s, room=%s)",
+                self._room_url,
+                self._room_name,
+            )
             transport: Any = LiveKitTransport(
                 url=self._room_url,
                 token=self._room_token,
@@ -104,6 +116,9 @@ class BasicCallBot:
                 DailyTransport,
             )
 
+            logger.info(
+                "Connecting to Daily transport (room=%s)", self._room_url
+            )
             transport = DailyTransport(
                 self._room_url,
                 self._room_token,
@@ -125,7 +140,11 @@ class BasicCallBot:
             script=script,
             llm_provider=self._llm,
             on_call_ended=self._handle_bot_initiated_hangup,
+            # For browser calls the bot joins the room before the candidate —
+            # hold the greeting until the candidate's browser actually connects.
+            wait_for_participant=(self._transport_mode == "livekit"),
         )
+        self._conversation = conversation
 
         in_sr = 16000 if self._transport_mode == "livekit" else 8000
         out_sr = 24000 if self._transport_mode == "livekit" else 8000
@@ -166,8 +185,10 @@ class BasicCallBot:
             if not self._connected_notified:
                 self._connected_notified = True
                 await listener.on_call_connected(session_id)
+            # Unblock the conversation — bot was waiting for the browser to connect
+            self._conversation.on_participant_joined()
             logger.info(
-                "BasicCallBot session_id=%s: LiveKit first participant %s",
+                "BasicCallBot session_id=%s: LiveKit first participant %s — conversation unblocked",
                 session_id,
                 participant_id,
             )
@@ -269,6 +290,11 @@ class BasicCallBot:
         """Build the pipeline and launch it as a background task."""
         from pipecat.pipeline.runner import PipelineRunner
 
+        logger.info(
+            "BasicCallBot starting pipeline (session_id=%s, mode=%s)",
+            self._session_id,
+            self._transport_mode,
+        )
         task = self._build()
         runner = PipelineRunner(handle_sigint=False)
 
