@@ -33,7 +33,7 @@ from src.domain.services.call_manager import (
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
 
-_VOICE_ENGINE_VERSION = "0.4.2"
+_VOICE_ENGINE_VERSION = "0.5.0"
 
 router = APIRouter()
 
@@ -609,25 +609,34 @@ async def livekit_join_page(
 """
 
 
-@router.get("/tts-test", tags=["livekit"])
+@router.get("/tts-test", tags=["tts"])
 async def tts_test(
     request: Request,
     text: str = Query(
-        default="Hello, this is a test of ElevenLabs text to speech.",
+        default="Hello, this is a test of the text to speech provider.",
         max_length=500,
     ),
 ) -> Response:
-    """Standalone ElevenLabs TTS check — bypasses Pipecat and LiveKit entirely.
+    """Standalone TTS provider check — bypasses Pipecat and LiveKit entirely.
 
-    Open in a browser tab to verify ElevenLabs API credentials and voice
-    produce audible audio independently of the WebRTC pipeline.
+    Synthesises ``text`` using whichever TTS provider is active (controlled by
+    the ``TTS_PROVIDER`` environment variable: ``elevenlabs`` or ``kokoro``).
+    Returns a WAV file playable in any browser tab.
 
     Usage: GET /tts-test
            GET /tts-test?text=Say+something+custom
     """
+    settings = request.app.state.settings
+    provider: str = getattr(settings, "tts_provider", "elevenlabs")
+
+    if provider == "kokoro":
+        return await _tts_test_kokoro(settings, text)
+    return await _tts_test_elevenlabs(settings, text)
+
+
+async def _tts_test_elevenlabs(settings: Any, text: str) -> Response:
     import httpx
 
-    settings = request.app.state.settings
     if not getattr(settings, "elevenlabs_api_key", None):
         raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY not configured")
 
@@ -653,17 +662,57 @@ async def tts_test(
             detail=f"ElevenLabs error {r.status_code}: {r.text[:200]}",
         )
 
-    pcm = r.content
-    sr, ch, bps = 24000, 1, 16
+    return _pcm_to_wav_response(r.content, sample_rate=24000, filename="tts-test-elevenlabs.wav")
+
+
+async def _tts_test_kokoro(settings: Any, text: str) -> Response:
+    import httpx
+
+    base_url: str = getattr(settings, "kokoro_tts_url", "").strip()
+    if not base_url:
+        raise HTTPException(status_code=503, detail="KOKORO_TTS_URL not configured")
+
+    voice: str = getattr(settings, "kokoro_voice", "af_bella")
+    sample_rate: int = getattr(settings, "kokoro_sample_rate", 24000)
+    speech_url = base_url.rstrip("/") + "/v1/audio/speech"
+
+    pcm_chunks: list[bytes] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        async with client.stream(
+            "POST",
+            speech_url,
+            json={
+                "model": "kokoro",
+                "input": text,
+                "voice": voice,
+                "response_format": "pcm",
+                "speed": 1.0,
+            },
+        ) as r:
+            if r.status_code != 200:
+                body = await r.aread()
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Kokoro error {r.status_code}: {body[:200].decode(errors='replace')}",
+                )
+            async for chunk in r.aiter_bytes(4096):
+                if chunk:
+                    pcm_chunks.append(chunk)
+
+    return _pcm_to_wav_response(b"".join(pcm_chunks), sample_rate=sample_rate, filename="tts-test-kokoro.wav")
+
+
+def _pcm_to_wav_response(pcm: bytes, *, sample_rate: int, filename: str) -> Response:
+    ch, bps = 1, 16
     header = _struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", 36 + len(pcm), b"WAVE",
-        b"fmt ", 16, 1, ch, sr,
-        sr * ch * bps // 8, ch * bps // 8, bps,
+        b"fmt ", 16, 1, ch, sample_rate,
+        sample_rate * ch * bps // 8, ch * bps // 8, bps,
         b"data", len(pcm),
     )
     return Response(
         content=header + pcm,
         media_type="audio/wav",
-        headers={"Content-Disposition": "inline; filename=tts-test.wav"},
+        headers={"Content-Disposition": f"inline; filename={filename}"},
     )

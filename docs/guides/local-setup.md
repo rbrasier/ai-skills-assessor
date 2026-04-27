@@ -1,4 +1,4 @@
-# Local Setup Guide — Phase 3 (v0.4.2)
+# Local Setup Guide — Phase 3 (v0.5.0)
 
 This guide gets the AI Skills Assessor running end-to-end on a laptop:
 candidate intake form → Python voice engine → Postgres. v0.4.1
@@ -164,10 +164,19 @@ DAILY_CALLER_ID=             # optional
 # AI providers (Phase 3 Revision 1)
 ANTHROPIC_API_KEY=           # optional — missing key = hard-coded fallback ack
 ANTHROPIC_MODEL=claude-3-5-haiku-latest
-DEEPGRAM_API_KEY=            # required to place a call
+DEEPGRAM_API_KEY=            # required when STT_PROVIDER=deepgram (default)
 DEEPGRAM_MODEL=nova-2-phonecall
-ELEVENLABS_API_KEY=          # required to place a call
+ELEVENLABS_API_KEY=          # required when TTS_PROVIDER=elevenlabs (default)
 ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+
+# STT provider (Phase 3 Revision 3)  — default: deepgram
+STT_PROVIDER=deepgram        # or "whisper" for self-hosted faster-whisper
+WHISPER_STT_URL=             # ws://localhost:8001/ws/transcribe (when STT_PROVIDER=whisper)
+
+# TTS provider (Phase 3 Revision 3)  — default: elevenlabs
+TTS_PROVIDER=elevenlabs      # or "kokoro" for self-hosted Kokoro-FastAPI
+KOKORO_TTS_URL=              # http://localhost:8880 (when TTS_PROVIDER=kokoro)
+KOKORO_VOICE=af_bella
 
 # Bot identity
 BOT_NAME=Noa
@@ -185,10 +194,14 @@ USE_IN_MEMORY_ADAPTERS=0
 > boot is a warning (not fatal). A trigger with those missing skips the bot. For
 > **Daily vs LiveKit** credentials, the process fails fast on startup if the
 > wrong set is empty (e.g. `DIALING_METHOD=daily` with blank `DAILY_API_KEY`).
-> Missing
-> `ANTHROPIC_API_KEY` is non-fatal for the call itself — the bot will
-> use its hard-coded acknowledgement *"Thanks for sharing that."*
-> instead of a Claude-generated line.
+> Missing `ANTHROPIC_API_KEY` is non-fatal — the bot uses the hard-coded fallback
+> acknowledgement *"Thanks for sharing that."* instead of a Claude-generated line.
+>
+> **Self-hosted provider fallback.** If `STT_PROVIDER=whisper` but
+> `WHISPER_STT_URL` is not set (or the service is unreachable), the voice engine
+> logs a warning and silently falls back to Deepgram. Same applies for Kokoro
+> → ElevenLabs. You will see a clear log line at pipeline start:
+> `STT provider: whisper (url=wss://...)` or `STT provider: deepgram (model=nova-2-phonecall)`.
 
 And `apps/web/.env.local`:
 
@@ -225,17 +238,33 @@ Open <http://localhost:3000>:
 
 Phase 3 added a root-level `docker-compose.yml` that mirrors the
 Railway topology. Use it to exercise the full image-build path
-before a push:
+before a push. v0.5.0 adds optional self-hosted STT and TTS services
+via Docker Compose profiles.
 
 ```bash
-# Build and start postgres + voice-engine + web
+# ── Default (cloud providers — Deepgram + ElevenLabs) ──
 docker compose up --build
+
+# ── Self-hosted STT only (faster-whisper on port 8001) ──
+STT_PROVIDER=whisper docker compose --profile stt up --build
+
+# ── Self-hosted TTS only (Kokoro on port 8880) ──
+TTS_PROVIDER=kokoro docker compose --profile tts up --build
+
+# ── Both self-hosted (no cloud STT/TTS keys required) ──
+STT_PROVIDER=whisper TTS_PROVIDER=kokoro \
+  docker compose --profile selfhosted up --build
 
 # Health probes
 curl http://localhost:8000/health
-# {"status":"ok","version":"0.4.0","database":"ok"}
-curl http://localhost:3000/api/health
-# {"status":"ok","version":"0.4.0"}
+# {"status":"ok","version":"0.5.0","database":"ok"}
+curl http://localhost:8001/health
+# {"status":"ok","model":"tiny.en"}  ← Whisper (if running)
+curl http://localhost:8880/health
+# Kokoro health response              ← Kokoro (if running)
+
+# TTS test endpoint (uses active provider)
+curl -o test.wav "http://localhost:8000/tts-test?text=Hello+from+Kokoro"
 
 # Stop the stack (volume persists)
 docker compose down
@@ -243,6 +272,10 @@ docker compose down
 # Wipe the DB volume too
 docker compose down -v
 ```
+
+> **Memory notes.** The Whisper `tiny.en` model needs ~4 GB RAM; Kokoro-FastAPI
+> needs ~2 GB. Set `mem_limit` in `docker-compose.yml` to match your laptop's
+> available memory. On Railway, set the service memory limit in the dashboard.
 
 You still need to run the Prisma migrations once — the compose file
 does not bake a migrate step (Railway deploy hooks handle that in

@@ -12,6 +12,8 @@ from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DialingMethod = Literal["daily", "browser"]
+SttProvider = Literal["deepgram", "whisper"]
+TtsProvider = Literal["elevenlabs", "kokoro"]
 
 
 class Settings(BaseSettings):
@@ -34,13 +36,13 @@ class Settings(BaseSettings):
     daily_api_key: str = ""
     daily_domain: str = ""
     # Daily SFU region. Phase 3 / ADR-006 deploys to Railway Singapore,
-    # so the default is co-located with Daily's `ap-southeast-1` SFU.
+    # so the default is co-located with Daily’s `ap-southeast-1` SFU.
     # Override to `ap-southeast-2` when the voice engine runs in
     # AWS Sydney.
     daily_geo: str = "ap-southeast-1"
     # Optional Daily phone-number ID to use as the outbound caller ID
     # on PSTN dial-out. When empty, Daily rotates through a random
-    # number from the workspace's pool.
+    # number from the workspace’s pool.
     daily_caller_id: str = ""
 
     # ─── LiveKit (required when dialing_method == browser) ────────
@@ -49,7 +51,7 @@ class Settings(BaseSettings):
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
     # Public page used to open a browser call. Default is LiveKit’s hosted
-    # “custom server” join UI; self-host a meet app and point this at it if needed.
+    # "custom server" join UI; self-host a meet app and point this at it if needed.
     livekit_meet_url: str = "https://meet.livekit.io/custom"
     # Token TTL (seconds) for both bot and browser participant.
     livekit_token_ttl_seconds: int = 3600
@@ -63,9 +65,33 @@ class Settings(BaseSettings):
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-2-phonecall"
     elevenlabs_api_key: str = ""
-    # "Rachel" — ElevenLabs' default female voice; override per-tenant
+    # "Rachel" — ElevenLabs’ default female voice; override per-tenant
     # in production via the Railway env panel.
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+
+    # ─── STT provider selection (Phase 3 Revision 3) ──────────────
+    # ``deepgram`` — Deepgram cloud STT (default, requires DEEPGRAM_API_KEY).
+    # ``whisper``  — Self-hosted faster-whisper via WebSocket (requires
+    #                WHISPER_STT_URL). Falls back to deepgram if URL is unset
+    #                or the service is unreachable at pipeline start.
+    stt_provider: SttProvider = "deepgram"
+    # WebSocket URL of your self-hosted Whisper STT service.
+    # Example: wss://whisper-stt.up.railway.app/ws/transcribe
+    whisper_stt_url: str = ""
+
+    # ─── TTS provider selection (Phase 3 Revision 3) ──────────────
+    # ``elevenlabs`` — ElevenLabs cloud TTS (default, requires ELEVENLABS_API_KEY).
+    # ``kokoro``     — Self-hosted Kokoro-FastAPI via HTTP (requires
+    #                  KOKORO_TTS_URL). Falls back to elevenlabs if URL is
+    #                  unset or the service is unreachable at pipeline start.
+    tts_provider: TtsProvider = "elevenlabs"
+    # Base HTTP URL of your self-hosted Kokoro TTS service.
+    # Example: https://kokoro-tts.up.railway.app
+    kokoro_tts_url: str = ""
+    # Kokoro voice identifier. af_bella is the default female voice.
+    kokoro_voice: str = "af_bella"
+    # Output sample rate for Kokoro PCM audio (24000 matches ElevenLabs default).
+    kokoro_sample_rate: int = 24000
 
     # ─── Bot identity ─────────────────────────────────────────────
     bot_name: str = "Noa"

@@ -1,13 +1,14 @@
-# Deployed Setup Guide — Railway (Phase 3 / v0.4.2)
+# Deployed Setup Guide — Railway (Phase 3 / v0.5.0)
 
 Phase 3 promotes the Phase 2 voice engine + Next.js web app to a
-production Railway (Singapore) deployment. v0.4.2 (Phase 3 Revision 2 adds optional browser / LiveKit)
-adds the basic-call runtime — a greeting, one question, an
-LLM-generated acknowledgement, and a hangup — on top of that
-infrastructure. This guide is the source-of-truth walkthrough: env
-vars, service layout, migrations, healthchecks, the CI-gated deploy
-pipeline, and the "first live call" runbook all match what ships in
-v0.4.2.
+production Railway (Singapore) deployment. v0.5.0 (Phase 3 Revision 3)
+adds swappable self-hosted STT and TTS providers — run Deepgram +
+ElevenLabs (cloud, default) or faster-whisper + Kokoro-FastAPI
+(CPU-only Railway services) controlled entirely by environment
+variables. This guide is the source-of-truth walkthrough: env vars,
+service layout, optional self-hosted provider services, migrations,
+healthchecks, the CI-gated deploy pipeline, and the "first live call"
+runbook all match what ships in v0.5.0.
 
 > **Region**: Railway Singapore (`asia-southeast1`). Daily rooms are
 > pinned to the Singapore SFU (`DAILY_GEO=ap-southeast-1`) so the
@@ -23,7 +24,9 @@ v0.4.2.
 
 ## 1. Railway project layout
 
-Create **one Railway project** with three services:
+### Core services (always required)
+
+Create **one Railway project** with three core services:
 
 | Service         | Source                | Builder    | Start command                                         |
 |-----------------|-----------------------|------------|-------------------------------------------------------|
@@ -50,6 +53,29 @@ Directory):
 > The `web` service builds from the **repo root** because its
 > Dockerfile needs the pnpm workspace (shared-types + database) in
 > scope. Leave its Root Directory unset (or `/`).
+
+### Optional self-hosted provider services (v0.5.0+)
+
+Add these when `STT_PROVIDER=whisper` or `TTS_PROVIDER=kokoro` is set on
+the `voice-engine` service. Both are CPU-only and require no GPU.
+
+| Service       | Source / image                                     | Builder    | Memory limit | railway.json |
+|---------------|----------------------------------------------------|------------|--------------|--------------|
+| `whisper-stt` | `apps/whisper-stt/` (this repo)                    | Dockerfile | **4 GB**     | `apps/whisper-stt/railway.json` |
+| `kokoro-tts`  | `ghcr.io/remsky/kokoro-fastapi-cpu:latest` (Docker) | Image      | **2 GB**     | (not needed — image-based deploy) |
+
+**whisper-stt root directory:** `apps/whisper-stt` — Railway picks up
+`apps/whisper-stt/railway.json` automatically.
+
+**kokoro-tts:** create via Railway → New Service → Docker Image →
+`ghcr.io/remsky/kokoro-fastapi-cpu:latest`. No root directory or
+Dockerfile needed — the image is pre-built.
+
+> **Health check timeout.** Set `whisper-stt` health check timeout to
+> **300 s** in Settings → Deploy (or via `railway.json` — already
+> configured). Silero VAD downloads from `torch.hub` on the very first
+> cold start (~2 min). Docker layer caching means subsequent restarts
+> finish in < 30 s.
 
 ---
 
@@ -119,40 +145,98 @@ with `${{…}}` are Railway variable references.
 
 ### `voice-engine`
 
-| Key                     | Value / source                                                      |
-|-------------------------|---------------------------------------------------------------------|
-| `DATABASE_URL`          | `${{postgres.DATABASE_URL}}`                                        |
-| `DIALING_METHOD`        | `daily` (telephone, default) or `browser` (self-hosted LiveKit)     |
-| `DAILY_API_KEY`         | Required when `DIALING_METHOD=daily` — Daily → Developers         |
-| `DAILY_DOMAIN`          | Required when `DIALING_METHOD=daily` — e.g. `your-team.daily.co`  |
-| `DAILY_GEO`             | `ap-southeast-1` (Singapore SFU — co-located with Railway)          |
-| `DAILY_CALLER_ID`       | Optional — Daily phone-number ID. Blank = use workspace pool.       |
-| `LIVEKIT_URL`           | Required when `DIALING_METHOD=browser` — WebSocket URL of your server |
-| `LIVEKIT_API_KEY`       | Required when `DIALING_METHOD=browser` — from LiveKit project      |
-| `LIVEKIT_API_SECRET`    | Required when `DIALING_METHOD=browser`                            |
-| `LIVEKIT_MEET_URL`      | Optional — join page base (default `https://meet.livekit.io/custom`) |
-| `LIVEKIT_TOKEN_TTL_SECONDS` | Optional — participant JWT lifetime (default `3600`)          |
-| `DEEPGRAM_API_KEY`      | From Deepgram dashboard → Projects → API keys                       |
-| `DEEPGRAM_MODEL`        | `nova-2-phonecall` (tuned for 8kHz PSTN audio — recommended)        |
-| `ELEVENLABS_API_KEY`    | From ElevenLabs dashboard → Profile → API Keys                      |
-| `ELEVENLABS_VOICE_ID`   | Voice ID. Default `21m00Tcm4TlvDq8ikWAM` ("Rachel").                |
-| `ANTHROPIC_API_KEY`     | From Anthropic console → API Keys                                   |
-| `ANTHROPIC_MODEL`       | `claude-3-5-haiku-latest` (default — fast + cheap for the ack turn) |
-| `BOT_NAME`              | `Noa` (default — override per-tenant)                               |
-| `BOT_ORG_NAME`          | `Resonant` (default — override per-tenant)                          |
-| `LOG_LEVEL`             | `INFO`                                                              |
-| `USE_IN_MEMORY_ADAPTERS`| `0` (leave unset or `0` — in-memory adapter is dev-only)            |
-| `PORT`                  | Railway injects this — do not override                              |
+#### Transport
 
-> **Credentials.** The process will **refuse to start** if
-> `DIALING_METHOD=daily` and `DAILY_API_KEY` or `DAILY_DOMAIN` is empty,
-> or if `DIALING_METHOD=browser` and any of `LIVEKIT_URL` /
-> `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` is empty. **STT/TTS** remain
-> soft-fail: with missing `DEEPGRAM_API_KEY` or `ELEVENLABS_API_KEY` the
-> service boots, but a trigger will fail the session with
-> `metadata.failureReason = "missing_provider_credentials"`. If
-> `ANTHROPIC_API_KEY` is missing, the bot uses a hard-coded
-> acknowledgement (*"Thanks for sharing that."*).
+| Key                         | Value / source                                                        |
+|-----------------------------|-----------------------------------------------------------------------|
+| `DATABASE_URL`              | `${{postgres.DATABASE_URL}}`                                          |
+| `DIALING_METHOD`            | `daily` (telephone, default) or `browser` (self-hosted LiveKit)       |
+| `DAILY_API_KEY`             | Required when `DIALING_METHOD=daily` — Daily → Developers             |
+| `DAILY_DOMAIN`              | Required when `DIALING_METHOD=daily` — e.g. `your-team.daily.co`     |
+| `DAILY_GEO`                 | `ap-southeast-1` (Singapore SFU — co-located with Railway)            |
+| `DAILY_CALLER_ID`           | Optional — Daily phone-number ID. Blank = workspace pool.             |
+| `LIVEKIT_URL`               | Required when `DIALING_METHOD=browser` — WebSocket URL of your server |
+| `LIVEKIT_API_KEY`           | Required when `DIALING_METHOD=browser`                                |
+| `LIVEKIT_API_SECRET`        | Required when `DIALING_METHOD=browser`                                |
+| `LIVEKIT_MEET_URL`          | Optional — join page (default `https://meet.livekit.io/custom`)       |
+| `LIVEKIT_TOKEN_TTL_SECONDS` | Optional — JWT lifetime (default `3600`)                              |
+
+#### STT provider (choose one)
+
+| Key               | Value / source                                                                          |
+|-------------------|-----------------------------------------------------------------------------------------|
+| `STT_PROVIDER`    | `deepgram` (default) or `whisper` (self-hosted)                                         |
+| `DEEPGRAM_API_KEY`| When `STT_PROVIDER=deepgram` — Deepgram dashboard → Projects → API keys                 |
+| `DEEPGRAM_MODEL`  | `nova-2-phonecall` (tuned for 8 kHz PSTN audio — recommended)                           |
+| `WHISPER_STT_URL` | When `STT_PROVIDER=whisper` — `wss://<whisper-stt-service>.up.railway.app/ws/transcribe` |
+
+> If `WHISPER_STT_URL` is unset or the service is unreachable when a call
+> pipeline starts, a warning is logged and the pipeline automatically falls
+> back to Deepgram. Set `DEEPGRAM_API_KEY` as well when using Whisper in
+> production, so the fallback is available.
+
+#### TTS provider (choose one)
+
+| Key                  | Value / source                                                            |
+|----------------------|---------------------------------------------------------------------------|
+| `TTS_PROVIDER`       | `elevenlabs` (default) or `kokoro` (self-hosted)                          |
+| `ELEVENLABS_API_KEY` | When `TTS_PROVIDER=elevenlabs` — ElevenLabs dashboard → Profile → API Keys |
+| `ELEVENLABS_VOICE_ID`| Voice ID. Default `21m00Tcm4TlvDq8ikWAM` ("Rachel").                      |
+| `KOKORO_TTS_URL`     | When `TTS_PROVIDER=kokoro` — `https://<kokoro-tts-service>.up.railway.app` |
+| `KOKORO_VOICE`       | Kokoro voice ID. Default `af_bella`.                                      |
+| `KOKORO_SAMPLE_RATE` | PCM output rate. Default `24000` (matches ElevenLabs).                    |
+
+> Same graceful fallback as STT: if `KOKORO_TTS_URL` is unset or
+> unreachable, the pipeline silently uses ElevenLabs.
+
+#### LLM + bot identity
+
+| Key               | Value / source                                                        |
+|-------------------|-----------------------------------------------------------------------|
+| `ANTHROPIC_API_KEY` | From Anthropic console → API Keys                                   |
+| `ANTHROPIC_MODEL`   | `claude-3-5-haiku-latest` (default — fast + cheap for ack turn)     |
+| `BOT_NAME`          | `Noa` (default — override per-tenant)                               |
+| `BOT_ORG_NAME`      | `Resonant` (default — override per-tenant)                          |
+| `LOG_LEVEL`         | `INFO`                                                              |
+| `USE_IN_MEMORY_ADAPTERS` | `0` (leave unset — in-memory adapter is dev-only)            |
+| `PORT`              | Railway injects this — do not override                              |
+
+> **Hard-fail vs soft-fail.** The process **refuses to start** if
+> `DIALING_METHOD=daily` and `DAILY_API_KEY` / `DAILY_DOMAIN` is empty,
+> or if `DIALING_METHOD=browser` and `LIVEKIT_*` are empty. **STT/TTS**
+> are soft-fail: missing cloud keys cause a trigger to fail with
+> `metadata.failureReason = "missing_provider_credentials"`, but the
+> service still boots. Missing `ANTHROPIC_API_KEY` uses the hard-coded
+> ack *"Thanks for sharing that."*
+
+### `whisper-stt` (optional — when `STT_PROVIDER=whisper`)
+
+| Key              | Value                                                               |
+|------------------|---------------------------------------------------------------------|
+| `WHISPER_MODEL`  | `tiny.en` (default — baked into Docker image; change = rebuild)    |
+| `VAD_THRESHOLD`  | `0.5` (Silero speech probability threshold, 0–1)                   |
+| `SILENCE_DURATION_MS` | `700` (ms of silence before emitting a final transcript)      |
+| `PORT`           | Railway injects this                                                |
+
+### `kokoro-tts` (optional — when `TTS_PROVIDER=kokoro`)
+
+The pre-built image has no required env vars. Railway injects `PORT`
+automatically. No additional configuration needed.
+
+### `web`
+
+| Key                  | Value / source                                                          |
+|----------------------|-------------------------------------------------------------------------|
+| `VOICE_ENGINE_URL`   | `http://voice-engine.railway.internal:8080` (Railway private network)   |
+| `PORT`               | Railway injects this                                                    |
+
+> Railway's private networking exposes each service on its
+> `railway.internal` hostname. Use the internal URL from `web` →
+> `voice-engine` so traffic stays inside the Railway fabric.
+
+### `postgres`
+
+No manual configuration — Railway manages it.
 
 ### `web`
 
