@@ -73,8 +73,9 @@ class BasicCallBot:
         # Lazy imports keep the lean CI image (no [voice] extras) happy.
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.task import PipelineParams, PipelineTask
-        from pipecat.services.deepgram.stt import DeepgramSTTService
-        from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+
+        from src.adapters.stt import create_stt_service
+        from src.adapters.tts import create_tts_service
 
         # Pipecat reconfigures loguru at DEBUG level on import (pipecat/__init__.py
         # calls logger.remove() then logger.add(level="DEBUG")).  Now that pipecat
@@ -83,6 +84,7 @@ class BasicCallBot:
         if _level != "DEBUG":
             try:
                 import sys as _sys
+
                 from loguru import logger as _loguru
                 _loguru.remove()
                 _loguru.add(
@@ -98,21 +100,8 @@ class BasicCallBot:
             except Exception:
                 pass  # loguru not available in lean CI image
 
-        logger.info(
-            "Connecting to Deepgram STT (model=%s)", self._settings.deepgram_model
-        )
-        stt = DeepgramSTTService(
-            api_key=self._settings.deepgram_api_key,
-            model=self._settings.deepgram_model,
-        )
-        logger.info(
-            "Connecting to ElevenLabs TTS (voice_id=%s)", self._settings.elevenlabs_voice_id
-        )
-        tts = ElevenLabsTTSService(
-            api_key=self._settings.elevenlabs_api_key,
-            voice_id=self._settings.elevenlabs_voice_id,
-            output_format="pcm_24000",  # deliver native 24 kHz PCM; avoids resample step
-        )
+        stt = create_stt_service(self._settings)
+        tts = create_tts_service(self._settings)
 
         if self._transport_mode == "livekit":
             from pipecat.transports.livekit.transport import (
@@ -175,6 +164,7 @@ class BasicCallBot:
 
         import array as _array
         import math as _math
+
         from pipecat.frames.frames import AudioRawFrame
         from pipecat.processors.frame_processor import FrameProcessor as _FP
 

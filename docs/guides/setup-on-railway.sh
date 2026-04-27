@@ -13,13 +13,26 @@
 #   1. Verifies Railway CLI is installed
 #   2. Checks / initiates authentication
 #   3. Links or creates the Railway project
-#   4. Prompts for API keys and sets them on the voice-engine service
-#   5. Sets the VOICE_ENGINE_URL on the web service
-#   6. Runs Prisma migrations against the Railway database (optional)
-#   7. Triggers a deploy of both services (optional)
+#   4. Prompts for STT/TTS provider selection and API keys
+#   5. Sets env vars on the voice-engine service (cloud or self-hosted URLs)
+#   6. Optionally sets up self-hosted Whisper STT and/or Kokoro TTS services
+#   7. Sets the VOICE_ENGINE_URL on the web service
+#   8. Runs Prisma migrations against the Railway database (optional)
+#   9. Triggers a deploy of all services (optional)
+#
+# STT providers:
+#   deepgram (default) — Deepgram cloud API (requires DEEPGRAM_API_KEY)
+#   whisper            — Self-hosted faster-whisper on Railway (CPU, tiny.en model)
+#                        Set WHISPER_STT_URL to wss://your-whisper-stt.up.railway.app/ws/transcribe
+#
+# TTS providers:
+#   elevenlabs (default) — ElevenLabs cloud API (requires ELEVENLABS_API_KEY)
+#   kokoro               — Self-hosted Kokoro-FastAPI on Railway (CPU)
+#                          Uses ghcr.io/remsky/kokoro-fastapi-cpu:latest
+#                          Set KOKORO_TTS_URL to https://your-kokoro-tts.up.railway.app
 #
 # What requires the Railway dashboard (printed at the end):
-#   - Creating the three services (postgres plugin + voice-engine + web)
+#   - Creating services (postgres plugin + voice-engine + web + optional whisper-stt/kokoro-tts)
 #   - Setting root directories and Dockerfile paths per service
 #   - Adding GitHub Actions secrets for the CI/CD pipeline
 #   - Enabling PSTN dial-out on your Daily workspace (daily mode) or
@@ -140,14 +153,14 @@ section "5/6  Environment variables"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 echo
-echo "Enter API keys for the voice-engine service."
-echo "Press Enter to skip any key you don't have yet (set it later in the Railway dashboard)."
+echo "Enter configuration for the voice-engine service."
+echo "Press Enter to skip any key (set it later in the Railway dashboard)."
 echo "Input is hidden for secrets."
 echo
 
 prompt_secret() {
   local KEY="$1" DESC="$2" DEFAULT="${3:-}"
-  printf "  %-22s (%s)" "$KEY" "$DESC"
+  printf "  %-26s (%s)" "$KEY" "$DESC"
   [ -n "$DEFAULT" ] && printf " [%s]" "$DEFAULT"
   printf ": "
   local val
@@ -159,13 +172,75 @@ prompt_secret() {
   fi
 }
 
-DAILY_API_KEY=$(prompt_secret      "DAILY_API_KEY"       "daily.co → Developers")
-DAILY_DOMAIN=$(prompt_secret       "DAILY_DOMAIN"        "e.g. yourteam.daily.co")
-DEEPGRAM_API_KEY=$(prompt_secret   "DEEPGRAM_API_KEY"    "deepgram.com → Projects → API keys")
-ELEVENLABS_API_KEY=$(prompt_secret "ELEVENLABS_API_KEY"  "elevenlabs.io → Profile → API Keys")
-ANTHROPIC_API_KEY=$(prompt_secret  "ANTHROPIC_API_KEY"   "console.anthropic.com")
-ANTHROPIC_MODEL=$(prompt_secret    "ANTHROPIC_MODEL"     "Claude model ID" "claude-3-5-haiku-latest")
-ELEVENLABS_VOICE_ID=$(prompt_secret "ELEVENLABS_VOICE_ID" "ElevenLabs voice ID (Rachel default)" "21m00Tcm4TlvDq8ikWAM")
+prompt_plain() {
+  local KEY="$1" DESC="$2" DEFAULT="${3:-}"
+  printf "  %-26s (%s)" "$KEY" "$DESC"
+  [ -n "$DEFAULT" ] && printf " [%s]" "$DEFAULT"
+  printf ": "
+  local val
+  read -r val
+  echo
+  if [ -n "$val" ]; then echo "$val"
+  elif [ -n "$DEFAULT" ]; then echo "$DEFAULT"
+  else echo ""
+  fi
+}
+
+# ── STT provider ─────────────────────────────────────────────────────────────
+echo -e "\n${BOLD}STT (Speech-to-Text) Provider${RESET}"
+echo "  deepgram — Deepgram cloud (recommended for production)"
+echo "  whisper  — Self-hosted faster-whisper on Railway (CPU, no API key needed)"
+STT_PROVIDER=$(prompt_plain "STT_PROVIDER" "deepgram | whisper" "deepgram")
+
+DEEPGRAM_API_KEY=""
+WHISPER_STT_URL=""
+if [[ "$STT_PROVIDER" == "whisper" ]]; then
+  warn "Self-hosted Whisper STT selected."
+  echo "  You will need to deploy the whisper-stt service on Railway separately."
+  echo "  Dockerfile: apps/whisper-stt/Dockerfile | Memory: 4 GB recommended"
+  WHISPER_STT_URL=$(prompt_plain "WHISPER_STT_URL" "wss://your-whisper.up.railway.app/ws/transcribe")
+  add_manual "Deploy the whisper-stt service on Railway:
+    - New Service → GitHub repo → Root Directory: apps/whisper-stt
+    - Builder: Dockerfile → Dockerfile: apps/whisper-stt/Dockerfile
+    - Set memory limit to 4096 MB in Settings → Resources
+    - After deploy, copy the service URL and update WHISPER_STT_URL on voice-engine"
+else
+  DEEPGRAM_API_KEY=$(prompt_secret "DEEPGRAM_API_KEY" "deepgram.com → Projects → API keys")
+fi
+
+# ── TTS provider ─────────────────────────────────────────────────────────────
+echo -e "\n${BOLD}TTS (Text-to-Speech) Provider${RESET}"
+echo "  elevenlabs — ElevenLabs cloud (recommended for production quality)"
+echo "  kokoro     — Self-hosted Kokoro-FastAPI on Railway (CPU, no API key needed)"
+TTS_PROVIDER=$(prompt_plain "TTS_PROVIDER" "elevenlabs | kokoro" "elevenlabs")
+
+ELEVENLABS_API_KEY=""
+ELEVENLABS_VOICE_ID="21m00Tcm4TlvDq8ikWAM"
+KOKORO_TTS_URL=""
+KOKORO_VOICE="af_bella"
+if [[ "$TTS_PROVIDER" == "kokoro" ]]; then
+  warn "Self-hosted Kokoro TTS selected."
+  echo "  Uses the pre-built image: ghcr.io/remsky/kokoro-fastapi-cpu:latest"
+  echo "  Kokoro already has a Railway one-click template — deploy it first."
+  KOKORO_TTS_URL=$(prompt_plain "KOKORO_TTS_URL" "https://your-kokoro.up.railway.app")
+  KOKORO_VOICE=$(prompt_plain "KOKORO_VOICE" "Kokoro voice ID" "af_bella")
+  add_manual "Deploy the Kokoro TTS service on Railway:
+    - New Service → Docker Image → ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    - Set memory limit to 2048 MB in Settings → Resources
+    - After deploy, copy the service URL and update KOKORO_TTS_URL on voice-engine"
+else
+  ELEVENLABS_API_KEY=$(prompt_secret "ELEVENLABS_API_KEY" "elevenlabs.io → Profile → API Keys")
+  ELEVENLABS_VOICE_ID=$(prompt_plain "ELEVENLABS_VOICE_ID" "ElevenLabs voice ID (Rachel default)" "21m00Tcm4TlvDq8ikWAM")
+fi
+
+# ── Common AI + transport settings ───────────────────────────────────────────
+echo -e "\n${BOLD}Anthropic LLM (for acknowledgement generation)${RESET}"
+ANTHROPIC_API_KEY=$(prompt_secret "ANTHROPIC_API_KEY"   "console.anthropic.com")
+ANTHROPIC_MODEL=$(prompt_plain    "ANTHROPIC_MODEL"     "Claude model ID" "claude-3-5-haiku-latest")
+
+echo -e "\n${BOLD}Transport (telephony)${RESET}"
+DAILY_API_KEY=$(prompt_secret      "DAILY_API_KEY"       "daily.co → Developers (leave blank if using browser mode)")
+DAILY_DOMAIN=$(prompt_plain        "DAILY_DOMAIN"        "e.g. yourteam.daily.co")
 
 echo
 
@@ -194,18 +269,34 @@ railway variables set \
   "BOT_ORG_NAME=Resonant" \
   "LOG_LEVEL=INFO" \
   "USE_IN_MEMORY_ADAPTERS=0" \
+  "STT_PROVIDER=${STT_PROVIDER}" \
+  "TTS_PROVIDER=${TTS_PROVIDER}" \
+  "KOKORO_VOICE=${KOKORO_VOICE}" \
+  "KOKORO_SAMPLE_RATE=24000" \
   --service voice-engine 2>/dev/null \
   && ok "Fixed defaults set on voice-engine" \
   || warn "Could not set fixed defaults — set them manually in the Railway dashboard"
 
-info "Setting API keys on voice-engine..."
-set_var voice-engine DAILY_API_KEY      "$DAILY_API_KEY"
-set_var voice-engine DAILY_DOMAIN       "$DAILY_DOMAIN"
-set_var voice-engine DEEPGRAM_API_KEY   "$DEEPGRAM_API_KEY"
-set_var voice-engine ELEVENLABS_API_KEY "$ELEVENLABS_API_KEY"
-set_var voice-engine ANTHROPIC_API_KEY  "$ANTHROPIC_API_KEY"
-set_var voice-engine ANTHROPIC_MODEL    "$ANTHROPIC_MODEL"
-set_var voice-engine ELEVENLABS_VOICE_ID "$ELEVENLABS_VOICE_ID"
+info "Setting API keys and provider URLs on voice-engine..."
+set_var voice-engine DAILY_API_KEY       "$DAILY_API_KEY"
+set_var voice-engine DAILY_DOMAIN        "$DAILY_DOMAIN"
+set_var voice-engine ANTHROPIC_API_KEY   "$ANTHROPIC_API_KEY"
+set_var voice-engine ANTHROPIC_MODEL     "$ANTHROPIC_MODEL"
+
+# STT-specific
+if [[ "$STT_PROVIDER" == "whisper" ]]; then
+  set_var voice-engine WHISPER_STT_URL   "$WHISPER_STT_URL"
+else
+  set_var voice-engine DEEPGRAM_API_KEY  "$DEEPGRAM_API_KEY"
+fi
+
+# TTS-specific
+if [[ "$TTS_PROVIDER" == "kokoro" ]]; then
+  set_var voice-engine KOKORO_TTS_URL    "$KOKORO_TTS_URL"
+else
+  set_var voice-engine ELEVENLABS_API_KEY  "$ELEVENLABS_API_KEY"
+  set_var voice-engine ELEVENLABS_VOICE_ID "$ELEVENLABS_VOICE_ID"
+fi
 
 info "Setting DATABASE_URL on voice-engine (Railway variable reference to postgres service)..."
 # Single-quoted so bash does not expand ${{...}}
