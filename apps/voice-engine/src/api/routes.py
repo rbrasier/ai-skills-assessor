@@ -17,6 +17,7 @@ The route handlers read the singleton :class:`CallManager` from
 
 from __future__ import annotations
 
+import struct as _struct
 from datetime import datetime
 from typing import Any
 
@@ -487,66 +488,59 @@ async def livekit_join_page(
                         + ' readyState=' + (mst ? mst.readyState : '?')
                         + ' muted=' + (mst ? mst.muted : '?'));
 
-                    // track.attach() creates an <audio> element that drives
-                    // WebRTC delivery (Chrome needs a playing element to
-                    // decode remote audio). We then intercept its decoded
-                    // output with createMediaElementSource and route it
-                    // through the AudioContext, which is proven to reach
-                    // speakers (the 440 Hz test tone uses the same path).
-                    const el = track.attach();
+                    // Direct MediaStream → <audio> approach.
+                    // Do NOT use createMediaElementSource: that routes audio
+                    // through window._audioCtx (our test-tone context), which
+                    // fights with LiveKit's own internal AudioContext and
+                    // produces silence for remote WebRTC tracks.
+                    const stream = new MediaStream([mst]);
+                    const el = document.createElement('audio');
+                    el.srcObject = stream;
                     el.volume = 1.0;
+                    el.autoplay = true;
                     document.body.appendChild(el);
 
-                    const ctx = window._audioCtx;
-                    let analyser = null;
+                    const tryPlay = () =>
+                        el.play()
+                            .then(() => diag('play() ok'))
+                            .catch(e => diag('play() err: ' + e.message));
+                    tryPlay();
 
-                    if (ctx && ctx.state === 'running') {{
-                        try {{
-                            // createMediaElementSource REDIRECTS the <audio>
-                            // element's decoded output into the Web Audio graph.
-                            // After this call el.volume has no effect — output
-                            // goes exclusively through ctx.destination.
-                            const source = ctx.createMediaElementSource(el);
-                            analyser = ctx.createAnalyser();
-                            analyser.fftSize = 256;
-                            source.connect(analyser);
-                            source.connect(ctx.destination);
-                            diag('MediaElementSource routed through AudioContext');
-                        }} catch (e) {{
-                            diag('MediaElementSource err: ' + e.message);
-                            // Fallback: element plays directly (no AudioContext)
-                        }}
-                    }}
-
-                    el.play()
-                        .then(() => diag('play() ok'))
-                        .catch(e => diag('play() err: ' + e.message));
-
-                    // Track lifecycle
                     if (mst) {{
-                        mst.addEventListener('unmute', () =>
-                            diag('* UNMUTED — server sending audio'));
+                        mst.addEventListener('unmute', () => {{
+                            diag('* UNMUTED — server sending audio');
+                            tryPlay();
+                        }});
                         mst.addEventListener('mute', () =>
                             diag('* MUTED — server stopped'));
                         mst.addEventListener('ended', () =>
                             diag('* ENDED'));
                     }}
 
-                    // Periodic energy + status (10 s)
-                    const buf = analyser
-                        ? new Uint8Array(analyser.frequencyBinCount) : null;
+                    // getStats() reads RTCP statistics directly — the only
+                    // reliable audioLevel source for remote WebRTC tracks.
+                    // (AnalyserNode always reads 0 for remote WebRTC in Chrome.)
                     let n = 0;
-                    const iv = setInterval(() => {{
-                        let energy = '?';
-                        if (buf && analyser) {{
-                            analyser.getByteFrequencyData(buf);
-                            energy = '' + Math.max.apply(null, buf);
-                        }}
-                        diag('chk[' + (++n) + ']'
+                    const iv = setInterval(async () => {{
+                        n++;
+                        let line = 'chk[' + n + ']'
                             + ' muted=' + (mst ? mst.muted : '?')
-                            + ' time=' + el.currentTime.toFixed(1)
-                            + ' energy=' + energy);
-                        if (n >= 20) clearInterval(iv);
+                            + ' time=' + el.currentTime.toFixed(1);
+                        try {{
+                            const pc = room.engine && room.engine.subscriber && room.engine.subscriber.pc;
+                            if (pc) {{
+                                const stats = await pc.getStats();
+                                stats.forEach(function(s) {{
+                                    if (s.type === 'inbound-rtp' && s.kind === 'audio') {{
+                                        line += ' audioLevel=' + (s.audioLevel != null
+                                            ? s.audioLevel.toFixed(4) : '?');
+                                        line += ' totalSamples=' + (s.totalSamplesReceived || 0);
+                                    }}
+                                }});
+                            }}
+                        }} catch (e) {{ line += ' statsErr=' + e.message; }}
+                        diag(line);
+                        if (n >= 30) clearInterval(iv);
                     }}, 500);
                 }}
 
@@ -613,3 +607,63 @@ async def livekit_join_page(
 </body>
 </html>
 """
+
+
+@router.get("/tts-test", tags=["livekit"])
+async def tts_test(
+    request: Request,
+    text: str = Query(
+        default="Hello, this is a test of ElevenLabs text to speech.",
+        max_length=500,
+    ),
+) -> Response:
+    """Standalone ElevenLabs TTS check — bypasses Pipecat and LiveKit entirely.
+
+    Open in a browser tab to verify ElevenLabs API credentials and voice
+    produce audible audio independently of the WebRTC pipeline.
+
+    Usage: GET /tts-test
+           GET /tts-test?text=Say+something+custom
+    """
+    import httpx
+
+    settings = request.app.state.settings
+    if not getattr(settings, "elevenlabs_api_key", None):
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY not configured")
+
+    voice_id = settings.elevenlabs_voice_id
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            url,
+            headers={
+                "xi-api-key": settings.elevenlabs_api_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/pcm",
+            },
+            json={
+                "text": text,
+                "model_id": "eleven_turbo_v2",
+                "output_format": "pcm_24000",
+            },
+        )
+    if r.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"ElevenLabs error {r.status_code}: {r.text[:200]}",
+        )
+
+    pcm = r.content
+    sr, ch, bps = 24000, 1, 16
+    header = _struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + len(pcm), b"WAVE",
+        b"fmt ", 16, 1, ch, sr,
+        sr * ch * bps // 8, ch * bps // 8, bps,
+        b"data", len(pcm),
+    )
+    return Response(
+        content=header + pcm,
+        media_type="audio/wav",
+        headers={"Content-Disposition": "inline; filename=tts-test.wav"},
+    )
