@@ -100,14 +100,13 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
         ))}
       </div>
 
-      {/* LiveKit embed for browser calls in progress */}
-      {status?.dialingMethod === "browser" && status?.browserJoinUrl ? (
+      {/* LiveKit embed for browser calls */}
+      {status?.dialingMethod === "browser" && status?.browserJoinUrl && !isTerminal ? (
         <div className="livekit-embed">
           <iframe
             src={status.browserJoinUrl}
             title="Interview Call"
             allow="microphone; autoplay"
-            sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation-by-user-activation"
           />
         </div>
       ) : null}

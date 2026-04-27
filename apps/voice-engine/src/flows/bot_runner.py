@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from src.config import Settings
@@ -74,6 +75,28 @@ class BasicCallBot:
         from pipecat.pipeline.task import PipelineParams, PipelineTask
         from pipecat.services.deepgram.stt import DeepgramSTTService
         from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+
+        # Pipecat reconfigures loguru at DEBUG level on import (pipecat/__init__.py
+        # calls logger.remove() then logger.add(level="DEBUG")).  Now that pipecat
+        # is imported we re-apply our desired level.
+        _level = os.environ.get("LOG_LEVEL", "INFO").upper()
+        if _level != "DEBUG":
+            try:
+                import sys as _sys
+                from loguru import logger as _loguru
+                _loguru.remove()
+                _loguru.add(
+                    _sys.stderr,
+                    level="INFO",
+                    format=(
+                        "<green>{time:HH:mm:ss.SSS}</green> | "
+                        "<level>{level: <8}</level> | "
+                        "<cyan>{name}</cyan>:<cyan>{line}</cyan> - "
+                        "<level>{message}</level>"
+                    ),
+                )
+            except Exception:
+                pass  # loguru not available in lean CI image
 
         logger.info(
             "Connecting to Deepgram STT (model=%s)", self._settings.deepgram_model

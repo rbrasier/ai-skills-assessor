@@ -56,6 +56,8 @@ class CallManager(ICallLifecycleListener):
         # Background dial tasks — kept around so tests can ``await`` them
         # deterministically and so the event loop holds a reference.
         self._tasks: set[asyncio.Task[None]] = set()
+        # Live connections keyed by session_id — used by cancel_call to hangup.
+        self._connections: dict[str, Any] = {}
 
     # ─── Candidate intake (Step 01) ──────────────────────────────────
 
@@ -144,6 +146,7 @@ class CallManager(ICallLifecycleListener):
             )
             connection = await self._voice_transport.dial(config)
 
+            self._connections[session_id] = connection
             if connection.browser_join_url is not None:
                 call_meta = {
                     "dialingMethod": "browser",
@@ -266,6 +269,17 @@ class CallManager(ICallLifecycleListener):
             metadata={"cancelledAt": datetime.now(UTC).isoformat()},
             ended_at=datetime.now(UTC),
         )
+
+        # Hang up the bot so it leaves the LiveKit room (or ends the Daily call).
+        # Without this the browser stays connected and the mic indicator stays on.
+        connection = self._connections.pop(session_id, None)
+        if connection is not None:
+            try:
+                await self._voice_transport.hangup(connection)
+                logger.info("cancel_call: hung up transport for session %s", session_id)
+            except Exception:
+                logger.exception("cancel_call: hangup failed for session %s", session_id)
+
         return updated or session
 
     # ─── Admin listing ───────────────────────────────────────────────

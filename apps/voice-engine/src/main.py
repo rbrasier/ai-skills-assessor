@@ -57,19 +57,48 @@ def _configure_logging() -> None:
     STT received, LLM responses), call lifecycle events.
     DEBUG: full Pipecat frame traces — very verbose.
 
-    Uvicorn sets its own log level via --log-level; this function controls
-    the application (src.*) and Pipecat loggers.
+    Uvicorn only adds handlers to its own loggers (uvicorn.*), leaving the
+    root logger with no handler.  Messages from src.* would be silently
+    dropped by Python's "last resort" handler (WARNING+ only).  We add an
+    explicit StreamHandler to the src logger so our INFO messages appear.
     """
     level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_str, logging.INFO)
 
-    # Application loggers at the requested level
-    logging.getLogger("src").setLevel(level)
+    src_logger = logging.getLogger("src")
+    src_logger.setLevel(level)
 
-    # Pipecat is extremely chatty at DEBUG (one log per audio frame).
-    # Only lower it when the caller explicitly asks for debug mode.
-    pipecat_level = level if level <= logging.DEBUG else logging.WARNING
-    logging.getLogger("pipecat").setLevel(pipecat_level)
+    # Add a handler if one hasn't been attached yet (guard against double-add
+    # on uvicorn --reload which re-imports the module in the worker process).
+    if not src_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.DEBUG)  # logger level does the filtering
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
+        src_logger.addHandler(handler)
+        src_logger.propagate = False  # don't double-emit via root
+
+    # Pipecat uses loguru, not stdlib logging, so setLevel has no effect on
+    # its output.  We note the desired level here for completeness but the
+    # only way to silence Pipecat's DEBUG output is via loguru configuration
+    # (e.g. LOGURU_LEVEL env var or loguru.logger.remove() + re-add).
+    # We suppress it unless the caller explicitly asked for --debug.
+    if level > logging.DEBUG:
+        try:
+            from loguru import logger as _loguru_logger  # noqa: PLC0415
+
+            _loguru_logger.remove()
+            _loguru_logger.add(
+                __import__("sys").stderr,
+                level="INFO",
+                format="<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+            )
+        except Exception:
+            pass  # loguru not installed or already configured — ignore
 
 
 def _build_persistence(settings: Settings) -> IPersistence:

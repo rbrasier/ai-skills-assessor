@@ -338,6 +338,16 @@ async def livekit_join_page(
             font-style: italic;
             display: none;
         }}
+        #diag {{
+            margin-top: 6px;
+            font-size: 10px;
+            color: #666;
+            font-family: monospace;
+            max-height: 120px;
+            overflow-y: auto;
+            width: 100%;
+            text-align: left;
+        }}
         .error {{
             color: #c0392b;
             font-size: 12px;
@@ -353,25 +363,56 @@ async def livekit_join_page(
          so the candidate hears nothing even though TTS is generated server-side. -->
     <button id="join-btn">Join Interview</button>
     <div id="status">Loading…</div>
+    <div id="diag"></div>
+    <div style="margin-top:6px;text-align:center">
+        <a id="popout" href="#" target="_blank"
+           style="font-size:10px;color:#888;text-decoration:underline">
+            open in new tab (audio debug)
+        </a>
+    </div>
+    <script>document.getElementById('popout').href = location.href;</script>
 
     <script>
         const url = '{url}';
         const token = '{token}';
         const roomName = '{room}';
 
+        // On-screen event log — visible inside the iframe without DevTools
+        function diag(msg) {{
+            console.log('[DIAG]', msg);
+            const el = document.getElementById('diag');
+            if (el) {{
+                const line = document.createElement('div');
+                line.textContent = new Date().toISOString().slice(11,23) + ' ' + msg;
+                el.appendChild(line);
+            }}
+        }}
+
         document.getElementById('join-btn').addEventListener('click', async function () {{
             const btn = this;
             btn.disabled = true;
             btn.textContent = 'Connecting…';
 
-            // Resume AudioContext synchronously while the user-gesture token is
-            // still active. This must happen before any awaited network calls.
+            // Create and unlock AudioContext while user-gesture token is active.
             try {{
-                const ac = new AudioContext();
-                await ac.resume();
-                console.log('[LK] AudioContext state after resume:', ac.state);
+                window._audioCtx = new AudioContext();
+                await window._audioCtx.resume();
+                diag('AudioContext ' + window._audioCtx.state + ' sr=' + window._audioCtx.sampleRate);
+
+                // Proof-of-life: 300 ms 440 Hz tone through the AudioContext.
+                // If the user hears this beep, the iframe CAN output audio.
+                const osc = window._audioCtx.createOscillator();
+                const g   = window._audioCtx.createGain();
+                osc.frequency.value = 440;
+                g.gain.value = 0.25;
+                osc.connect(g);
+                g.connect(window._audioCtx.destination);
+                osc.start();
+                setTimeout(() => osc.stop(), 300);
+                diag('TEST TONE — you should hear a short beep now');
             }} catch (e) {{
-                console.warn('[LK] AudioContext resume failed:', e.message);
+                diag('AudioContext ERROR: ' + e.message);
+                window._audioCtx = null;
             }}
 
             btn.style.display = 'none';
@@ -412,13 +453,17 @@ async def livekit_join_page(
 
                 document.getElementById('status').textContent = 'Connecting to interview…';
 
-                const room = new window.LivekitClient.Room({{
-                    adaptiveStream: true,
-                    dynacast: true,
-                }});
+                const room = new window.LivekitClient.Room();
 
-                room.on('disconnected', () => {{
+                room.on('disconnected', async () => {{
+                    diag('room disconnected — ending call');
                     document.getElementById('status').textContent = 'Call ended.';
+                    // Disable microphone so the browser mic indicator turns off
+                    try {{
+                        await room.localParticipant.setMicrophoneEnabled(false);
+                    }} catch (e) {{
+                        // Ignore — participant may already be disconnected
+                    }}
                 }});
                 room.on('reconnecting', () => {{
                     document.getElementById('status').textContent = 'Reconnecting…';
@@ -432,38 +477,87 @@ async def livekit_join_page(
                 function attachAudioTrack(track) {{
                     if (track.kind !== 'audio') return;
                     if (attachedSids.has(track.sid)) {{
-                        console.log('[LK] skip duplicate attach for', track.sid);
+                        diag('skip dup ' + track.sid);
                         return;
                     }}
                     attachedSids.add(track.sid);
-                    console.log('[LK] attaching audio track', track.sid,
-                        'muted:', track.mediaStreamTrack ? track.mediaStreamTrack.muted : 'n/a');
 
-                    const stream = new MediaStream([track.mediaStreamTrack]);
-                    const audioEl = document.createElement('audio');
-                    audioEl.srcObject = stream;
-                    audioEl.autoplay = true;
-                    audioEl.volume = 1.0;
-                    document.body.appendChild(audioEl);
+                    const mst = track.mediaStreamTrack;
+                    diag('attach ' + track.sid
+                        + ' readyState=' + (mst ? mst.readyState : '?')
+                        + ' muted=' + (mst ? mst.muted : '?'));
 
-                    const tryPlay = () => {{
-                        audioEl.play()
-                            .then(() => console.log('[LK] play() resolved, readyState:', audioEl.readyState))
-                            .catch(e => console.warn('[LK] play() rejected:', e.name, e.message));
-                    }};
-                    tryPlay();
+                    // track.attach() creates an <audio> element that drives
+                    // WebRTC delivery (Chrome needs a playing element to
+                    // decode remote audio). We then intercept its decoded
+                    // output with createMediaElementSource and route it
+                    // through the AudioContext, which is proven to reach
+                    // speakers (the 440 Hz test tone uses the same path).
+                    const el = track.attach();
+                    el.volume = 1.0;
+                    document.body.appendChild(el);
 
-                    // Re-attempt when track unmutes (first audio frames arrive)
-                    track.mediaStreamTrack.addEventListener('unmute', () => {{
-                        console.log('[LK] track unmuted — re-triggering play');
-                        tryPlay();
-                    }});
+                    const ctx = window._audioCtx;
+                    let analyser = null;
+
+                    if (ctx && ctx.state === 'running') {{
+                        try {{
+                            // createMediaElementSource REDIRECTS the <audio>
+                            // element's decoded output into the Web Audio graph.
+                            // After this call el.volume has no effect — output
+                            // goes exclusively through ctx.destination.
+                            const source = ctx.createMediaElementSource(el);
+                            analyser = ctx.createAnalyser();
+                            analyser.fftSize = 256;
+                            source.connect(analyser);
+                            source.connect(ctx.destination);
+                            diag('MediaElementSource routed through AudioContext');
+                        }} catch (e) {{
+                            diag('MediaElementSource err: ' + e.message);
+                            // Fallback: element plays directly (no AudioContext)
+                        }}
+                    }}
+
+                    el.play()
+                        .then(() => diag('play() ok'))
+                        .catch(e => diag('play() err: ' + e.message));
+
+                    // Track lifecycle
+                    if (mst) {{
+                        mst.addEventListener('unmute', () =>
+                            diag('* UNMUTED — server sending audio'));
+                        mst.addEventListener('mute', () =>
+                            diag('* MUTED — server stopped'));
+                        mst.addEventListener('ended', () =>
+                            diag('* ENDED'));
+                    }}
+
+                    // Periodic energy + status (10 s)
+                    const buf = analyser
+                        ? new Uint8Array(analyser.frequencyBinCount) : null;
+                    let n = 0;
+                    const iv = setInterval(() => {{
+                        let energy = '?';
+                        if (buf && analyser) {{
+                            analyser.getByteFrequencyData(buf);
+                            energy = '' + Math.max.apply(null, buf);
+                        }}
+                        diag('chk[' + (++n) + ']'
+                            + ' muted=' + (mst ? mst.muted : '?')
+                            + ' time=' + el.currentTime.toFixed(1)
+                            + ' energy=' + energy);
+                        if (n >= 20) clearInterval(iv);
+                    }}, 500);
                 }}
 
                 room.on('trackSubscribed', (track, pub, participant) => {{
-                    console.log('[LK] trackSubscribed kind=%s sid=%s participant=%s',
-                        track.kind, track.sid, participant.identity);
+                    const msg = 'trackSubscribed kind=' + track.kind + ' sid=' + track.sid + ' from=' + participant.identity;
+                    diag(msg);
                     attachAudioTrack(track);
+                }});
+
+                room.on('trackPublished', (pub, participant) => {{
+                    diag('trackPublished kind=' + pub.kind + ' participant=' + participant.identity);
                 }});
 
                 await room.connect(url, token, {{
@@ -471,19 +565,34 @@ async def livekit_join_page(
                     autoSubscribe: true,
                 }});
 
-                console.log('[LK] connected — remoteParticipants=%d', room.remoteParticipants.size);
+                const remoteCount = room.remoteParticipants.size;
+                diag('connected — remoteParticipants=' + remoteCount);
+
+                // Attach any tracks already published before we connected
+                room.remoteParticipants.forEach(function(participant) {{
+                    diag('existing participant: ' + participant.identity + ' tracks=' + participant.trackPublications.size);
+                    participant.trackPublications.forEach(function(pub) {{
+                        if (pub.track) {{
+                            diag('existing track kind=' + pub.kind + ' isSubscribed=' + pub.isSubscribed);
+                            attachAudioTrack(pub.track);
+                        }}
+                    }});
+                }});
 
                 // Ask LiveKit SDK to resume its internal AudioContext too
                 try {{
-                    if (typeof room.startAudio === 'function') await room.startAudio();
+                    if (typeof room.startAudio === 'function') {{
+                        await room.startAudio();
+                        diag('startAudio() completed');
+                    }}
                 }} catch (e) {{
-                    console.warn('[LK] startAudio threw:', e.message);
+                    diag('startAudio() ERROR: ' + e.message);
                 }}
 
                 document.getElementById('status').textContent = 'Connected • Microphone active';
 
                 await room.localParticipant.setMicrophoneEnabled(true);
-                console.log('[LK] microphone enabled');
+                diag('microphone enabled');
             }} catch (error) {{
                 // Show retry button on failure
                 const btn = document.getElementById('join-btn');
