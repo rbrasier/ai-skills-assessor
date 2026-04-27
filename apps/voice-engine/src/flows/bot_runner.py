@@ -111,6 +111,7 @@ class BasicCallBot:
         tts = ElevenLabsTTSService(
             api_key=self._settings.elevenlabs_api_key,
             voice_id=self._settings.elevenlabs_voice_id,
+            output_format="pcm_24000",  # deliver native 24 kHz PCM; avoids resample step
         )
 
         if self._transport_mode == "livekit":
@@ -172,12 +173,30 @@ class BasicCallBot:
         in_sr = 16000 if self._transport_mode == "livekit" else 8000
         out_sr = 24000 if self._transport_mode == "livekit" else 8000
 
+        import array as _array
+        import math as _math
+        from pipecat.frames.frames import AudioRawFrame
+        from pipecat.processors.frame_processor import FrameProcessor as _FP
+
+        class _RMSLogger(_FP):
+            """Log RMS amplitude of each outgoing audio frame to confirm non-silent PCM."""
+
+            async def process_frame(self, frame: Any, direction: Any) -> None:
+                await super().process_frame(frame, direction)
+                if isinstance(frame, AudioRawFrame) and frame.audio:
+                    samples = _array.array("h", frame.audio)
+                    if samples:
+                        rms = _math.sqrt(sum(s * s for s in samples) / len(samples))
+                        logger.info("RMSLogger: len=%d rms=%.1f", len(samples), rms)
+                await self.push_frame(frame, direction)
+
         pipeline = Pipeline(
             [
                 transport.input(),
                 stt,
                 conversation,
                 tts,
+                _RMSLogger(),
                 transport.output(),
             ]
         )
