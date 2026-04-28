@@ -126,6 +126,23 @@ class ScriptedConversationMixin:
         self._state = ConversationState.WAITING_FOR_REPLY
         asyncio.create_task(self._reply_timeout_guard())
 
+    def _ping_debounce(self) -> None:
+        """Reset the reply debounce without adding text to the buffer.
+
+        Called on interim transcription frames so a brief mid-sentence pause
+        that triggers a premature Deepgram final does not cause the bot to
+        respond before the candidate has finished speaking.  Only acts when a
+        debounce task is already running (i.e. at least one final has arrived).
+        """
+        if self._state != ConversationState.WAITING_FOR_REPLY:
+            return
+        if self._reply_waiter is None or self._reply_waiter.done():
+            return
+        self._reply_waiter.cancel()
+        self._reply_waiter = asyncio.create_task(
+            self._finalise_reply_after_pause()
+        )
+
     def _buffer_reply(self, text: str) -> None:
         if self._state != ConversationState.WAITING_FOR_REPLY:
             return
@@ -260,6 +277,13 @@ def build_scripted_conversation(
             FrameDirection,
             FrameProcessor,
         )
+
+        # InterimTranscriptionFrame was added in a later Pipecat version.
+        try:
+            from pipecat.frames.frames import InterimTranscriptionFrame as _InterimFrame
+        except ImportError:
+            _InterimFrame = None  # type: ignore[assignment,misc]
+
     except ImportError as exc:  # pragma: no cover — lean CI only
         raise RuntimeError(
             "pipecat-ai is not installed; install voice-engine with "
@@ -298,6 +322,16 @@ def build_scripted_conversation(
                 and direction == FrameDirection.DOWNSTREAM
             ):
                 self._buffer_reply(getattr(frame, "text", "") or "")
+
+            # Interim frames arrive while the candidate is still speaking.
+            # Reset the debounce so we don't finalise on a premature Deepgram
+            # final that fires during a natural mid-sentence breath pause.
+            if (
+                _InterimFrame is not None
+                and isinstance(frame, _InterimFrame)
+                and direction == FrameDirection.DOWNSTREAM
+            ):
+                self._ping_debounce()
 
         async def _emit_tts(self, text: str) -> None:
             await self.push_frame(TTSSpeakFrame(text), FrameDirection.DOWNSTREAM)

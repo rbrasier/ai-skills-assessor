@@ -84,4 +84,11 @@ def _create_deepgram(settings: Settings) -> Any:
     return DeepgramSTTService(
         api_key=settings.deepgram_api_key,
         model=settings.deepgram_model,
+        # Wait 1 s of silence before declaring an utterance final.  The
+        # default (10 ms) is far too aggressive for conversational speech —
+        # a natural breath pause triggers a premature end-of-utterance.
+        endpointing=1000,
+        # Stream partial transcripts so the bot can reset its debounce
+        # timer while the candidate is still speaking.
+        interim_results=True,
     )
