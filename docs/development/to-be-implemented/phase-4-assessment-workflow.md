@@ -1,136 +1,68 @@
-# Phase 4: Assessment Workflow & Interjection
+# Phase 4: Assessment Workflow & Transcript Persistence
 
 ## Status
 To Be Implemented
 
 ## Date
-2026-04-18
+2026-04-28
 
 ## References
-- PRD-002: Assessment Interview Workflow
 - ADR-004: Voice Engine Technology Decisions
-- Phase 1: Foundation & Monorepo Scaffold (prerequisite)
 - Phase 2: Basic Voice Engine & Call Tracking (prerequisite)
-- Phase 3: Infrastructure Deployment (prerequisite)
+- Phase 3: Infrastructure Deployment & LiveKit Integration (prerequisite)
 
 ## Objective
 
-Build the SFIA assessment conversation flow on top of the basic voice engine from Phase 2. Implement the SFIAFlowController state machine (discovery → evidence gathering → summary), the 60-second interjection mechanism, and transcript persistence with phase metadata. By the end of this phase, the system can conduct a structured multi-phase assessment conversation and persist detailed transcripts with speaker turns and phase labels.
+Implement the full SFIA assessment conversation flow (5-state state machine) and structured transcript persistence. Build a stateful conversation that guides candidates through Introduction → Skill Discovery → Evidence Gathering → Summary → Closing, with all turns recorded and labeled by phase. By the end of this phase, the system conducts a complete assessment interview and persists detailed transcripts with speaker turns, timestamps, and phase metadata.
 
 ---
 
 ## 1. Deliverables
 
-### 1.1 DailyTransport Adapter
-
-**File:** `apps/voice-engine/src/adapters/daily_transport.py`
-
-Implements the `VoiceTransport` port using Pipecat's `DailyTransport`.
-
-**Key responsibilities:**
-- Create a Daily room with recording and transcription enabled.
-- Configure the room for `ap-southeast-2` (Sydney) region.
-- Dial the candidate's Australian phone number via Daily's SIP/PSTN gateway.
-- Expose call lifecycle events (connected, disconnected, error).
-- Handle call recording URLs post-call.
-
-**Configuration:**
-
-```python
-from pipecat.transports.services.daily import DailyTransport, DailyParams
-
-class DailyVoiceTransport(VoiceTransport):
-    def __init__(self, api_key: str, api_url: str = "https://api.daily.co/v1"):
-        self.api_key = api_key
-        self.api_url = api_url
-
-    async def dial(self, phone_number: str, config: CallConfig) -> CallConnection:
-        # 1. Create Daily room with Sydney region
-        room = await self._create_room(config)
-        
-        # 2. Configure DailyTransport
-        transport = DailyTransport(
-            room_url=room.url,
-            token=room.token,
-            bot_name="Noa",
-            params=DailyParams(
-                audio_in_enabled=True,
-                audio_out_enabled=True,
-                transcription_enabled=True,
-                vad_enabled=True,
-                vad_analyzer=SileroVADAnalyzer(),
-            ),
-        )
-        
-        # 3. Dial the phone number
-        await transport.dial(phone_number)
-        
-        return CallConnection(
-            session_id=config.session_id,
-            room_url=room.url,
-            transport=transport,
-        )
-
-    async def _create_room(self, config: CallConfig) -> DailyRoom:
-        """Create a Daily room with recording enabled in Sydney region."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.api_url}/rooms",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "properties": {
-                        "enable_recording": "cloud",
-                        "enable_transcription": True,
-                        "geo": "ap-southeast-2",
-                        "exp": int(time.time()) + 3600,  # 1 hour expiry
-                        "max_participants": 2,
-                        "enable_chat": False,
-                    }
-                },
-            )
-            data = response.json()
-            return DailyRoom(url=data["url"], name=data["name"], token=await self._create_token(data["name"]))
-```
-
-### 1.2 SFIAFlowController (Pipecat Flows State Machine)
+### 1.1 SFIAFlowController (Pipecat Flows State Machine)
 
 **File:** `apps/voice-engine/src/flows/sfia_flow_controller.py`
 
-The core conversation state machine using Pipecat Flows.
+The core conversation state machine using Pipecat Flows. Controls the assessment conversation as a 5-state flow with transitions driven by LLM function calls.
 
 **States:**
 
 ```
-┌──────────────┐
-│ Introduction │  Consent + explain process
-└──────┬───────┘
-       │ candidate consents
+┌──────────────────────────────────────────┐
+│ Introduction                             │  Name, consent, process explanation
+│ (3–5 seconds to read, await consent)     │
+└──────┬───────────────────────────────────┘
+       │ "yes, proceed" function called
        ▼
-┌──────────────────┐
-│ SkillDiscovery   │  "Tell me about your IT career and key responsibilities"
-└──────┬───────────┘
-       │ skills identified (LLM extracts skill mentions)
+┌──────────────────────────────────────────┐
+│ SkillDiscovery                           │  Probe: "Tell me about your IT career"
+│ (LLM identifies 2–5 key skill areas)     │
+└──────┬───────────────────────────────────┘
+       │ set_identified_skills() function called
        ▼
-┌──────────────────────┐
-│ EvidenceGathering    │  Per-skill deep dive with RAG context
-│ (loops per skill)    │  "Can you give me a specific example of..."
-└──────┬───────────────┘
-       │ all skills explored OR time limit
+┌──────────────────────────────────────────┐
+│ EvidenceGathering                        │  Per-skill probes for specificity
+│ (loops per skill, ~2–3 min per skill)    │  (no RAG context in Phase 4)
+└──────┬───────────────────────────────────┘
+       │ transition_to_summary() called
        ▼
-┌──────────────────┐
-│ Summary          │  Recap key points
-└──────┬───────────┘
-       │
+┌──────────────────────────────────────────┐
+│ Summary                                  │  Recap skills and evidence heard
+└──────┬───────────────────────────────────┘
+       │ transition_to_closing() called
        ▼
-┌──────────────────┐
-│ Closing          │  Thank candidate, explain next steps
-└──────────────────┘
+┌──────────────────────────────────────────┐
+│ Closing                                  │  Thank, next steps, goodbye
+└──────────────────────────────────────────┘
 ```
 
 **Flow Definition:**
 
+The flow is implemented using Pipecat Flows with LLM function calling. The LLM drives state transitions by calling functions like `transition_to_skill_discovery()`, `set_identified_skills()`, and `transition_to_summary()`.
+
 ```python
-from pipecat_flows import FlowManager, FlowConfig, FlowResult
+# Pseudo-structure of the flow config. See apps/voice-engine/src/flows/sfia_flow.py
+# for the full Pipecat Flows configuration.
 
 flow_config: FlowConfig = {
     "initial_node": "introduction",
@@ -140,40 +72,22 @@ flow_config: FlowConfig = {
                 {
                     "role": "system",
                     "content": (
-                        "You are Noa, a friendly, professional AI skills assessor from Resonant. "
-                        "Introduce yourself by name, explain you'll be conducting a skills assessment "
-                        "based on the SFIA framework, and ask for verbal consent to proceed "
-                        "and to record the call."
-                    ),
-                }
-            ],
-            "task_messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "After the candidate consents, transition to skill_discovery. "
-                        "If they decline, transition to closing with a polite goodbye."
+                        "You are Noa, an AI skills assessor from Resonant. "
+                        "Introduce yourself, explain the SFIA-based assessment, "
+                        "and ask for verbal consent to proceed and record the conversation."
                     ),
                 }
             ],
             "functions": [
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "transition_to_skill_discovery",
-                        "description": "Candidate has consented. Move to skill discovery.",
-                        "parameters": {"type": "object", "properties": {}},
-                        "transition_to": "skill_discovery",
-                    },
+                    "name": "consent_given",
+                    "description": "Candidate consents to proceed.",
+                    "transition_to": "skill_discovery",
                 },
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "transition_to_closing_declined",
-                        "description": "Candidate declined. End the call politely.",
-                        "parameters": {"type": "object", "properties": {}},
-                        "transition_to": "closing",
-                    },
+                    "name": "consent_declined",
+                    "description": "Candidate declines; end gracefully.",
+                    "transition_to": "closing",
                 },
             ],
         },
@@ -182,48 +96,27 @@ flow_config: FlowConfig = {
                 {
                     "role": "system",
                     "content": (
-                        "Ask the candidate to describe their current role, key responsibilities, "
-                        "and areas of IT expertise. Listen for mentions of skills that map to "
-                        "SFIA categories. Keep the conversation natural and encouraging."
-                    ),
-                }
-            ],
-            "task_messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Once you have identified 2-5 key skill areas, transition to "
-                        "evidence_gathering with the identified skills. Use the "
-                        "set_identified_skills function to record them."
+                        "Ask the candidate to describe their role, key responsibilities, "
+                        "and IT expertise. Listen for skill mentions. Keep natural; "
+                        "do not name SFIA codes yet. Identify 2-5 skill areas."
                     ),
                 }
             ],
             "functions": [
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "set_identified_skills",
-                        "description": "Record the SFIA skills identified from the candidate's description.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "skills": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "skill_code": {"type": "string"},
-                                            "skill_name": {"type": "string"},
-                                            "estimated_level": {"type": "integer"},
-                                        },
-                                    },
-                                }
+                    "name": "skills_identified",
+                    "description": "Record identified skills and move to evidence gathering.",
+                    "parameters": {
+                        "skills": {
+                            "type": "array",
+                            "items": {
+                                "skill_code": "string",
+                                "skill_name": "string",
                             },
-                            "required": ["skills"],
-                        },
-                        "handler": "handle_identified_skills",
-                        "transition_to": "evidence_gathering",
+                        }
                     },
+                    "handler": "handle_identified_skills",
+                    "transition_to": "evidence_gathering",
                 },
             ],
         },
@@ -232,52 +125,18 @@ flow_config: FlowConfig = {
                 {
                     "role": "system",
                     "content": (
-                        "You are now probing for specific evidence. "
-                        "For each identified skill, ask the candidate for concrete examples "
-                        "that demonstrate their level of responsibility. "
-                        "Focus on: Autonomy, Influence, Complexity, and Knowledge. "
-                        "\n\n"
-                        "DYNAMIC RAG CONTEXT (injected at runtime):\n"
-                        "{rag_context}"
-                    ),
-                }
-            ],
-            "task_messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Once you have gathered sufficient evidence for all identified skills "
-                        "(at least one concrete example per skill), transition to summary. "
-                        "If the candidate cannot provide evidence for a skill, note it and move on."
+                        "For each identified skill, ask for concrete examples. "
+                        "Probe for: Autonomy (did they decide?), Influence (who did they impact?), "
+                        "Complexity (what was hard?), and Knowledge (what did they learn?). "
+                        "Get at least one example per skill."
                     ),
                 }
             ],
             "functions": [
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "record_evidence",
-                        "description": "Record a piece of evidence for a specific skill.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "skill_code": {"type": "string"},
-                                "evidence_summary": {"type": "string"},
-                                "estimated_level": {"type": "integer"},
-                            },
-                            "required": ["skill_code", "evidence_summary"],
-                        },
-                        "handler": "handle_evidence_recorded",
-                    },
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "transition_to_summary",
-                        "description": "Sufficient evidence gathered. Move to summary.",
-                        "parameters": {"type": "object", "properties": {}},
-                        "transition_to": "summary",
-                    },
+                    "name": "evidence_complete",
+                    "description": "Sufficient evidence gathered. Move to summary.",
+                    "transition_to": "summary",
                 },
             ],
         },
@@ -286,28 +145,17 @@ flow_config: FlowConfig = {
                 {
                     "role": "system",
                     "content": (
-                        "Summarise the key skills and evidence discussed. "
-                        "Thank the candidate for their time. "
-                        "Explain that an assessment report will be generated and reviewed "
-                        "by a subject matter expert."
+                        "Summarize the key skills and example evidence discussed. "
+                        "Thank the candidate for their time and engagement. "
+                        "Explain that an assessment report will be reviewed by a subject matter expert."
                     ),
-                }
-            ],
-            "task_messages": [
-                {
-                    "role": "system",
-                    "content": "After delivering the summary, transition to closing.",
                 }
             ],
             "functions": [
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "transition_to_closing",
-                        "description": "Summary complete. Close the call.",
-                        "parameters": {"type": "object", "properties": {}},
-                        "transition_to": "closing",
-                    },
+                    "name": "summary_complete",
+                    "description": "Summary delivered. Move to closing.",
+                    "transition_to": "closing",
                 },
             ],
         },
@@ -316,273 +164,242 @@ flow_config: FlowConfig = {
                 {
                     "role": "system",
                     "content": (
-                        "Thank the candidate warmly. Let them know they will receive "
-                        "information about the assessment outcome. Say goodbye."
+                        "Thank the candidate warmly. Let them know next steps "
+                        "(SME review, feedback timeline). Say goodbye professionally."
                     ),
                 }
             ],
-            "task_messages": [],
             "functions": [
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "end_call",
-                        "description": "Call is complete. End the session.",
-                        "parameters": {"type": "object", "properties": {}},
-                        "handler": "handle_end_call",
-                    },
-                },
+                    "name": "call_ended",
+                    "description": "Call is complete. End the session.",
+                    "handler": "handle_end_call",
+                }
             ],
-            "post_actions": [{"type": "end_conversation"}],
         },
     },
 }
 ```
 
-### 1.3 The Interjection Mechanism
+**Key function handlers:**
+- `handle_identified_skills(skills)`: Records skill list to session metadata.
+- `handle_end_call()`: Triggers transcript finalization and persistence (see section 1.3).
 
-**File:** `apps/voice-engine/src/flows/interjection_monitor.py`
+### 1.2 Transcript Persistence & Recording
 
-Implements the "1-per-call Force Check" rule.
+**File:** `apps/voice-engine/src/domain/services/transcript_recorder.py` (new)
 
-**Logic:**
-1. A 60-second timer starts when the user begins speaking (`UserStartedSpeaking` event).
-2. The timer resets each time the LLM detects a verifiable "work claim" in the user's speech.
-3. If 60 seconds elapse without a detected claim, the bot injects a high-priority `TTSFrame` to redirect.
-4. This interjection can only fire **once per call** (flag-guarded).
+Tracks speaker turns, timestamps, and phase labels throughout the call. Records to database at call end.
 
-```python
-import asyncio
-from pipecat.frames.frames import TTSFrame
-from pipecat.processors.frame_processor import FrameProcessor
-
-class InterjectionMonitor(FrameProcessor):
-    INTERJECTION_TIMEOUT = 60.0  # seconds
-    INTERJECTION_MESSAGE = (
-        "I appreciate you sharing that context. To help me assess your skills accurately, "
-        "could you give me a specific example of a project or task where you applied "
-        "these skills? For instance, what was the situation, what did you do, "
-        "and what was the outcome?"
-    )
-
-    def __init__(self):
-        super().__init__()
-        self._timer_task: asyncio.Task | None = None
-        self._has_interjected = False
-        self._claim_detected_since_last_reset = False
-
-    async def on_user_started_speaking(self):
-        """Reset timer when user starts speaking."""
-        if self._has_interjected:
-            return
-        self._cancel_timer()
-        self._claim_detected_since_last_reset = False
-        self._timer_task = asyncio.create_task(self._interjection_countdown())
-
-    async def on_user_stopped_speaking(self):
-        """Keep timer running — user might resume without a claim."""
-        pass
-
-    def mark_claim_detected(self):
-        """Called by the LLM processor when a verifiable claim is detected."""
-        self._claim_detected_since_last_reset = True
-        self._cancel_timer()
-
-    async def _interjection_countdown(self):
-        try:
-            await asyncio.sleep(self.INTERJECTION_TIMEOUT)
-            if not self._claim_detected_since_last_reset and not self._has_interjected:
-                await self._interject()
-        except asyncio.CancelledError:
-            pass
-
-    async def _interject(self):
-        """Inject a high-priority TTS frame to redirect the candidate."""
-        self._has_interjected = True
-        frame = TTSFrame(text=self.INTERJECTION_MESSAGE)
-        await self.push_frame(frame, priority=True)
-
-    def _cancel_timer(self):
-        if self._timer_task and not self._timer_task.done():
-            self._timer_task.cancel()
-            self._timer_task = None
-```
-
-### 1.4 Pipeline Assembly
-
-**File:** `apps/voice-engine/src/domain/services/assessment_orchestrator.py`
-
-Wires the Pipecat pipeline together.
+**Data structure per turn:**
 
 ```python
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask, PipelineParams
-from pipecat.services.deepgram import DeepgramSTTService
-from pipecat.services.openai import OpenAILLMService
-from pipecat.services.elevenlabs import ElevenLabsTTSService
-from pipecat_flows import FlowManager
-
-class AssessmentOrchestrator:
-    def __init__(
-        self,
-        voice_transport: VoiceTransport,
-        knowledge_base: KnowledgeBase,
-        persistence: Persistence,
-        config: VoiceEngineConfig,
-    ):
-        self.voice_transport = voice_transport
-        self.knowledge_base = knowledge_base
-        self.persistence = persistence
-        self.config = config
-
-    async def run_assessment(self, phone_number: str, candidate_id: str) -> str:
-        """Run a full assessment call. Returns the session ID."""
-        session = await self._create_session(candidate_id)
-        
-        connection = await self.voice_transport.dial(
-            phone_number,
-            CallConfig(session_id=session.id, region="ap-southeast-2"),
-        )
-
-        stt = DeepgramSTTService(api_key=self.config.deepgram_api_key)
-        llm = OpenAILLMService(api_key=self.config.openai_api_key, model="gpt-4o")
-        tts = ElevenLabsTTSService(
-            api_key=self.config.elevenlabs_api_key,
-            voice_id=self.config.elevenlabs_voice_id,
-        )
-
-        interjection_monitor = InterjectionMonitor()
-        
-        messages = []
-        context = OpenAILLMContext(messages=messages)
-        context_aggregator = llm.create_context_aggregator(context)
-
-        pipeline = Pipeline([
-            connection.transport.input(),
-            stt,
-            interjection_monitor,
-            context_aggregator.user(),
-            llm,
-            tts,
-            connection.transport.output(),
-            context_aggregator.assistant(),
-        ])
-
-        task = PipelineTask(
-            pipeline,
-            params=PipelineParams(allow_interruptions=True),
-        )
-
-        flow_manager = FlowManager(
-            task=task,
-            llm=llm,
-            tts=tts,
-            flow_config=flow_config,
-            context=context,
-        )
-
-        # Register event handlers
-        @connection.transport.event_handler("on_participant_joined")
-        async def on_joined(transport, participant):
-            await flow_manager.initialize()
-
-        @connection.transport.event_handler("on_call_state_updated")
-        async def on_call_state(transport, state):
-            if state == "left":
-                await self._on_call_ended(session, context)
-
-        runner = PipelineRunner()
-        await runner.run(task)
-
-        return session.id
+@dataclass
+class TranscriptTurn:
+    timestamp: float              # Unix timestamp when turn started
+    speaker: Literal["candidate", "bot"]
+    text: str                     # Exact text spoken
+    phase: str                    # Which state machine phase: "introduction", "skill_discovery", etc.
+    vad_confidence: float | None  # Voice activity detection confidence (0.0–1.0)
 ```
 
-### 1.5 FastAPI Routes
+**Storage schema (PostgreSQL):**
 
-**File:** `apps/voice-engine/src/api/routes.py`
+```sql
+-- Extend assessment_sessions to include transcript data
+ALTER TABLE assessment_sessions ADD COLUMN (
+    transcript_json JSONB,  -- Array of TranscriptTurn objects
+    recording_url TEXT,     -- URL to LiveKit recording (MP3)
+    recording_duration_seconds INTEGER,
+    identified_skills JSONB  -- Array from skill_discovery phase
+);
+
+-- transcript_json structure:
+{
+  "turns": [
+    {
+      "timestamp": 1714344000.123,
+      "speaker": "bot",
+      "text": "Hello, I'm Noa...",
+      "phase": "introduction",
+      "vad_confidence": null
+    },
+    {
+      "timestamp": 1714344005.456,
+      "speaker": "candidate",
+      "text": "Hi, yes I consent...",
+      "phase": "introduction",
+      "vad_confidence": 0.95
+    },
+    ...
+  ]
+}
+```
+
+**Responsibility:**
+- Accumulate transcript turns as the bot and candidate speak.
+- Tag each turn with the current flow phase (read from Pipecat Flows state).
+- Save full transcript to `assessment_sessions.transcript_json` when call ends.
+- Retrieve LiveKit recording metadata from the session and store `recording_url` and `recording_duration_seconds`.
+
+### 1.3 Pipecat Pipeline Integration
+
+**File:** `apps/voice-engine/src/flows/assessment_pipeline.py` (modify existing)
+
+The Pipecat pipeline wires STT, LLM, TTS, and LiveKit transport. The flow state is passed to `TranscriptRecorder` so each turn is tagged with the current phase.
+
+**Pipeline structure (pseudo):**
 
 ```python
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-import re
-
-router = APIRouter(prefix="/api/v1")
-
-class TriggerRequest(BaseModel):
-    candidate_id: str  # Candidate email (from POST /assessment/candidate)
-    phone_number: str  # International format accepted; normalized to +format by Phase 2 transport
-
-class TriggerResponse(BaseModel):
-    session_id: str
-    status: str
-
-@router.post("/assessment/trigger", response_model=TriggerResponse)
-async def trigger_assessment(request: TriggerRequest):
-    """Trigger an outbound assessment call. Phone numbers are normalized to +format."""
-    session_id = await orchestrator.run_assessment(
-        phone_number=request.phone_number,
-        candidate_id=request.candidate_id,
-    )
-    return TriggerResponse(session_id=session_id, status="dialling")
-
-@router.get("/assessment/{session_id}/status")
-async def get_assessment_status(session_id: str):
-    """Get the current status of an assessment session."""
-    session = await persistence.get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"session_id": session.id, "status": session.status}
+pipeline = Pipeline([
+    livekit_transport.input(),       # Audio from candidate
+    stt_processor,                   # STT (already working per Phase 3)
+    context_aggregator.user(),       # Accumulate user utterances
+    llm_processor,                   # LLM with flow management
+    tts_processor,                   # TTS (already working per Phase 3)
+    livekit_transport.output(),      # Audio to candidate
+    context_aggregator.assistant(),  # Accumulate bot utterances
+])
 ```
+
+**Key changes from Phase 3:**
+1. Replace "basic greeting + ack" with `SFIAFlowController` (Pipecat Flows).
+2. Inject `TranscriptRecorder` as a side-effect processor to tag turns with phase.
+3. At call end, call `transcript_recorder.finalize()` to save to database.
+
+### 1.4 Augmentation to POST /api/v1/assessment/trigger
+
+**File:** `apps/voice-engine/src/api/routes.py` (augment existing)
+
+The trigger endpoint already exists and works for both `dialing_method: "browser"` (LiveKit) and `dialing_method: "daily"` (PSTN). Phase 4 additions:
+
+- **No new fields required** in the request (existing `candidate_id`, `phone_number`, `dialing_method` are sufficient).
+- **Response augmentation**: The trigger response's `status` field may now be `"speech_phase: introduction"` to reflect the flow state (optional; currently just `"dialling"`).
+- **Status endpoint augmentation** (`GET /api/v1/assessment/{session_id}/status`):
+  - Add optional `transcript_snippet` field (first 500 chars of assembled transcript for debugging).
+  - Add optional `livekit_recording_url` field (populated when recording is ready).
+  - These are **optional** for backward compatibility; default to `null` if not available yet.
 
 ---
 
-## 2. Event Handling
+## 2. Pipecat Event Flow
 
-### UserStartedSpeaking / UserStoppedSpeaking
+### VAD (Voice Activity Detection) Events
 
-These Pipecat events are critical for:
-1. **Interjection timer**: Reset on `UserStartedSpeaking`.
-2. **Turn-taking**: The pipeline's VAD (Voice Activity Detection) manages when the bot should speak.
-3. **Transcript segmentation**: Mark speaker turns for the transcript.
+Pipecat fires `UserStartedSpeaking` and `UserStoppedSpeaking` events as the candidate speaks. These drive:
 
-### Call Recording & Transcript
+1. **Transcript turn detection**: When `UserStartedSpeaking` fires, mark the start of a candidate turn (timestamp, phase).
+2. **Turn-taking**: VAD/LLM manages when the bot should yield and listen.
+3. **Context accumulation**: STT text is accumulated in Pipecat's context for the LLM.
 
-- Daily's built-in recording is enabled at room creation.
-- Post-call, the recording URL is retrieved via Daily's REST API.
-- Transcript segments are accumulated during the call via Pipecat's context aggregator.
-- Full transcript is persisted to PostgreSQL when the call ends.
+### Flow State Transitions
+
+Pipecat Flows drive state transitions via LLM function calls:
+
+1. LLM reads the current flow state ("introduction", "skill_discovery", etc.).
+2. Based on conversation context, LLM calls a transition function (e.g., `skills_identified()`).
+3. Pipecat Flows transitions to the next state.
+4. `TranscriptRecorder` reads the new state and tags subsequent turns accordingly.
+
+### LiveKit Recording
+
+- LiveKit (self-hosted) records the entire call to local/cloud storage.
+- At call end, LiveKit provides a recording metadata object with `recording_url` and `duration`.
+- Phase 4 persists `recording_url` to `assessment_sessions.recording_url` for SME review.
+- **Note**: The actual MP3 encoding/egress is handled by LiveKit; we just store the URL.
 
 ---
 
 ## 3. Acceptance Criteria
 
-- [ ] `DailyVoiceTransport` adapter creates rooms in `ap-southeast-2` with recording enabled.
-- [ ] `DailyVoiceTransport` can dial an Australian +61 number.
-- [ ] `SFIAFlowController` implements all 5 states (Introduction, SkillDiscovery, EvidenceGathering, Summary, Closing).
-- [ ] State transitions are driven by LLM function calls via Pipecat Flows.
-- [ ] `InterjectionMonitor` fires after 60 seconds of speech without a claim.
-- [ ] Interjection fires at most once per call.
-- [ ] `InterjectionMonitor` resets timer on `UserStartedSpeaking`.
-- [ ] Pipeline is fully assembled with STT → LLM → TTS chain.
-- [ ] `/api/v1/assessment/trigger` endpoint accepts phone number and candidate ID.
-- [ ] `/api/v1/assessment/{session_id}/status` returns session status.
-- [ ] Full transcript is saved to Persistence port when call ends.
-- [ ] Call recording URL is captured and stored.
-- [ ] Unit tests exist for `InterjectionMonitor` (timer logic, single-fire guard).
-- [ ] Unit tests exist for flow state transitions (mocked LLM).
+**Flow State Machine:**
+- [ ] `SFIAFlowController` implements all 5 states: Introduction, SkillDiscovery, EvidenceGathering, Summary, Closing.
+- [ ] State transitions are driven by LLM function calls (e.g., `consent_given()`, `skills_identified()`, `evidence_complete()`, `summary_complete()`).
+- [ ] The flow correctly transitions from Introduction → SkillDiscovery when consent is given.
+- [ ] The flow transitions to Closing if consent is declined.
+- [ ] SkillDiscovery asks the candidate about their role and responsibilities (no SFIA codes mentioned).
+- [ ] EvidenceGathering asks for specific examples per identified skill (focus on autonomy, influence, complexity, knowledge).
 
-## 4. Dependencies
+**Transcript Persistence:**
+- [ ] `TranscriptRecorder` accumulates speaker turns with timestamp, speaker, text, and phase label.
+- [ ] Each turn includes VAD confidence (where available from STT provider).
+- [ ] Full transcript is persisted to `assessment_sessions.transcript_json` (JSONB) at call end.
+- [ ] Transcript schema matches the structure defined in section 1.2.
 
-- **Phase 1**: Monorepo structure, port interfaces, domain models.
-- **Phase 2**: Working DailyTransport adapter, CallManager, basic voice infrastructure.
-- **External**: Daily API key, STT provider (Deepgram/Azure/Google), LLM API key (OpenAI/Anthropic), TTS provider (ElevenLabs/Google/Azure).
+**LiveKit Recording:**
+- [ ] LiveKit recording URL is captured from the call session.
+- [ ] Recording URL and duration are persisted to `assessment_sessions.recording_url` and `assessment_sessions.recording_duration_seconds`.
 
-## 5. Risks
+**API Endpoints:**
+- [ ] `POST /api/v1/assessment/trigger` accepts `candidate_id`, `phone_number` (or null for browser), and `dialing_method: "browser"`.
+- [ ] Trigger endpoint returns `session_id` and initial `status: "dialling"`.
+- [ ] `GET /api/v1/assessment/{session_id}/status` returns call status and optional `transcript_snippet` and `livekit_recording_url`.
+- [ ] Status endpoint works throughout the call (not just after completion).
+
+**Testing:**
+- [ ] Unit tests for flow state transitions with mocked LLM.
+- [ ] Unit tests for `TranscriptRecorder` (accumulation, serialization, phase tagging).
+- [ ] Integration test: Full call with 5 states completes and transcript is saved.
+- [ ] Integration test: LiveKit recording metadata is captured and persisted.
+
+## 4. Prerequisites & Dependencies
+
+**Internal:**
+- Phase 1: Monorepo structure, IPersistence and IVoiceTransport ports.
+- Phase 2: CallManager, basic voice infrastructure, call lifecycle management.
+- Phase 3: LiveKit transport (verified working), STT & TTS providers (tested).
+
+**External:**
+- ✅ **STT Provider** (Deepgram, Google Cloud Speech, or equivalent): Tested and working.
+- ✅ **TTS Provider** (ElevenLabs, Kokoro, or equivalent): Tested and working.
+- ✅ **LLM Provider** (Anthropic Claude, OpenAI GPT-4, or equivalent): Available (soft-required; basic fallback ack in Phase 3 if absent).
+- ✅ **LiveKit** (self-hosted): Recording enabled, accessible from voice engine.
+
+**Database schema changes:**
+- Phase 1 established `assessment_sessions` table; Phase 4 adds columns `transcript_json`, `recording_url`, `recording_duration_seconds`, `identified_skills`.
+- No Prisma migration required if schema is flexible (JSONB); otherwise, create a migration.
+
+## 5. Risks & Mitigations
 
 | Risk | Mitigation |
 |------|------------|
-| Daily PSTN dial-out latency for AU | Test with real AU numbers early; Daily has Sydney PoP |
-| Pipecat Flows API changes | Pin Pipecat version; review changelog before upgrades |
-| STT accuracy for Australian accents | Evaluate Deepgram vs Google Cloud Speech for AU English |
-| Interjection timing feels unnatural | Tune the 60-second threshold; consider speech pace analysis |
+| Pipecat Flows API changes between versions | Pin Pipecat version; review release notes before upgrading. |
+| LLM function call parsing fails or returns invalid state names | Add fallback handlers; log invalid calls and transition to error state with retry. |
+| VAD (voice activity detection) misses short utterances | Use configured VAD confidence threshold; test with representative candidate voices. |
+| LiveKit recording egress is slow or fails silently | Monitor recording callbacks in LiveKit transport; log all recording events; set a 5-minute timeout for recording availability. |
+| Transcript JSONB bloat for long calls (60+ min) | Compress transcript on disk; consider archival to S3 for calls >30 min. |
+| Phase state transitions are ambiguous from LLM output | Add explicit function signatures with required parameters; validate before transition; log edge cases for manual review. |
+
+## 6. Implementation Sequence
+
+Phase 4 work should follow this order:
+
+1. **Design & schema** (parallel): Define `TranscriptTurn` schema and `assessment_sessions` schema additions; finalize SFIA flow config (system prompts, function names).
+2. **TranscriptRecorder** (first): Implement turn accumulation and JSONB serialization; test with mocked VAD/TTS events.
+3. **SFIAFlowController** (second): Implement Pipecat Flows config; test with mocked LLM (returns hardcoded functions in order).
+4. **LiveKit recording integration** (third): Wire call-end callback to capture recording URL; persist to database.
+5. **Endpoint augmentation** (fourth): Add transcript and recording fields to status endpoint response.
+6. **End-to-end testing** (fifth): Run full call simulation; verify all 5 states execute in order, transcript is saved, recording URL is captured.
+7. **Version bump** (at completion): Bump voice engine version from 0.4.2 to 0.5.0 using `/bump-version` (creates Prisma migration for schema columns).
+
+## 7. Definition of Done
+
+Phase 4 is complete when:
+
+- [ ] All acceptance criteria (section 3) are met.
+- [ ] All 5 states (Introduction, SkillDiscovery, EvidenceGathering, Summary, Closing) transition correctly.
+- [ ] A full 5-minute test call completes with:
+  - [ ] Transcript saved to `assessment_sessions.transcript_json` with ≥10 speaker turns, each tagged with phase.
+  - [ ] Recording URL saved to `assessment_sessions.recording_url`.
+  - [ ] Status endpoint returns transcript snippet and recording URL.
+- [ ] No LLM/external provider logs show errors or retries (beyond initial provider checks).
+- [ ] All unit and integration tests pass.
+- [ ] Version bumped to 0.5.0 and Prisma migration created (if schema columns added).
+- [ ] CHANGELOG.md updated with Phase 4 summary.
+- [ ] Phase 4 document moved from `to-be-implemented/` to `implemented/v0.5.0/` with completion notes.
+
+## 8. Revision History
+
+| Date | Author | Change |
+|------|--------|--------|
+| 2026-04-28 | Doc Refiner | Refine scope: remove interjection, defer RAG to Phase 5, focus on 5-state flow + transcript persistence. Clarify LiveKit recording strategy. Add implementation sequence and Definition of Done. |
