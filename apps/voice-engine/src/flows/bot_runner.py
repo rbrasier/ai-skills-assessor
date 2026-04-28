@@ -187,7 +187,7 @@ class BasicCallBot:
                     samples = _array.array("h", frame.audio)
                     if samples:
                         rms = _math.sqrt(sum(s * s for s in samples) / len(samples))
-                        logger.info("RMSLogger: len=%d rms=%.1f", len(samples), rms)
+                        # logger.info("RMSLogger: len=%d rms=%.1f", len(samples), rms)
                 await self.push_frame(frame, direction)
 
         pipeline = Pipeline(

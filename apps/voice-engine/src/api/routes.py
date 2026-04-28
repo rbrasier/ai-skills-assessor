@@ -380,7 +380,7 @@ async def livekit_join_page(
 
         // On-screen event log — visible inside the iframe without DevTools
         function diag(msg) {{
-            console.log('[DIAG]', msg);
+            // console.log('[DIAG]', msg);
             const el = document.getElementById('diag');
             if (el) {{
                 const line = document.createElement('div');
