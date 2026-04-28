@@ -340,14 +340,7 @@ async def livekit_join_page(
             display: none;
         }}
         #diag {{
-            margin-top: 6px;
-            font-size: 10px;
-            color: #666;
-            font-family: monospace;
-            max-height: 120px;
-            overflow-y: auto;
-            width: 100%;
-            text-align: left;
+            display: none;
         }}
         .error {{
             color: #c0392b;
@@ -365,13 +358,6 @@ async def livekit_join_page(
     <button id="join-btn">Join Interview</button>
     <div id="status">Loading…</div>
     <div id="diag"></div>
-    <div style="margin-top:6px;text-align:center">
-        <a id="popout" href="#" target="_blank"
-           style="font-size:10px;color:#888;text-decoration:underline">
-            open in new tab (audio debug)
-        </a>
-    </div>
-    <script>document.getElementById('popout').href = location.href;</script>
 
     <script>
         const url = '{url}';
