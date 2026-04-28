@@ -38,6 +38,7 @@ class _RecordingHarness(ScriptedConversationMixin):
             ack_timeout_seconds=ack_timeout_seconds,
             reply_timeout_seconds=reply_timeout_seconds,
             reply_pause_seconds=reply_pause_seconds,
+            post_speech_delay_seconds=0.0,  # _emit_tts is a no-op; skip real-time wait
         )
         self.spoken: list[str] = []
         self.ended = False
@@ -87,7 +88,10 @@ async def test_full_sequence_with_llm_ack() -> None:
 
     await harness._start_conversation()
     assert harness._state == ConversationState.WAITING_FOR_REPLY
-    assert harness.spoken == [harness._script.greeting, harness._script.question]
+    # Greeting and question are combined into one TTS call for natural prosody.
+    assert len(harness.spoken) == 1
+    assert harness._script.greeting in harness.spoken[0]
+    assert harness._script.question in harness.spoken[0]
 
     harness._buffer_reply("I lead the platform team and own our ingestion.")
     # Wait for debounce + LLM + goodbye.
@@ -102,8 +106,8 @@ async def test_full_sequence_with_llm_ack() -> None:
     assert harness._state == ConversationState.ENDING
     assert harness.ended is True
     assert harness.end_callback_fired is True
-    assert harness.spoken[2] == "Interesting — the platform team handles a lot."
-    assert harness.spoken[3] == harness._script.goodbye
+    assert harness.spoken[1] == "Interesting — the platform team handles a lot."
+    assert harness.spoken[2] == harness._script.goodbye
     assert len(llm.seen) == 1
 
 
@@ -115,7 +119,7 @@ async def test_llm_failure_falls_back_to_safe_ack() -> None:
     assert harness._reply_waiter is not None
     await harness._reply_waiter
 
-    assert harness.spoken[2] == harness._script.fallback_ack()
+    assert harness.spoken[1] == harness._script.fallback_ack()
     assert harness.ended is True
 
 
@@ -152,5 +156,5 @@ async def test_without_llm_uses_fallback() -> None:
     assert harness._reply_waiter is not None
     await harness._reply_waiter
 
-    assert harness.spoken[2] == harness._script.fallback_ack()
+    assert harness.spoken[1] == harness._script.fallback_ack()
     assert harness.ended is True

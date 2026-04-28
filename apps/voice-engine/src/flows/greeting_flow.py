@@ -26,10 +26,10 @@ BOT_CALLER_ID = "Resonant · Noa"
 
 GREETING_INTRO = (
     f"Hi, I'm {BOT_NAME} calling on behalf of Resonant about your "
-    "skills assessment. Is now still a good time to chat for a minute?"
+    "skills assessment."
 )
 QUESTION_PROMPT = (
-    "Great. In one sentence, what's your current role and what do you "
+    "In one sentence, what's your current role and what do you "
     "spend most of your time on day to day?"
 )
 GOODBYE = (
@@ -106,7 +106,7 @@ def build_script(
         org_name=org_name,
         greeting=(
             f"Hi, I'm {bot_name} calling on behalf of {org_name} about your "
-            "skills assessment. Is now still a good time to chat for a minute?"
+            "skills assessment."
         ),
     )
 

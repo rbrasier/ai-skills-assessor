@@ -7,13 +7,16 @@ Runs the :class:`BasicCallScript` against a Pipecat pipeline:
 State machine inside :class:`ScriptedConversation`:
 
     IDLE ─(StartFrame)─► SPEAKING_GREETING
-    SPEAKING_GREETING ─(TTS finishes)─► SPEAKING_QUESTION
-    SPEAKING_QUESTION ─(TTS finishes)─► WAITING_FOR_REPLY
+    SPEAKING_GREETING ─(combined greeting+question TTS enqueued)─► WAITING_FOR_REPLY
     WAITING_FOR_REPLY ─(TranscriptionFrame)─► GENERATING_ACK
     GENERATING_ACK ─(LLM returns)─► SPEAKING_ACK
-    SPEAKING_ACK ─(TTS finishes)─► SPEAKING_GOODBYE
-    SPEAKING_GOODBYE ─(TTS finishes)─► ENDING
+    SPEAKING_ACK ─(TTS enqueued)─► SPEAKING_GOODBYE
+    SPEAKING_GOODBYE ─(TTS enqueued, sleep for audio)─► ENDING
     ENDING → emit EndFrame → pipeline drains → transport.hangup()
+
+Note: SPEAKING_QUESTION state exists in the enum for backwards compatibility
+but is no longer visited in the flow — greeting and question are emitted as
+a single TTS call.
 
 Pipecat is imported lazily so the lean CI image still loads the
 module. Tests that want to cover the state machine can import
@@ -64,6 +67,7 @@ class ScriptedConversationMixin:
         reply_timeout_seconds: float,
         reply_pause_seconds: float,
         wait_for_participant: bool = False,
+        post_speech_delay_seconds: float | None = None,
     ) -> None:
         self._state: ConversationState = ConversationState.IDLE
         self._script = script
@@ -75,6 +79,9 @@ class ScriptedConversationMixin:
         self._reply_buffer: list[str] = []
         self._reply_waiter: asyncio.Task[None] | None = None
         self._ended = False
+        # None → estimate delay from word count at runtime; explicit float → use that value.
+        # Set to 0.0 in test harnesses where _emit_tts is a no-op.
+        self._post_speech_delay: float | None = post_speech_delay_seconds
         # When True, _start_conversation waits until on_participant_joined() is called
         self._participant_ready: asyncio.Event | None = (
             asyncio.Event() if wait_for_participant else None
@@ -111,10 +118,11 @@ class ScriptedConversationMixin:
             logger.info("ScriptedConversation: participant joined — starting conversation")
         self._state = ConversationState.SPEAKING_GREETING
         logger.info("→ TTS [greeting]: %s", self._script.greeting[:120])
-        await self._emit_tts(self._script.greeting)
-        self._state = ConversationState.SPEAKING_QUESTION
         logger.info("→ TTS [question]: %s", self._script.question[:120])
-        await self._emit_tts(self._script.question)
+        # Emit greeting and question as one TTS call so the speech engine
+        # produces natural prosody across the full intro without a jarring
+        # gap between the two utterances.
+        await self._emit_tts(f"{self._script.greeting} {self._script.question}")
         self._state = ConversationState.WAITING_FOR_REPLY
         asyncio.create_task(self._reply_timeout_guard())
 
@@ -164,7 +172,30 @@ class ScriptedConversationMixin:
         logger.info("→ TTS [goodbye]: %s", self._script.goodbye[:120])
         await self._emit_tts(self._script.goodbye)
         self._state = ConversationState.ENDING
+        # push_frame(TTSSpeakFrame) returns immediately — TTS synthesis and
+        # audio streaming happen asynchronously downstream. Sleep for the
+        # estimated playback duration before sending EndFrame so the call
+        # does not disconnect while the bot is still speaking.
+        await self._sleep_for_speech(f"{ack} {self._script.goodbye}")
         await self._end()
+
+    async def _sleep_for_speech(self, text: str) -> None:
+        """Sleep long enough for the TTS pipeline to finish speaking *text*.
+
+        If ``post_speech_delay_seconds`` was set at construction time that
+        value is used directly (pass ``0.0`` in test harnesses). Otherwise
+        the delay is estimated from the word count: approx. 130 wpm + 5 s
+        headroom for TTS API latency and WebRTC network buffer.
+        """
+        if self._post_speech_delay is not None:
+            await asyncio.sleep(self._post_speech_delay)
+            return
+        words = len(text.split())
+        seconds = (words / 130.0) * 60.0 + 5.0
+        logger.debug(
+            "Waiting %.1fs for TTS/audio to complete (%d words)", seconds, words
+        )
+        await asyncio.sleep(seconds)
 
     async def _generate_ack(self, reply: str) -> str:
         if not reply or self._llm is None:
@@ -213,6 +244,7 @@ def build_scripted_conversation(
     reply_timeout_seconds: float = 90.0,
     reply_pause_seconds: float = 1.5,
     wait_for_participant: bool = False,
+    post_speech_delay_seconds: float | None = None,
 ) -> Any:
     """Instantiate the ScriptedConversation Pipecat FrameProcessor."""
 
@@ -246,6 +278,7 @@ def build_scripted_conversation(
                 reply_timeout_seconds=reply_timeout_seconds,
                 reply_pause_seconds=reply_pause_seconds,
                 wait_for_participant=wait_for_participant,
+                post_speech_delay_seconds=post_speech_delay_seconds,
             )
 
         async def process_frame(
