@@ -456,6 +456,20 @@ async def livekit_join_page(
 
                 const room = new window.LivekitClient.Room();
 
+                // Unlock LiveKit's internal AudioContext NOW, while we are still
+                // inside (or close to) the user-gesture call stack.  Calling this
+                // BEFORE room.connect() means the AudioContext is already running
+                // when trackSubscribed fires during connect(), so audio elements
+                // created by track.attach() start playing immediately.
+                try {{
+                    if (typeof room.startAudio === 'function') {{
+                        await room.startAudio();
+                        diag('startAudio() ok (pre-connect)');
+                    }}
+                }} catch (e) {{
+                    diag('startAudio() pre-connect error: ' + e.message);
+                }}
+
                 room.on('disconnected', async () => {{
                     diag('room disconnected — ending call');
                     document.getElementById('status').textContent = 'Call ended.';
@@ -488,28 +502,22 @@ async def livekit_join_page(
                         + ' readyState=' + (mst ? mst.readyState : '?')
                         + ' muted=' + (mst ? mst.muted : '?'));
 
-                    // Direct MediaStream → <audio> approach.
-                    // Do NOT use createMediaElementSource: that routes audio
-                    // through window._audioCtx (our test-tone context), which
-                    // fights with LiveKit's own internal AudioContext and
-                    // produces silence for remote WebRTC tracks.
-                    const stream = new MediaStream([mst]);
-                    const el = document.createElement('audio');
-                    el.srcObject = stream;
+                    // track.attach() creates an <audio> element managed by
+                    // LiveKit's SDK and tied to its internal AudioContext.
+                    // room.startAudio() was called pre-connect, so the
+                    // AudioContext is already running when this fires.
+                    const el = track.attach();
                     el.volume = 1.0;
-                    el.autoplay = true;
                     document.body.appendChild(el);
 
-                    const tryPlay = () =>
-                        el.play()
-                            .then(() => diag('play() ok'))
-                            .catch(e => diag('play() err: ' + e.message));
-                    tryPlay();
+                    el.play()
+                        .then(() => diag('play() ok'))
+                        .catch(e => diag('play() err: ' + e.message));
 
                     if (mst) {{
                         mst.addEventListener('unmute', () => {{
                             diag('* UNMUTED — server sending audio');
-                            tryPlay();
+                            el.play().catch(() => {{}});
                         }});
                         mst.addEventListener('mute', () =>
                             diag('* MUTED — server stopped'));
@@ -573,15 +581,12 @@ async def livekit_join_page(
                     }});
                 }});
 
-                // Ask LiveKit SDK to resume its internal AudioContext too
+                // Re-call startAudio() post-connect — handles the case where
+                // the bot joined after we connected and startAudio() was called
+                // before any tracks existed (rare but possible).
                 try {{
-                    if (typeof room.startAudio === 'function') {{
-                        await room.startAudio();
-                        diag('startAudio() completed');
-                    }}
-                }} catch (e) {{
-                    diag('startAudio() ERROR: ' + e.message);
-                }}
+                    if (typeof room.startAudio === 'function') await room.startAudio();
+                }} catch (e) {{ /* ignore */ }}
 
                 document.getElementById('status').textContent = 'Connected • Microphone active';
 

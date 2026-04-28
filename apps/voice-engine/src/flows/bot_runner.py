@@ -166,14 +166,24 @@ class BasicCallBot:
         import math as _math
 
         from pipecat.frames.frames import AudioRawFrame
-        from pipecat.processors.frame_processor import FrameProcessor as _FP
+        from pipecat.processors.frame_processor import FrameDirection, FrameProcessor as _FP
 
         class _RMSLogger(_FP):
-            """Log RMS amplitude of each outgoing audio frame to confirm non-silent PCM."""
+            """Log RMS amplitude of outgoing TTS audio frames to confirm non-silent PCM.
+
+            Only logs DOWNSTREAM frames (bot TTS output headed to the transport).
+            Microphone input audio also flows downstream through the Pipecat
+            pipeline past the STT service; we skip those to avoid log noise.
+            All frames are pushed unchanged regardless of direction.
+            """
 
             async def process_frame(self, frame: Any, direction: Any) -> None:
                 await super().process_frame(frame, direction)
-                if isinstance(frame, AudioRawFrame) and frame.audio:
+                if (
+                    direction is FrameDirection.DOWNSTREAM
+                    and isinstance(frame, AudioRawFrame)
+                    and frame.audio
+                ):
                     samples = _array.array("h", frame.audio)
                     if samples:
                         rms = _math.sqrt(sum(s * s for s in samples) / len(samples))
