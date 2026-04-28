@@ -672,7 +672,7 @@ async def _tts_test_kokoro(settings: Any, text: str) -> Response:
     if not base_url:
         raise HTTPException(status_code=503, detail="KOKORO_TTS_URL not configured")
 
-    voice: str = getattr(settings, "kokoro_voice", "af_bella")
+    voice: str = getattr(settings, "kokoro_voice", "af_sky")
     sample_rate: int = getattr(settings, "kokoro_sample_rate", 24000)
     speech_url = base_url.rstrip("/") + "/v1/audio/speech"
 
