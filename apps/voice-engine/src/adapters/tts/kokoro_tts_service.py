@@ -44,7 +44,7 @@ class KokoroTTSService:
 
 def _build_processor(url: str, voice: str, sample_rate: int) -> Any:
     """Construct and return the live Pipecat FrameProcessor."""
-    from pipecat.frames.frames import AudioRawFrame, EndFrame, Frame, StartFrame
+    from pipecat.frames.frames import AudioRawFrame, EndFrame, Frame, StartFrame, TTSAudioRawFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
     # TTSSpeakFrame is the canonical input; fall back to TextFrame in very old
@@ -94,7 +94,7 @@ def _build_processor(url: str, voice: str, sample_rate: int) -> Any:
                         async for chunk in resp.aiter_bytes(_CHUNK_BYTES):
                             if chunk:
                                 await self.push_frame(
-                                    AudioRawFrame(
+                                    TTSAudioRawFrame(
                                         audio=chunk,
                                         num_channels=1,
                                         sample_rate=sample_rate,
