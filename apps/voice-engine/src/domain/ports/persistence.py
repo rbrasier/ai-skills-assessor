@@ -104,3 +104,17 @@ class IPersistence(ABC):
         this method, but the port shape is preserved for Phase 3+.
         """
         ...
+
+    @abstractmethod
+    async def merge_session_metadata(
+        self,
+        session_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Merge additional metadata into a session without changing its status.
+
+        Phase 4 uses this to store transcript_json, identified_skills, and
+        recording_duration_seconds in the JSONB metadata column without
+        overwriting the session's current status.
+        """
+        ...

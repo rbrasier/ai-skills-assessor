@@ -295,5 +295,22 @@ class PostgresPersistence(IPersistence):
         # transcripts table in a later phase.
         return None
 
+    async def merge_session_metadata(
+        self,
+        session_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET "metadata" = "metadata" || $2::jsonb
+                WHERE "id" = $1
+                """,
+                session_id,
+                json.dumps(metadata),
+            )
+
 
 __all__ = ["PostgresPersistence"]

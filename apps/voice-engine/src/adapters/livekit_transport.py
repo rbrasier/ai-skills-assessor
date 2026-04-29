@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class _ActiveCall:
     connection: CallConnection
-    bot: Any = None  # BasicCallBot
+    bot: Any = None  # BasicCallBot or SFIACallBot
 
 
 def _strip_trailing_slash(url: str) -> str:
@@ -89,10 +89,12 @@ class LiveKitVoiceTransport(IVoiceTransport):
         settings: Settings | None = None,
         listener: ICallLifecycleListener | None = None,
         llm_provider: ILLMProvider | None = None,
+        persistence: Any = None,
     ) -> None:
         self._settings = settings
         self._listener = listener
         self._llm_provider = llm_provider
+        self._persistence = persistence  # required for SFIACallBot transcript persistence
         self._active: dict[str, _ActiveCall] = {}
         self._lock = asyncio.Lock()
 
@@ -104,6 +106,9 @@ class LiveKitVoiceTransport(IVoiceTransport):
 
     def set_settings(self, settings: Settings) -> None:
         self._settings = settings
+
+    def set_persistence(self, persistence: Any) -> None:
+        self._persistence = persistence
 
     async def close(self) -> None:
         async with self._lock:
@@ -172,6 +177,33 @@ class LiveKitVoiceTransport(IVoiceTransport):
                     reason="missing_provider_credentials",
                 )
             )
+        elif settings.enable_sfia_flow:
+            from src.flows.bot_runner import SFIACallBot
+
+            bot = SFIACallBot(
+                session_id=config.session_id,
+                phone_number=normalised,
+                room_url=settings.livekit_url,
+                room_token=bot_token,
+                room_name=room_name,
+                settings=settings,
+                listener=self._listener,
+                persistence=self._persistence,
+                transport_mode="livekit",
+            )
+            try:
+                await bot.start()
+            except Exception as exc:  # pragma: no cover
+                logger.exception(
+                    "SFIACallBot.start failed for session %s", config.session_id
+                )
+                asyncio.create_task(
+                    self._listener.on_call_failed(
+                        config.session_id,
+                        reason=f"bot_start_failed: {exc}",
+                    )
+                )
+                bot = None
         else:
             from src.flows.bot_runner import BasicCallBot
 
@@ -234,6 +266,41 @@ class LiveKitVoiceTransport(IVoiceTransport):
         return max(0.0, (ended - started).total_seconds())
 
     async def get_recording_url(self, session_id: str) -> str | None:
+        """Return the LiveKit egress recording URL for a completed session.
+
+        Queries the LiveKit Egress API using the room name derived from
+        ``session_id``. Returns ``None`` if no recording exists or if the
+        LiveKit API keys are not configured.
+        """
+        settings = self._settings or get_settings()
+        if not (settings.livekit_api_key and settings.livekit_api_secret and settings.livekit_url):
+            return None
+
+        room_name = f"as-{session_id.replace('-', '')[:32]}"
+        try:
+            livekit_api = api.LiveKitAPI(
+                settings.livekit_url,
+                settings.livekit_api_key,
+                settings.livekit_api_secret,
+            )
+            egress_list = await livekit_api.egress.list_egress(
+                api.ListEgressRequest(room_name=room_name)
+            )
+            await livekit_api.aclose()
+
+            for egress in egress_list.items:
+                file_results = getattr(egress, "file", None) or []
+                if not isinstance(file_results, list):
+                    file_results = [file_results] if file_results else []
+                for file_result in file_results:
+                    location = getattr(file_result, "location", None)
+                    if location:
+                        return str(location)
+        except Exception:
+            logger.debug(
+                "LiveKitVoiceTransport: could not retrieve recording URL for %s",
+                session_id,
+            )
         return None
 
 

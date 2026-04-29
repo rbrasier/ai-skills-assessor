@@ -163,10 +163,10 @@ class BasicCallBot:
         out_sr = 24000 if self._transport_mode == "livekit" else 8000
 
         import array as _array
-        import math as _math
 
         from pipecat.frames.frames import AudioRawFrame
-        from pipecat.processors.frame_processor import FrameDirection, FrameProcessor as _FP
+        from pipecat.processors.frame_processor import FrameDirection
+        from pipecat.processors.frame_processor import FrameProcessor as _FP
 
         class _RMSLogger(_FP):
             """Log RMS amplitude of outgoing TTS audio frames to confirm non-silent PCM.
@@ -186,8 +186,7 @@ class BasicCallBot:
                 ):
                     samples = _array.array("h", frame.audio)
                     if samples:
-                        rms = _math.sqrt(sum(s * s for s in samples) / len(samples))
-                        # logger.info("RMSLogger: len=%d rms=%.1f", len(samples), rms)
+                        pass  # logger.info("RMSLogger: len=%d rms=%.1f", len(samples), _math.sqrt(sum(s * s for s in samples) / len(samples)))
                 await self.push_frame(frame, direction)
 
         pipeline = Pipeline(
@@ -374,4 +373,264 @@ class BasicCallBot:
             self._runner_task.cancel()
 
 
-__all__ = ["BasicCallBot"]
+class SFIACallBot:
+    """Bot runner for the Phase 4 SFIA assessment flow.
+
+    Mirrors :class:`BasicCallBot`'s lifecycle API (``start`` / ``wait`` /
+    ``cancel``) but uses :func:`~src.flows.assessment_pipeline.build_sfia_pipeline`
+    instead of the scripted conversation. Requires ``ANTHROPIC_API_KEY`` and
+    the ``[voice]`` extras.
+    """
+
+    def __init__(
+        self,
+        *,
+        session_id: str,
+        phone_number: str,
+        room_url: str,
+        room_token: str,
+        room_name: str = "",
+        settings: Settings,
+        listener: ICallLifecycleListener,
+        persistence: Any,  # IPersistence — Any to avoid import cycle in lean CI
+        transport_mode: str = "livekit",
+    ) -> None:
+        self._session_id = session_id
+        self._phone_number = phone_number
+        self._room_url = room_url
+        self._room_token = room_token
+        self._room_name = room_name
+        self._settings = settings
+        self._listener = listener
+        self._persistence = persistence
+        self._transport_mode = transport_mode
+
+        self._transport: Any = None
+        self._task: Any = None
+        self._runner_task: asyncio.Task[None] | None = None
+        self._connected_notified = False
+        self._dial_attempted = False
+
+    # ─── Construction ────────────────────────────────────────────────
+
+    async def _build(self) -> Any:
+        from src.domain.services.transcript_recorder import TranscriptRecorder
+        from src.flows.assessment_pipeline import build_sfia_pipeline
+        from src.flows.sfia_flow_controller import SfiaFlowController
+
+        if self._transport_mode == "livekit":
+            from pipecat.transports.livekit.transport import (
+                LiveKitParams,
+                LiveKitTransport,
+            )
+
+            transport: Any = LiveKitTransport(
+                url=self._room_url,
+                token=self._room_token,
+                room_name=self._room_name,
+                params=LiveKitParams(
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                ),
+            )
+        else:
+            from pipecat.transports.daily.transport import (
+                DailyParams,
+                DailyTransport,
+            )
+
+            transport = DailyTransport(
+                self._room_url,
+                self._room_token,
+                f"{self._settings.bot_name} — Assessment Bot",
+                params=DailyParams(
+                    api_key=self._settings.daily_api_key,
+                    audio_in_enabled=True,
+                    audio_out_enabled=True,
+                    transcription_enabled=False,
+                ),
+            )
+
+        self._transport = transport
+
+        recorder = TranscriptRecorder()
+        self._recorder = recorder
+
+        controller = SfiaFlowController(
+            recorder=recorder,
+            on_call_ended=self._handle_bot_initiated_hangup,
+        )
+        self._controller = controller
+
+        in_sr = 16000 if self._transport_mode == "livekit" else 8000
+        out_sr = 24000 if self._transport_mode == "livekit" else 8000
+
+        task = await build_sfia_pipeline(
+            transport=transport,
+            settings=self._settings,
+            controller=controller,
+            recorder=recorder,
+            in_sample_rate=in_sr,
+            out_sample_rate=out_sr,
+        )
+        self._task = task
+
+        if self._transport_mode == "livekit":
+            self._wire_livekit_events(transport, task)
+        else:
+            self._wire_daily_events(transport, task)
+
+        return task
+
+    # ─── Transport event wiring ──────────────────────────────────────
+
+    def _wire_livekit_events(self, transport: Any, task: Any) -> None:
+        listener = self._listener
+        session_id = self._session_id
+
+        @transport.event_handler("on_first_participant_joined")
+        async def _on_first_joined(_transport: Any, participant_id: str) -> None:  # noqa: ARG001
+            if not self._connected_notified:
+                self._connected_notified = True
+                await listener.on_call_connected(session_id)
+            logger.info(
+                "SFIACallBot session_id=%s: LiveKit participant %s joined",
+                session_id,
+                participant_id,
+            )
+
+        @transport.event_handler("on_participant_left")
+        async def _on_participant_left(
+            _transport: Any, _participant: Any, _reason: Any
+        ) -> None:
+            await self._finalize_and_end()
+            await task.cancel()
+
+    def _wire_daily_events(self, transport: Any, task: Any) -> None:
+        listener = self._listener
+        session_id = self._session_id
+        phone_number = self._phone_number
+        caller_id = self._settings.daily_caller_id
+
+        @transport.event_handler("on_joined")
+        async def _on_joined(_transport: Any, _data: Any) -> None:
+            if self._dial_attempted:
+                return
+            self._dial_attempted = True
+            dial_params: dict[str, str] = {
+                "phoneNumber": phone_number,
+                "displayName": phone_number,
+            }
+            if caller_id:
+                dial_params["callerId"] = caller_id
+            try:
+                await transport.start_dialout(dial_params)
+            except Exception as exc:
+                logger.exception("SFIACallBot: start_dialout failed for %s", session_id)
+                await listener.on_call_failed(session_id, reason=f"dial_out_start_failed: {exc}")
+                await task.cancel()
+
+        @transport.event_handler("on_dialout_answered")
+        async def _on_answered(_transport: Any, _data: Any) -> None:
+            if not self._connected_notified:
+                self._connected_notified = True
+                await listener.on_call_connected(session_id)
+
+        @transport.event_handler("on_dialout_connected")
+        async def _on_connected(_transport: Any, _data: Any) -> None:
+            if not self._connected_notified:
+                self._connected_notified = True
+                await listener.on_call_connected(session_id)
+
+        @transport.event_handler("on_dialout_error")
+        async def _on_dialout_error(_transport: Any, data: Any) -> None:
+            logger.error("SFIACallBot: dialout error %s data=%s", session_id, data)
+            await listener.on_call_failed(session_id, reason=f"dialout_error: {data!s}")
+            await task.cancel()
+
+        @transport.event_handler("on_dialout_stopped")
+        async def _on_dialout_stopped(_transport: Any, _data: Any) -> None:
+            await self._finalize_and_end()
+            await task.cancel()
+
+        @transport.event_handler("on_participant_left")
+        async def _on_participant_left(
+            _transport: Any, _participant: Any, _reason: Any
+        ) -> None:
+            await self._finalize_and_end()
+            await task.cancel()
+
+    # ─── Lifecycle callbacks ─────────────────────────────────────────
+
+    async def _handle_bot_initiated_hangup(self) -> None:
+        """Called by SfiaFlowController.handle_end_call after closing state."""
+        await self._finalize_and_end()
+        if self._task is not None:
+            await self._task.cancel()
+
+    async def _finalize_and_end(self) -> None:
+        """Persist transcript then notify listener of call end."""
+        recorder = getattr(self, "_recorder", None)
+        controller = getattr(self, "_controller", None)
+
+        if recorder is not None and self._persistence is not None:
+            skills = controller.identified_skills if controller is not None else []
+            try:
+                await recorder.finalize(
+                    self._session_id,
+                    self._persistence,
+                    identified_skills=skills or None,
+                )
+            except Exception:
+                logger.exception(
+                    "SFIACallBot: transcript finalization failed for %s", self._session_id
+                )
+
+        await self._listener.on_call_ended(self._session_id)
+
+    # ─── Public lifecycle ────────────────────────────────────────────
+
+    async def start(self) -> None:
+        from pipecat.pipeline.runner import PipelineRunner
+
+        logger.info(
+            "SFIACallBot starting (session_id=%s, mode=%s)",
+            self._session_id,
+            self._transport_mode,
+        )
+        task = await self._build()
+        runner = PipelineRunner(handle_sigint=False)
+
+        async def _run() -> None:
+            try:
+                await runner.run(task)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("SFIACallBot crashed session_id=%s", self._session_id)
+                await self._listener.on_call_failed(
+                    self._session_id,
+                    reason=f"pipeline_crashed: {exc}",
+                )
+
+        self._runner_task = asyncio.create_task(_run())
+
+    async def wait(self) -> None:
+        if self._runner_task is None:
+            return
+        try:
+            await self._runner_task
+        except asyncio.CancelledError:
+            pass
+
+    async def cancel(self) -> None:
+        if self._task is not None:
+            try:
+                await self._task.cancel()
+            except Exception:
+                logger.exception("SFIACallBot.cancel task.cancel failed")
+        if self._runner_task is not None and not self._runner_task.done():
+            self._runner_task.cancel()
+
+
+__all__ = ["BasicCallBot", "SFIACallBot"]
