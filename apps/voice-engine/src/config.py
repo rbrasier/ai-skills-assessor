@@ -97,6 +97,11 @@ class Settings(BaseSettings):
     bot_name: str = "Noa"
     bot_org_name: str = "Resonant"
 
+    # ─── Phase 4: SFIA flow ───────────────────────────────────────
+    # Set to true to use the 5-state SFIAFlowController instead of the
+    # Phase 3 basic scripted conversation. Requires ANTHROPIC_API_KEY.
+    enable_sfia_flow: bool = False
+
     # ─── Runtime knobs ────────────────────────────────────────────
     log_level: str = "INFO"
     # Railway injects `PORT` at runtime; local dev + tests use 8000.

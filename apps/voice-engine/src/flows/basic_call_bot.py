@@ -282,7 +282,7 @@ def build_scripted_conversation(
         try:
             from pipecat.frames.frames import InterimTranscriptionFrame as _InterimFrame
         except ImportError:
-            _InterimFrame = None  # type: ignore[assignment,misc]
+            _InterimFrame = None
 
     except ImportError as exc:  # pragma: no cover — lean CI only
         raise RuntimeError(

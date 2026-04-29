@@ -240,6 +240,27 @@ class CallManager(ICallLifecycleListener):
 
         duration = await self._voice_transport.get_call_duration(session_id)
         meta = session.metadata or {}
+
+        # Phase 4: transcript snippet — first 500 chars of assembled turns
+        transcript_snippet: str | None = None
+        transcript_data = meta.get("transcript_json")
+        if transcript_data and isinstance(transcript_data, dict):
+            turns = transcript_data.get("turns", [])
+            if turns:
+                lines = [
+                    f"[{t.get('speaker','?')}/{t.get('phase','?')}] {t.get('text','')}"
+                    for t in turns
+                ]
+                transcript_snippet = "\n".join(lines)[:500]
+
+        # Phase 4: LiveKit recording URL — stored on session or fetched from egress API
+        livekit_recording_url: str | None = session.recording_url
+        if livekit_recording_url is None:
+            try:
+                livekit_recording_url = await self._voice_transport.get_recording_url(session_id)
+            except Exception:
+                pass
+
         return {
             "session_id": session.id,
             "status": session.status.value
@@ -254,6 +275,8 @@ class CallManager(ICallLifecycleListener):
             "livekit_room_name": meta.get("livekitRoomName"),
             "livekit_participant_token": meta.get("livekitParticipantToken"),
             "livekit_url": meta.get("livekitUrl"),
+            "transcript_snippet": transcript_snippet,
+            "livekit_recording_url": livekit_recording_url,
         }
 
     # ─── Candidate-initiated cancel ──────────────────────────────────

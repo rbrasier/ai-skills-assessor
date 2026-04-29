@@ -151,5 +151,18 @@ class InMemoryPersistence(IPersistence):
         async with self._lock:
             self._transcripts[transcript.id] = transcript
 
+    async def merge_session_metadata(
+        self,
+        session_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        async with self._lock:
+            current = self._sessions.get(session_id)
+            if current is None:
+                return
+            merged = dict(current.metadata or {})
+            merged.update(metadata)
+            self._sessions[session_id] = replace(current, metadata=merged)
+
 
 __all__ = ["InMemoryPersistence"]

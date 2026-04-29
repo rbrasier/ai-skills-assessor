@@ -199,6 +199,9 @@ class CallStatusPayload(BaseModel):
     livekit_room_name: str | None = None
     livekit_participant_token: str | None = None
     livekit_url: str | None = None
+    # Phase 4 — transcript and recording (null until call completes)
+    transcript_snippet: str | None = None
+    livekit_recording_url: str | None = None
 
 
 @router.get(
