@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1" />
+<title>Resonant — Admin Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --paper: #f4f1ea;
+  --paper-2: #ece7dc;
+  --paper-3: #e2ddd0;
+  --card: #fbf9f4;
+  --ink: #1b1a17;
+  --ink-2: #3a3833;
+  --ink-3: #6b665c;
+  --ink-4: #9a9488;
+  --line: #d6d0c2;
+  --line-2: #e8e2d5;
+  --accent: oklch(0.60 0.09 195);
+  --accent-2: oklch(0.90 0.04 195);
+  --accent-ink: oklch(0.40 0.09 195);
+  --ok: oklch(0.52 0.12 150);
+  --ok-2: color-mix(in srgb, oklch(0.52 0.12 150) 13%, var(--paper));
+  --warn: oklch(0.62 0.16 55);
+  --warn-2: oklch(0.94 0.06 65);
+  --danger: oklch(0.56 0.18 25);
+  --danger-2: color-mix(in srgb, oklch(0.56 0.18 25) 11%, var(--paper));
+  --violet: oklch(0.55 0.14 300);
+  --violet-2: color-mix(in srgb, oklch(0.55 0.14 300) 12%, var(--paper));
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); font-family: "Inter Tight", system-ui, sans-serif; -webkit-font-smoothing: antialiased; font-size: 14px; line-height: 1.45; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+.serif { font-family: "Instrument Serif", serif; font-weight: 400; font-style: italic; }
+button { font-family: inherit; font-size: inherit; cursor: pointer; border: 0; background: none; color: inherit; padding: 0; }
+a { color: inherit; text-decoration: none; }
+::selection { background: var(--accent-2); }
+
+/* ── Layout ── */
+.shell { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+
+/* ── Sidebar ── */
+.sidebar {
+  background: var(--paper);
+  border-right: 1px solid var(--line);
+  padding: 20px 14px;
+  display: flex; flex-direction: column; gap: 20px;
+  position: sticky; top: 0; height: 100vh; align-self: start;
+}
+.brand { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+.brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--ink); display: grid; place-items: center; }
+.brand-name { font-weight: 600; font-size: 15px; letter-spacing: -0.015em; }
+.brand-sub { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.06em; text-transform: uppercase; display: block; margin-top: 1px; }
+.nav-group { display: flex; flex-direction: column; gap: 1px; }
+.nav-label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-4); padding: 2px 8px 5px; font-weight: 500; }
+.nav-item { display: flex; align-items: center; gap: 9px; padding: 7px 9px; border-radius: 6px; color: var(--ink-2); font-size: 13px; width: 100%; text-align: left; transition: background 0.1s; }
+.nav-item:hover { background: var(--paper-2); }
+.nav-item.active { background: var(--ink); color: var(--paper); }
+.nav-item .badge-count { margin-left: auto; font-size: 11px; color: var(--ink-4); font-family: "JetBrains Mono", monospace; }
+.nav-item.active .badge-count { color: var(--paper); opacity: 0.5; }
+.sidebar-foot { margin-top: auto; }
+.user-chip { display: flex; align-items: center; gap: 9px; padding: 8px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 9px; }
+.user-av { width: 26px; height: 26px; border-radius: 50%; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-size: 10.5px; font-weight: 600; flex: none; }
+.user-meta b { display: block; font-size: 12.5px; font-weight: 600; }
+.user-meta span { font-size: 11px; color: var(--ink-4); }
+
+/* ── Main ── */
+.main { min-width: 0; display: flex; flex-direction: column; }
+.topbar { padding: 13px 28px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; position: sticky; top: 0; background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(8px); z-index: 5; }
+.topbar-title { font-size: 14px; font-weight: 500; }
+.sp { flex: 1; }
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 7px; border: 1px solid var(--line); background: var(--card); font-size: 12.5px; font-weight: 500; transition: background 0.1s; }
+.btn:hover { background: var(--paper-2); }
+.btn-primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.btn-primary:hover { background: var(--ink-2); }
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-ghost:hover { background: var(--paper-2); }
+
+/* ── Page ── */
+.page { padding: 26px 28px 64px; }
+.page-head { margin-bottom: 22px; }
+.page-head h1 { font-size: 26px; font-weight: 500; letter-spacing: -0.025em; margin: 0 0 4px; }
+.page-head p { color: var(--ink-3); font-size: 13px; margin: 0; }
+
+/* ── Stat cards ── */
+.stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px; }
+.stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.stat-label { font-size: 11px; color: var(--ink-3); letter-spacing: 0.06em; text-transform: uppercase; font-weight: 500; margin-bottom: 10px; }
+.stat-val { font-size: 28px; font-weight: 500; letter-spacing: -0.025em; display: flex; align-items: baseline; gap: 6px; }
+.stat-val small { font-size: 13px; color: var(--ink-4); font-weight: 400; letter-spacing: 0; }
+.stat-delta { margin-top: 6px; font-size: 11.5px; font-family: "JetBrains Mono", monospace; }
+.stat-delta.up { color: var(--ok); }
+.stat-delta.down { color: var(--danger); }
+.stat-delta.neutral { color: var(--ink-4); }
+
+/* ── Charts row ── */
+.charts { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 24px; }
+.chart-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+.chart-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.chart-head b { font-size: 13px; font-weight: 600; }
+.chart-head .sub { color: var(--ink-4); font-size: 11.5px; }
+.chart-head .pills { margin-left: auto; display: flex; gap: 5px; }
+.pill { padding: 3px 8px; border-radius: 5px; font-size: 11px; font-weight: 500; background: var(--paper-2); color: var(--ink-3); border: 1px solid transparent; cursor: pointer; }
+.pill.on { background: var(--ink); color: var(--paper); }
+
+/* Bar chart */
+.bar-chart { display: flex; align-items: flex-end; gap: 5px; height: 120px; }
+.bar-chart .col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.bar-chart .bar-wrap { flex: 1; display: flex; align-items: flex-end; width: 100%; }
+.bar-chart .bar { width: 100%; border-radius: 4px 4px 0 0; background: var(--ink); min-height: 3px; transition: opacity 0.15s; }
+.bar-chart .bar:hover { opacity: 0.75; }
+.bar-chart .bar.accent { background: var(--accent); }
+.bar-chart .xl { font-size: 9.5px; color: var(--ink-4); font-family: "JetBrains Mono", monospace; white-space: nowrap; }
+
+/* Donut */
+.donut-wrap { display: flex; align-items: center; gap: 22px; }
+.donut-wrap svg { flex: none; }
+.donut-legend { display: flex; flex-direction: column; gap: 8px; }
+.legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.legend-val { margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 11.5px; font-weight: 500; color: var(--ink-2); }
+
+/* Duration mini chart */
+.line-chart { height: 100px; position: relative; }
+.line-chart svg { width: 100%; height: 100%; overflow: visible; }
+
+/* ── Table ── */
+.table-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.table-toolbar { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+.table-toolbar b { font-size: 13px; font-weight: 600; }
+.search-box { display: flex; align-items: center; gap: 7px; background: var(--paper); border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; font-size: 12.5px; color: var(--ink-3); margin-left: auto; width: 240px; }
+.search-box input { border: none; background: none; outline: none; font-family: inherit; font-size: 12.5px; color: var(--ink); width: 100%; }
+.search-box input::placeholder { color: var(--ink-4); }
+.filter-tabs { display: flex; gap: 3px; }
+.ftab { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--ink-3); transition: background 0.1s; }
+.ftab:hover { background: var(--paper-2); }
+.ftab.on { background: var(--ink); color: var(--paper); }
+
+.thead { display: grid; grid-template-columns: 2.2fr 1.2fr 0.9fr 0.9fr 2.2fr 1fr 0.8fr 36px; gap: 8px; padding: 8px 16px; background: var(--paper-2); font-size: 10.5px; font-weight: 500; color: var(--ink-3); letter-spacing: 0.05em; text-transform: uppercase; }
+.trow { display: grid; grid-template-columns: 2.2fr 1.2fr 0.9fr 0.9fr 2.2fr 1fr 0.8fr 36px; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--line-2); align-items: center; font-size: 13px; cursor: pointer; transition: background 0.1s; }
+.trow:last-child { border-bottom: 0; }
+.trow:hover { background: var(--paper-2); }
+
+/* chips */
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 5px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.chip-ok { background: var(--ok-2); color: var(--ok); }
+.chip-warn { background: var(--warn-2); color: oklch(0.48 0.14 55); }
+.chip-danger { background: var(--danger-2); color: var(--danger); }
+.chip-accent { background: var(--accent-2); color: var(--accent-ink); }
+.chip-violet { background: var(--violet-2); color: var(--violet); }
+.chip-neutral { background: var(--paper-3); color: var(--ink-3); }
+
+.skill-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+.sp-pill { padding: 2px 6px; border-radius: 4px; font-size: 10.5px; font-weight: 500; font-family: "JetBrains Mono", monospace; background: var(--accent-2); color: var(--accent-ink); }
+
+.conf-bar { display: flex; align-items: center; gap: 7px; }
+.conf-bar .track { flex: 1; height: 4px; background: var(--paper-3); border-radius: 3px; overflow: hidden; }
+.conf-bar .fill { height: 100%; border-radius: 3px; }
+.conf-bar .pct { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-3); }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(27,26,23,0.45);
+  backdrop-filter: blur(6px);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 24px;
+  animation: fade-in 0.18s ease;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  width: 100%; max-width: 1040px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  animation: slide-up 0.2s cubic-bezier(0.2, 0.8, 0.3, 1);
+  box-shadow: 0 40px 80px -30px rgba(27,26,23,0.35), 0 4px 12px rgba(0,0,0,0.06);
+}
+@keyframes slide-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.modal-header {
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: flex-start; gap: 20px;
+  position: sticky; top: 0; background: var(--paper); z-index: 2;
+  border-radius: 20px 20px 0 0;
+}
+.modal-av {
+  width: 52px; height: 52px; border-radius: 14px;
+  display: grid; place-items: center;
+  font-size: 18px; font-weight: 500; letter-spacing: -0.01em;
+  flex: none;
+}
+.modal-meta { flex: 1; min-width: 0; }
+.modal-name { font-size: 20px; font-weight: 500; letter-spacing: -0.02em; margin-bottom: 3px; }
+.modal-facts { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 12.5px; color: var(--ink-3); }
+.modal-facts span b { color: var(--ink); font-weight: 500; }
+.modal-close { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-3); flex: none; }
+.modal-close:hover { background: var(--paper-2); color: var(--ink); }
+
+.modal-body { padding: 26px 28px 32px; display: flex; flex-direction: column; gap: 24px; }
+
+/* Summary box */
+.summary-box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; }
+.summary-box .kicker { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.1em; text-transform: uppercase; font-weight: 500; margin-bottom: 8px; }
+.summary-text { font-size: 15px; line-height: 1.6; color: var(--ink-2); }
+.summary-text b { color: var(--ink); }
+
+/* Score strip */
+.score-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.score-cell { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.score-cell .k { font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.07em; text-transform: uppercase; font-weight: 500; margin-bottom: 6px; }
+.score-cell .v { font-size: 22px; font-weight: 500; letter-spacing: -0.02em; }
+.score-cell .v small { font-size: 12px; color: var(--ink-4); font-weight: 400; letter-spacing: 0; }
+
+/* Skill detail table */
+.skills-table { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.st-head { padding: 13px 18px; border-bottom: 1px solid var(--line-2); display: flex; align-items: center; gap: 10px; }
+.st-head b { font-size: 13px; font-weight: 600; }
+.skill-detail-row { padding: 16px 18px; border-bottom: 1px solid var(--line-2); display: grid; grid-template-columns: 1fr 200px; gap: 24px; }
+.skill-detail-row:last-child { border-bottom: 0; }
+.sdr-left { display: flex; flex-direction: column; gap: 10px; }
+.sdr-top { display: flex; align-items: baseline; gap: 10px; }
+.sdr-name { font-size: 14.5px; font-weight: 500; }
+.sdr-code { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-4); }
+.sdr-desc { font-size: 12.5px; color: var(--ink-3); max-width: 60ch; }
+.evidence-quote { border-left: 2px solid var(--accent); padding: 5px 0 5px 12px; font-family: "Instrument Serif", serif; font-style: italic; font-size: 15px; color: var(--ink-2); line-height: 1.5; }
+.evidence-quote .src { display: block; font-family: "JetBrains Mono", monospace; font-style: normal; font-size: 10.5px; color: var(--ink-4); margin-top: 4px; }
+.sdr-right { display: flex; flex-direction: column; gap: 10px; }
+.level-big { font-size: 32px; font-weight: 500; letter-spacing: -0.02em; }
+.level-big small { font-size: 14px; color: var(--ink-4); font-weight: 400; letter-spacing: 0; }
+.ladder { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-top: 4px; }
+.rung { height: 24px; display: grid; place-items: center; font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--ink-4); background: var(--paper-2); border-radius: 3px; }
+.rung.achieved { background: var(--accent); color: white; font-weight: 600; }
+.rung.partial { background: var(--accent-2); color: var(--accent-ink); }
+.rung.required-mark { outline: 2px solid var(--warn); outline-offset: -2px; }
+
+/* Transcript section */
+.transcript-section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.transcript-body { padding: 16px 18px; display: flex; flex-direction: column; gap: 0; max-height: 320px; overflow-y: auto; }
+.utt { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-2); }
+.utt:last-child { border-bottom: 0; }
+.utt-time { font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--ink-4); padding-top: 3px; }
+.utt-who { font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 2px; }
+.utt.bot .utt-who { color: var(--accent-ink); }
+.utt.cand .utt-who { color: var(--ink); }
+.utt-text { font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+.utt-text mark { background: var(--accent-2); color: var(--accent-ink); padding: 0 2px; border-radius: 3px; }
+.ev-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; padding: 1px 6px; border-radius: 4px; background: var(--accent-2); color: var(--accent-ink); font-size: 10px; font-weight: 500; vertical-align: 1px; }
+
+/* icons inline */
+.ico { display: inline-block; vertical-align: -3px; flex: none; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2 8h1.5" stroke="#f4f1ea" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M5 5v6" stroke="#f4f1ea" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M8 3v10" stroke="#f4f1ea" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M11 5v6" stroke="#f4f1ea" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M13.5 8H14" stroke="#f4f1ea" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">Resonant</div>
+        <span class="brand-sub">Admin</span>
+      </div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Analytics</div>
+      <button class="nav-item active">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Dashboard
+      </button>
+      <button class="nav-item">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-3 2.5-5 6-5s6 2 6 5"/><circle cx="17" cy="9" r="2.5"/><path d="M15 14c3 0 6 1.5 6 5"/></svg>
+        Candidates <span class="badge-count">142</span>
+      </button>
+      <button class="nav-item">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>
+      </div>
+    <div class="nav-group">
+      <div class="nav-label">Configuration</div>
+      <button class="nav-item">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="M2 14l10 5 10-5"/></svg>
+        Skills library
+      </button>
+      <button class="nav-item">
+        <svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+        Settings
+      </button>
+    </div>
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <div class="user-av">MP</div>
+        <div class="user-meta"><b>Maya Patel</b><span>Helix Robotics</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <span class="topbar-title">Assessment Overview</span>
+      <div class="sp"></div>
+
+      <a href="index.html" class="btn btn-primary">
+        <svg class="ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h3l2 5-2 1a11 11 0 0 0 6 6l1-2 5 2v3a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z"/></svg>
+        Candidate portal
+      </a>
+    </div>
+
+    <div class="page">
+      <div class="page-head">
+        <h1>Assessments <span class="serif">last 30 days.</span></h1>
+        <p>38 completed calls · 7 awaiting expert review · last call 2 hours ago</p>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats" id="statsRow"></div>
+
+      <!-- Charts -->
+      <div class="charts">
+        <div class="chart-card">
+          <div class="chart-head">
+            <b>Calls per day</b>
+            <span class="sub">April 2026</span>
+            <div class="pills">
+              <span class="pill on">Calls</span>
+              <span class="pill">Duration</span>
+            </div>
+          </div>
+          <div class="bar-chart" id="barChart"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-head">
+            <b>Call outcomes</b>
+            <span class="sub">this month</span>
+          </div>
+          <div class="donut-wrap" id="donutWrap"></div>
+        </div>
+      </div>
+
+      <!-- Table -->
+      <div class="table-card">
+        <div class="table-toolbar">
+          <b>All assessments</b>
+          <div class="filter-tabs">
+            <button class="ftab on" data-filter="all">All</button>
+            <button class="ftab" data-filter="complete">Complete</button>
+            <button class="ftab" data-filter="review">Awaiting review</button>
+            <button class="ftab" data-filter="incomplete">Incomplete</button>
+          </div>
+          <div class="sp"></div>
+          <div class="search-box">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="searchInput" type="text" placeholder="Search name, email, skill…"/>
+          </div>
+        </div>
+        <div class="thead">
+          <div>Candidate</div>
+          <div>Email</div>
+          <div>Date</div>
+          <div>Duration</div>
+          <div>Top skills assessed</div>
+          <div>Max SFIA level</div>
+          <div>Confidence</div>
+          <div></div>
+        </div>
+        <div id="tableBody"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay" style="display:none;">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+// ─── Data ───────────────────────────────────────────────────────────────────
+const COLORS = ["#e8d7c2","#d7e2d0","#d5d7e8","#e8d0d5","#e0dccf","#d0e2e2","#e8e0d0","#e2d0e8"];
+const SFIA_NAMES = {
+  PROG: "Programming", SCTY: "Incident mgmt", ETMG: "People coaching",
+  ARCH: "Systems architecture", TEAM: "Team leadership", DATS: "Data analytics",
+  RLMT: "Release mgmt", SECU: "Security", BPTS: "Business process", INFT: "Info management",
+  DBAD: "Database admin", CICD: "CI/CD", CLOU: "Cloud platforms", REQM: "Requirements mgmt"
+};
+
+const PEOPLE = [
+  {name:"Amara Okafor", email:"amara.okafor@helixrobotics.com", color:0},
+  {name:"Jae Tanaka", email:"jae.tanaka@helixrobotics.com", color:1},
+  {name:"Rita Moreno", email:"rita.moreno@helixrobotics.com", color:2},
+  {name:"David Volkov", email:"david.volkov@helixrobotics.com", color:3},
+  {name:"Seren Bashir", email:"seren.bashir@helixrobotics.com", color:4},
+  {name:"Luis Mendes", email:"luis.mendes@helixrobotics.com", color:5},
+  {name:"Hana Kim", email:"hana.kim@helixrobotics.com", color:6},
+  {name:"Omar Traoré", email:"omar.traore@helixrobotics.com", color:7},
+  {name:"Priya Khan", email:"priya.khan@helixrobotics.com", color:2},
+  {name:"Theo Nakamura", email:"theo.nakamura@helixrobotics.com", color:3},
+  {name:"Yuna Adeyemi", email:"yuna.adeyemi@helixrobotics.com", color:1},
+  {name:"Carlos Reyes", email:"carlos.reyes@helixrobotics.com", color:5},
+];
+
+const SKILL_POOLS = [
+  {code:"PROG",level:5,conf:0.88,achieved:[1,2,3,4,5],partial:[6],required:5,
+   desc:"Develops software components of high complexity, selecting appropriate methods, tools and frameworks.",
+   quote:"We sized the jittered backoff window around the downstream's p95 recovery time, then added a retry budget so we'd trip the circuit breaker at 5% total traffic.",
+   qsrc:"08:22–09:14"},
+  {code:"SCTY",level:5,conf:0.83,achieved:[1,2,3,4,5],partial:[],required:4,
+   desc:"Coordinates responses to adverse events, ensuring continuity and driving resolution and prevention.",
+   quote:"I pulled in two other teams to shed load at the edge, then drove the post-mortem that landed on circuit breakers and exponential retry budgets.",
+   qsrc:"05:48–06:40"},
+  {code:"ETMG",level:4,conf:0.74,achieved:[1,2,3,4],partial:[5],required:4,
+   desc:"Supports individuals in developing skills and competencies, using structured approaches and feedback.",
+   quote:"I give them the problem, not the solution. We debrief afterwards on what they considered — that's how the thinking transfers.",
+   qsrc:"12:10–12:55"},
+  {code:"ARCH",level:4,conf:0.61,achieved:[1,2,3,4],partial:[5],required:5,
+   desc:"Designs and maintains the architecture of IT systems, balancing constraints and long-term maintainability.",
+   quote:"The settlement service needed a fundamentally different isolation model — we couldn't just tune timeouts on the existing synchronous path.",
+   qsrc:"07:02–07:55"},
+  {code:"TEAM",level:4,conf:0.58,achieved:[1,2,3],partial:[4],required:4,
+   desc:"Provides leadership to deliver services and/or products, taking responsibility for direction and outcomes.",
+   quote:"I lead a five-engineer payments platform team. I own the roadmap, the on-call rotation, and I'm accountable for uptime.",
+   qsrc:"01:30–02:10"},
+  {code:"CLOU",level:3,conf:0.70,achieved:[1,2,3],partial:[4],required:3,
+   desc:"Manages and deploys cloud services, ensuring efficient use of cloud resources and compliance with standards.",
+   quote:"We run everything on GCP — GKE for services, Cloud Spanner for the ledger, PubSub for async workflows.",
+   qsrc:"04:15–04:50"},
+  {code:"SECU",level:4,conf:0.65,achieved:[1,2,3,4],partial:[],required:3,
+   desc:"Provides security advice, assesses risk, and implements controls across systems and data assets.",
+   quote:"Every payment job runs in an isolated service account with least-privilege IAM; we audit all cross-service token exchanges.",
+   qsrc:"11:20–11:58"},
+  {code:"DATS",level:3,conf:0.52,achieved:[1,2,3],partial:[4],required:3,
+   desc:"Applies analytical techniques to large datasets to support business decisions and reporting.",
+   quote:"We built a Looker dashboard on top of BigQuery to track settlement reconciliation lag — ops checks it every morning.",
+   qsrc:"14:05–14:40"},
+  {code:"CICD",level:4,conf:0.79,achieved:[1,2,3,4],partial:[],required:4,
+   desc:"Designs and maintains automated pipelines for building, testing, and deploying software.",
+   quote:"Our GitHub Actions pipeline runs unit tests, integration tests against a mirrored Spanner instance, then deploys with canary traffic shifting over fifteen minutes.",
+   qsrc:"09:55–10:42"},
+  {code:"DBAD",level:3,conf:0.44,achieved:[1,2,3],partial:[],required:3,
+   desc:"Installs, configures, and maintains database management systems to meet operational requirements.",
+   quote:"We use Spanner for the ledger because of its external consistency guarantees — I've had to tune split points a couple of times.",
+   qsrc:"10:50–11:18"},
+];
+
+function pickSkills(n, seed) {
+  const rng = (x) => ((seed * 7 + x * 31) % SKILL_POOLS.length);
+  const indices = new Set();
+  let i = 0;
+  while (indices.size < n) { indices.add(rng(i++)); }
+  return [...indices].map(idx => SKILL_POOLS[idx]);
+}
+
+const ROWS = [
+  {id:0, person:0, date:"27 Apr 2026", time:"14:12", dur:"22:20", skills:pickSkills(5,0), status:"review", verdict:"Recommend advance"},
+  {id:1, person:1, date:"27 Apr 2026", time:"10:05", dur:"18:44", skills:pickSkills(4,3), status:"complete", verdict:"Approved"},
+  {id:2, person:2, date:"26 Apr 2026", time:"16:30", dur:"20:12", skills:pickSkills(5,7), status:"complete", verdict:"Approved"},
+  {id:3, person:3, date:"26 Apr 2026", time:"09:15", dur:"24:08", skills:pickSkills(6,11), status:"complete", verdict:"Recommend advance"},
+  {id:4, person:4, date:"25 Apr 2026", time:"14:55", dur:"19:33", skills:pickSkills(4,5), status:"review", verdict:"Needs further review"},
+  {id:5, person:5, date:"25 Apr 2026", time:"11:20", dur:"17:02", skills:pickSkills(3,9), status:"incomplete", verdict:"Call dropped"},
+  {id:6, person:6, date:"24 Apr 2026", time:"15:44", dur:"21:18", skills:pickSkills(5,2), status:"complete", verdict:"Approved"},
+  {id:7, person:7, date:"24 Apr 2026", time:"10:00", dur:"19:50", skills:pickSkills(4,13), status:"complete", verdict:"Approved"},
+  {id:8, person:8, date:"23 Apr 2026", time:"13:10", dur:"22:44", skills:pickSkills(5,6), status:"complete", verdict:"Recommend advance"},
+  {id:9, person:9, date:"22 Apr 2026", time:"16:05", dur:"18:22", skills:pickSkills(4,8), status:"complete", verdict:"Approved"},
+  {id:10,person:10,date:"21 Apr 2026", time:"09:40", dur:"20:56", skills:pickSkills(3,4), status:"review", verdict:"Awaiting review"},
+  {id:11,person:11,date:"20 Apr 2026", time:"14:20", dur:"23:11", skills:pickSkills(6,10), status:"complete", verdict:"Approved"},
+];
+
+// ─── Stat cards ──────────────────────────────────────────────────────────────
+const STATS = [
+  {label:"Total calls",val:"38",sub:"",delta:"+8 vs last month",dir:"up"},
+  {label:"Avg duration",val:"20",sub:"min",delta:"−1.5m vs last month",dir:"up"},
+  {label:"Completion rate",val:"91",sub:"%",delta:"−3% vs last month",dir:"down"},
+];
+const sr = document.getElementById('statsRow');
+STATS.forEach(s => {
+  sr.innerHTML += `<div class="stat">
+    <div class="stat-label">${s.label}</div>
+    <div class="stat-val">${s.val}<small>${s.sub}</small></div>
+    <div class="stat-delta ${s.dir}">${s.delta}</div>
+  </div>`;
+});
+// Awaiting review stat — richer card
+sr.innerHTML += `<div class="stat">
+  <div class="stat-label">Awaiting review</div>
+  <div class="stat-val">7<small>reports</small></div>
+  <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;">
+    <div style="display:flex;justify-content:space-between;font-size:11.5px;">
+      <span style="color:var(--ink-4);">Avg wait</span>
+      <span class="mono" style="font-weight:500;">4.2h</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:11.5px;">
+      <span style="color:var(--ink-4);">Oldest</span>
+      <span class="mono" style="font-weight:500;color:var(--warn);">18h ago</span>
+    </div>
+  </div>
+</div>`;
+sr.innerHTML += `<div class="stat">
+  <div class="stat-label">Avg SFIA level</div>
+  <div class="stat-val">4.2<small>/7</small></div>
+  <div class="stat-delta neutral">Consistent</div>
+</div>`;
+
+// ─── Bar chart ───────────────────────────────────────────────────────────────
+const DAYS = [0,0,1,0,2,1,3,2,1,0,2,3,1,2,4,2,3,1,2,0,1,3,2,1,3,2,1,2,3,2,3,2,3,4,3,2,3,2,3,4,3,2,3,2,3,2,4,3,2,3,2,4,5,3,4,5];
+const VISIBLE = DAYS.slice(-27);
+const MAX_D = Math.max(...VISIBLE);
+const bc = document.getElementById('barChart');
+const TODAY = 27;
+VISIBLE.forEach((v, i) => {
+  const dayNum = i + 1;
+  const pct = (v / MAX_D * 100).toFixed(1);
+  const isToday = dayNum === TODAY;
+  bc.innerHTML += `<div class="col">
+    <div class="bar-wrap"><div class="bar ${isToday ? 'accent' : ''}" style="height:${pct}%"></div></div>
+    <div class="xl">${dayNum % 5 === 0 || dayNum === 1 || isToday ? dayNum : ''}</div>
+  </div>`;
+});
+
+// ─── Donut chart ─────────────────────────────────────────────────────────────
+const donutData = [
+  {label:"Approved", val:24, color:"var(--ok)"},
+  {label:"Awaiting review", val:7, color:"var(--warn)"},
+  {label:"Recommend advance", val:5, color:"var(--accent)"},
+  {label:"Incomplete", val:2, color:"var(--danger)"},
+];
+const total = donutData.reduce((a,b) => a + b.val, 0);
+const R = 54, cx = 70, cy = 70, sw = 14;
+let angle = -Math.PI / 2;
+let paths = '';
+donutData.forEach(d => {
+  const a = (d.val / total) * 2 * Math.PI;
+  const x1 = cx + R * Math.cos(angle), y1 = cy + R * Math.sin(angle);
+  const x2 = cx + R * Math.cos(angle + a), y2 = cy + R * Math.sin(angle + a);
+  const large = a > Math.PI ? 1 : 0;
+  paths += `<path d="M${x1} ${y1} A${R} ${R} 0 ${large} 1 ${x2} ${y2}" fill="none" stroke="${d.color}" stroke-width="${sw}" stroke-linecap="round"/>`;
+  angle += a + 0.04;
+});
+const dw = document.getElementById('donutWrap');
+dw.innerHTML = `<svg width="140" height="140" viewBox="0 0 140 140">
+  <circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="var(--paper-2)" stroke-width="${sw}"/>
+  ${paths}
+  <text x="${cx}" y="${cy - 6}" text-anchor="middle" font-size="22" font-weight="500" fill="var(--ink)" font-family="Inter Tight,sans-serif" letter-spacing="-1">${total}</text>
+  <text x="${cx}" y="${cy + 14}" text-anchor="middle" font-size="10" fill="var(--ink-4)" font-family="Inter Tight,sans-serif" letter-spacing="1" text-transform="uppercase">CALLS</text>
+</svg>
+<div class="donut-legend">${donutData.map(d => `<div class="legend-row"><span class="legend-dot" style="background:${d.color}"></span><span>${d.label}</span><span class="legend-val">${d.val}</span></div>`).join('')}</div>`;
+
+// ─── Table ───────────────────────────────────────────────────────────────────
+function confColor(c) {
+  if (c >= 0.8) return "var(--ok)";
+  if (c >= 0.6) return "var(--accent)";
+  return "var(--warn)";
+}
+function statusChip(s) {
+  if (s === "complete") return `<span class="chip chip-ok">Approved</span>`;
+  if (s === "review") return `<span class="chip chip-warn">Awaiting review</span>`;
+  return `<span class="chip chip-danger">Incomplete</span>`;
+}
+function initials(name) { return name.split(" ").map(w => w[0]).join(""); }
+function maxLevel(skills) { return Math.max(...skills.map(s => s.level || 0)); }
+function avgConf(skills) { return skills.reduce((a,b) => a + b.conf, 0) / skills.length; }
+
+let currentFilter = "all";
+let searchQuery = "";
+
+function renderTable() {
+  const tb = document.getElementById('tableBody');
+  const filtered = ROWS.filter(r => {
+    const p = PEOPLE[r.person];
+    const matchFilter = currentFilter === "all" || r.status === currentFilter;
+    const q = searchQuery.toLowerCase();
+    const matchSearch = !q || p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q) || r.skills.some(s => SFIA_NAMES[s.code].toLowerCase().includes(q));
+    return matchFilter && matchSearch;
+  });
+  tb.innerHTML = filtered.map(r => {
+    const p = PEOPLE[r.person];
+    const av = initials(p.name);
+    const bg = COLORS[p.color];
+    const ml = maxLevel(r.skills);
+    const ac = avgConf(r.skills);
+    const topSkills = r.skills.slice(0, 3).map(s => `<span class="sp-pill">${s.code} L${s.level}</span>`).join("");
+    return `<div class="trow" data-id="${r.id}">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:30px;height:30px;border-radius:50%;background:${bg};display:grid;place-items:center;font-size:11px;font-weight:600;color:var(--ink-2);flex:none;">${av}</div>
+        <div>
+          <div style="font-weight:500;">${p.name}</div>
+          <div style="font-size:11px;color:var(--ink-4);">${r.date} · ${r.time}</div>
+        </div>
+      </div>
+      <div class="mono" style="font-size:11.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.email}</div>
+      <div class="mono" style="font-size:12px;">${r.date}</div>
+      <div class="mono" style="font-size:12.5px;">${r.dur}</div>
+      <div class="skill-pills">${topSkills}${r.skills.length > 3 ? `<span class="sp-pill" style="background:var(--paper-3);color:var(--ink-4);">+${r.skills.length - 3}</span>` : ""}</div>
+      <div style="font-weight:500;font-family:'JetBrains Mono',monospace;">L${ml}</div>
+      <div class="conf-bar">
+        <div class="track"><div class="fill" style="width:${ac*100}%;background:${confColor(ac)};"></div></div>
+        <span class="pct">${(ac*100).toFixed(0)}%</span>
+      </div>
+      <div style="color:var(--ink-4);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+      </div>
+    </div>`;
+  }).join("");
+
+  tb.querySelectorAll('.trow').forEach(row => {
+    row.addEventListener('click', () => openModal(parseInt(row.dataset.id)));
+  });
+}
+
+document.querySelectorAll('.ftab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.ftab').forEach(b => b.classList.remove('on'));
+    btn.classList.add('on');
+    currentFilter = btn.dataset.filter;
+    renderTable();
+  });
+});
+document.getElementById('searchInput').addEventListener('input', e => {
+  searchQuery = e.target.value;
+  renderTable();
+});
+renderTable();
+
+// ─── Modal ───────────────────────────────────────────────────────────────────
+const SUMMARY_TEXTS = [
+  "Amara presents as a <b>senior practitioner</b> with strong Level 5 evidence in programming and incident management. Leadership behaviours around mentoring and delegation are consistent with Level 4. The single area to probe further is systems architecture — discussed competently at L4 but below the L5 target for this role.",
+  "Jae demonstrates solid Level 4 cloud platform expertise and strong CI/CD depth. Programming evidence is clear and specific. Coaching examples were brief but credible. Overall a strong mid-senior profile.",
+  "Rita's SRE background comes through clearly — incident management at L5 is very well evidenced. Security posture and database administration both show L3–4 maturity. A confident, self-aware technical communicator.",
+  "David's engineering leadership narrative was the most detailed of this cohort — clear ownership, evidence of cross-team influence, and a thoughtful approach to delegation. Architecture depth sits at L5 with specifics around trade-off reasoning.",
+  "Seren's data analytics and business process evidence was strong and domain-specific. Cloud platform knowledge is solid. Some areas — notably release management — were not covered due to time; recommend a follow-up on those competencies.",
+  "Call dropped at 17:02 during Phase 2. No Phase 3 (targeted evidence) was conducted. The partial transcript suggests programming and CI/CD competence at L3–4 but cannot be formally scored. Recommend rescheduling.",
+  "Hana demonstrated a breadth of full-stack competence. Front-end architectural decisions were discussed with genuine depth. CI/CD automation evidence at L4 was specific and credible. Strong recommend.",
+  "Omar's security engineering narrative was the standout — SECU at L5 is well evidenced with concrete threat-modelling examples. Incident management also strong. A natural for the security-focused track.",
+  "Priya's coaching and people development narrative was exceptional — best in cohort at ETMG L5. Programming evidence solid at L4. Recommend for any tech-lead or principal track.",
+  "Theo brings clear cloud-native depth — GKE, Spanner, PubSub — with operational maturity beyond the L3 bar for this role. Programming and CICD evidence both well above minimum.",
+  "Yuna's assessment is partially complete. Three of six targeted skills have strong evidence; the remaining three were not reached due to call length. Confidence scores on assessed skills are high.",
+  "Carlos showed the strongest SFIA breadth of this cohort — six skills scored at L4 or above. Requirements management and business process evidence were particularly well-articulated.",
+];
+
+const TRANSCRIPT = [
+  {who:"bot", t:"00:04", text:"Hi, is this [Candidate]? This is Noa calling from Resonant on behalf of Helix Robotics."},
+  {who:"cand",t:"00:11", text:"Hi Noa, yes — happy to chat."},
+  {who:"bot", t:"00:14", text:"Before we start, I want to confirm you're okay with me recording this conversation for the evaluation. Is that okay?"},
+  {who:"cand",t:"00:28", text:"Yes, that's fine."},
+  {who:"bot", t:"00:30", text:"Great. Could you walk me through what a typical week has looked like for you over the last six months?"},
+  {who:"cand",t:"00:39", text:"Sure. I lead the payments platform team — five engineers. Most of my time splits between design reviews, incident response, and mentoring two mid-level engineers.", ev:"ETMG"},
+  {who:"bot", t:"01:02", text:"You mentioned incident response — could you tell me about a specific recent incident your team owned?"},
+  {who:"cand",t:"01:10", text:"Three weeks ago we had a cascading failure in our settlement service. Latency on a downstream provider spiked and our retry storm overwhelmed the queue.", ev:"SCTY"},
+  {who:"bot", t:"01:32", text:"What was your role in the response, specifically?"},
+  {who:"cand",t:"01:38", text:"I was secondary on-call. I pulled in two other teams, we shed load at the edge, then I drove the post-mortem the next day that landed on circuit breakers and bounded-exponential retries.", ev:"SCTY"},
+  {who:"bot", t:"02:06", text:"When you say bounded-exponential retries — how did you decide on the backoff parameters?"},
+  {who:"cand",t:"02:14", text:"We looked at the downstream's published p95 recovery time — about 40 seconds — and sized the jittered window around that. We also added a budget: if retries exceed 5% of total traffic, we trip the breaker.", ev:"PROG"},
+];
+
+function openModal(id) {
+  const row = ROWS[id];
+  const p = PEOPLE[row.person];
+  const av = initials(p.name);
+  const bg = COLORS[p.color];
+  const ml = maxLevel(row.skills);
+  const ac = avgConf(row.skills);
+
+  const skillRows = row.skills.map(s => {
+    const rungs = [1,2,3,4,5,6,7].map(n => {
+      let cls = "rung";
+      if (s.achieved.includes(n)) cls += " achieved";
+      else if (s.partial.includes(n)) cls += " partial";
+      if (s.required === n) cls += " required-mark";
+      return `<div class="${cls}">${n}</div>`;
+    }).join("");
+    return `<div class="skill-detail-row">
+      <div class="sdr-left">
+        <div class="sdr-top">
+          <span class="sdr-name">${SFIA_NAMES[s.code]}</span>
+          <span class="sdr-code">${s.code}</span>
+          <span class="chip ${s.level >= s.required ? 'chip-ok' : 'chip-warn'}" style="margin-left:auto;">${s.level >= s.required ? 'Meets bar' : 'Below bar'}</span>
+        </div>
+        <div class="sdr-desc">${s.desc}</div>
+        <div class="evidence-quote">"${s.quote}"<span class="src">Transcript · ${s.qsrc}</span></div>
+      </div>
+      <div class="sdr-right">
+        <div class="level-big">L${s.level}<small>/7</small></div>
+        <div style="font-size:11.5px;color:var(--ink-3)">Assessed · required <b style="color:var(--ink-2)">L${s.required}</b></div>
+        <div class="ladder">${rungs}</div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--ink-4);margin-top:3px;letter-spacing:0.05em">
+          ${["Follow","Assist","Apply","Enable","Advise","Influence","Strategy"].map(l=>`<span>${l}</span>`).join("")}
+        </div>
+        <div class="conf-bar" style="margin-top:8px;">
+          <span style="font-size:11px;color:var(--ink-3);">Conf</span>
+          <div class="track"><div class="fill" style="width:${s.conf*100}%;background:${confColor(s.conf)}"></div></div>
+          <span class="pct">${(s.conf*100).toFixed(0)}%</span>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+
+  const uttRows = TRANSCRIPT.map(u => `<div class="utt ${u.who}">
+    <div class="utt-time">${u.t}</div>
+    <div>
+      <div class="utt-who">${u.who === "bot" ? "Noa (AI)" : p.name}</div>
+      <div class="utt-text">${u.text}${u.ev ? `<span class="ev-tag">↗ ${u.ev}</span>` : ""}</div>
+    </div>
+  </div>`).join("");
+
+  document.getElementById('modal').innerHTML = `
+    <div class="modal-header">
+      <div class="modal-av" style="background:${bg}">${av}</div>
+      <div class="modal-meta">
+        <div class="modal-name">${p.name}</div>
+        <div class="modal-facts">
+          <span><b>${p.email}</b></span>
+          <span>Date <b>${row.date} · ${row.time}</b></span>
+          <span>Duration <b class="mono">${row.dur}</b></span>
+          <span>Skills assessed <b>${row.skills.length}</b></span>
+          <span>Status <b>${row.verdict}</b></span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex:none;">
+        <button class="btn">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m7 10 5-5 5 5"/></svg>
+          Export PDF
+        </button>
+        <button class="btn btn-primary">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-11"/></svg>
+          Approve
+        </button>
+        <button class="modal-close" id="modalClose">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div class="score-strip">
+        <div class="score-cell"><div class="k">Max SFIA level</div><div class="v">L${ml}<small>/7</small></div></div>
+        <div class="score-cell"><div class="k">Avg confidence</div><div class="v">${(ac*100).toFixed(0)}<small>%</small></div></div>
+        <div class="score-cell"><div class="k">Skills assessed</div><div class="v">${row.skills.length}</div></div>
+        <div class="score-cell"><div class="k">Duration</div><div class="v mono" style="font-size:22px">${row.dur}</div></div>
+        <div class="score-cell"><div class="k">Outcome</div><div class="v" style="font-size:16px;color:${row.status==='complete'?'var(--ok)':row.status==='review'?'var(--warn)':'var(--danger)'}">${row.verdict}</div></div>
+      </div>
+      <div class="summary-box">
+        <div class="kicker">AI-generated summary</div>
+        <div class="summary-text">${SUMMARY_TEXTS[id] || SUMMARY_TEXTS[0]}</div>
+      </div>
+      <div class="skills-table">
+        <div class="st-head">
+          <b>SFIA competency breakdown</b>
+          <span style="color:var(--ink-4);font-size:12px;margin-left:6px;">· ${row.skills.length} skills · scored against role profile</span>
+        </div>
+        ${skillRows}
+      </div>
+      <div class="transcript-section">
+        <div class="st-head"><b>Interview transcript</b><span style="color:var(--ink-4);font-size:12px;margin-left:6px;">· excerpt · evidence highlights marked</span></div>
+        <div class="transcript-body">${uttRows}</div>
+      </div>
+    </div>`;
+
+  const overlay = document.getElementById('modalOverlay');
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+
+  document.getElementById('modalClose').addEventListener('click', closeModal);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  document.addEventListener('keydown', escHandler);
+}
+
+function escHandler(e) { if (e.key === 'Escape') closeModal(); }
+function closeModal() {
+  document.getElementById('modalOverlay').style.display = 'none';
+  document.body.style.overflow = '';
+  document.removeEventListener('keydown', escHandler);
+}
+</script>
+</body>
+</html>

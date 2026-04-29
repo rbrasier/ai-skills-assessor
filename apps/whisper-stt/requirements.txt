@@ -1,0 +1,11 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+# faster-whisper bundles CTranslate2; CPU-only (no CUDA) on Railway
+faster-whisper>=1.0.0
+# Silero VAD (torch CPU-only wheel keeps image size reasonable)
+torch>=2.2.0
+torchaudio>=2.2.0
+# NumPy is required by both faster-whisper and Silero VAD
+numpy>=1.26.0
+# WebSockets support for uvicorn
+websockets>=12.0

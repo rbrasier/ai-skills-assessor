@@ -26,7 +26,11 @@ NC='\033[0m' # No Color
 
 PASS_COUNT=0
 FAIL_COUNT=0
-TOTAL_CHECKS=10
+TOTAL_CHECKS=13   # 10 original + 3 provider-swap checks (v0.5.0)
+
+# Optional: pass --smoke to also hit a live SMOKE_TEST_URL
+RUN_SMOKE=0
+for _arg in "$@"; do [[ "$_arg" == "--smoke" ]] && RUN_SMOKE=1; done
 
 # Helper functions
 pass() {
@@ -173,6 +177,7 @@ REQUIRED_PORTS=(
 
 REQUIRED_ADAPTERS=(
   "$VOICE_ENGINE_DIR/src/adapters/daily_transport.py"
+  "$VOICE_ENGINE_DIR/src/adapters/livekit_transport.py"
   "$VOICE_ENGINE_DIR/src/adapters/postgres_persistence.py"
   "$VOICE_ENGINE_DIR/src/adapters/pgvector_knowledge_base.py"
   "$VOICE_ENGINE_DIR/src/adapters/anthropic_llm_provider.py"
@@ -273,6 +278,89 @@ else
   else
     fail "ADR-004: pytest failed"
     echo "$PYTEST_OUTPUT" | tail -30
+  fi
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Check 11: Phase 3 Revision 3 — STT/TTS provider factory unit tests
+# ──────────────────────────────────────────────────────────────
+print_header "Check 11 / 13: Provider factory unit tests (test_stt_factory + test_tts_factory)"
+
+STT_FACTORY_TEST="$VOICE_ENGINE_DIR/tests/test_stt_factory.py"
+TTS_FACTORY_TEST="$VOICE_ENGINE_DIR/tests/test_tts_factory.py"
+
+if [ -z "$PY" ]; then
+  fail "Python interpreter not found"
+elif ! "$PY" -m pytest --version > /dev/null 2>&1; then
+  fail "pytest not installed in $PY"
+elif [ ! -f "$STT_FACTORY_TEST" ] || [ ! -f "$TTS_FACTORY_TEST" ]; then
+  fail "Provider factory test files not found (expected tests/test_stt_factory.py + test_tts_factory.py)"
+else
+  PROVIDER_PYTEST=$(cd "$VOICE_ENGINE_DIR" && "$PY" -m pytest \
+    tests/test_stt_factory.py tests/test_tts_factory.py \
+    -v --tb=short 2>&1)
+  if [ $? -eq 0 ]; then
+    PROVIDER_COUNT=$(echo "$PROVIDER_PYTEST" | grep -oE "[0-9]+ passed" | head -1)
+    pass "Provider factory tests ($PROVIDER_COUNT)"
+  else
+    fail "Provider factory tests failed"
+    echo "$PROVIDER_PYTEST" | tail -30
+  fi
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Check 12: Phase 3 Revision 3 — New adapter files exist
+# ──────────────────────────────────────────────────────────────
+print_header "Check 12 / 13: Provider adapter files present (v0.5.0)"
+
+REQUIRED_PROVIDER_FILES=(
+  "$VOICE_ENGINE_DIR/src/adapters/stt/__init__.py"
+  "$VOICE_ENGINE_DIR/src/adapters/stt/factory.py"
+  "$VOICE_ENGINE_DIR/src/adapters/stt/whisper_stt_service.py"
+  "$VOICE_ENGINE_DIR/src/adapters/tts/__init__.py"
+  "$VOICE_ENGINE_DIR/src/adapters/tts/factory.py"
+  "$VOICE_ENGINE_DIR/src/adapters/tts/kokoro_tts_service.py"
+  "apps/whisper-stt/main.py"
+  "apps/whisper-stt/Dockerfile"
+  "apps/whisper-stt/railway.json"
+)
+
+MISSING_PROVIDER_FILES=()
+for f in "${REQUIRED_PROVIDER_FILES[@]}"; do
+  [ ! -f "$f" ] && MISSING_PROVIDER_FILES+=("$f")
+done
+
+if [ ${#MISSING_PROVIDER_FILES[@]} -eq 0 ]; then
+  pass "All ${#REQUIRED_PROVIDER_FILES[@]} provider adapter files present"
+else
+  fail "Missing provider adapter files:"
+  for f in "${MISSING_PROVIDER_FILES[@]}"; do
+    echo "  - $f"
+  done
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Check 13: Phase 3 Revision 3 — Smoke tests against live URL (optional)
+# ──────────────────────────────────────────────────────────────
+print_header "Check 13 / 13: Provider smoke tests (optional — requires --smoke + SMOKE_TEST_URL)"
+
+if [ $RUN_SMOKE -eq 0 ]; then
+  warn "Skipped — pass --smoke and set SMOKE_TEST_URL to enable"
+  ((PASS_COUNT++))  # non-failure skip
+elif [ -z "${SMOKE_TEST_URL:-}" ]; then
+  warn "SMOKE_TEST_URL is not set — skipping smoke tests"
+  ((PASS_COUNT++))
+elif [ -z "$PY" ] || ! "$PY" -m pytest --version > /dev/null 2>&1; then
+  fail "pytest not available for smoke tests"
+else
+  SMOKE_OUT=$(cd "$VOICE_ENGINE_DIR" && SMOKE_TEST_URL="$SMOKE_TEST_URL" \
+    "$PY" -m pytest tests/test_providers_smoke.py tests/smoke_test.py \
+    --run-smoke -v --tb=short 2>&1)
+  if [ $? -eq 0 ]; then
+    pass "Provider smoke tests passed"
+  else
+    fail "Provider smoke tests failed"
+    echo "$SMOKE_OUT" | tail -30
   fi
 fi
 

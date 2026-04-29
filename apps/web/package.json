@@ -1,6 +1,6 @@
 {
   "name": "@ai-skills-assessor/web",
-  "version": "0.2.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Next.js frontend for the AI Skills Assessor (Phase 1 scaffold).",
   "scripts": {
@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ai-skills-assessor/shared-types": "workspace:*",
+    "livekit-client": "^2.18.4",
     "lucide-react": "^0.453.0",
     "next": "^14.2.15",
     "react": "^18.3.1",

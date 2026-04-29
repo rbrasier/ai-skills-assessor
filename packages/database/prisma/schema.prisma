@@ -1,49 +1,115 @@
-// AI Skills Assessor — Phase 1 schema.
+// AI Skills Assessor — Phase 3 schema (v0.4.0).
 //
-// Scope: candidates and assessment sessions only. SFIA-specific tables,
-// claims, transcripts, and assessment reports are introduced by later
-// phases (claim extraction, RAG knowledge base, SME review portal).
+// Scope additions in this phase:
+//   - pgvector extension enabled on the Postgres database (required by
+//     ADR-005 for RAG skill retrieval) via a raw-SQL migration.
+//   - `skill_embeddings` table — ready for SFIA ingestion in Phase 5.
+//   - `assessment_reports` scaffold — the richer `claims` relation is
+//     added in Phase 6 (claim extraction pipeline).
+//
+// Phase 2 scope (retained): candidates and assessment sessions, both
+// with JSONB `metadata` columns for forward-compatible fields
+// (employee_id, failureReason, cancelledAt, …). `candidates.email`
+// is the primary key — per phase-2-basic-voice-engine.md §1.9.
+//
+// SFIA-specific tables (beyond `skill_embeddings`), claims, and
+// transcripts are introduced by later phases.
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/client"
+  provider        = "prisma-client-js"
+  output          = "../src/generated/client"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector(schema: "public")]
 }
 
 model Candidate {
-  id          String   @id @default(uuid())
-  firstName   String   @db.VarChar(255)
-  lastName    String   @db.VarChar(255)
-  email       String   @unique @db.VarChar(255)
-  phoneNumber String   @db.VarChar(20)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  email     String   @id @db.VarChar(255)
+  firstName String   @db.VarChar(255)
+  lastName  String   @db.VarChar(255)
+  // JSONB container for optional / extensible fields:
+  //   { "employee_id": "HLX-00481", ... }
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
 
   assessmentSessions AssessmentSession[]
 
-  @@index([email])
   @@index([createdAt])
   @@map("candidates")
 }
 
 model AssessmentSession {
   id           String    @id @default(uuid())
-  candidateId  String
-  candidate    Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  phoneNumber  String    @db.VarChar(20)
-  status       String    @default("pending") // pending | dialling | in_progress | completed | failed | cancelled
+  candidateId  String    @db.VarChar(255)
+  candidate    Candidate @relation(fields: [candidateId], references: [email], onDelete: Cascade)
+  phoneNumber  String    @db.VarChar(32)
+  // pending | dialling | in_progress | completed | failed | cancelled
+  status       String    @default("pending") @db.VarChar(32)
+  // JSONB container for optional / extensible fields:
+  //   { "failureReason": "...", "cancelledAt": "...", ... }
+  metadata     Json      @default("{}")
   dailyRoomUrl String?
   recordingUrl String?
   startedAt    DateTime?
   endedAt      DateTime?
   createdAt    DateTime  @default(now())
 
+  assessmentReport AssessmentReport?
+
   @@index([candidateId])
   @@index([candidateId, createdAt])
   @@index([status])
+  @@index([createdAt])
   @@map("assessment_sessions")
+}
+
+/// Vector store of framework-skill-level embeddings (SFIA 9 today,
+/// TOGAF / ITIL / PMBOK in the future via the `frameworkType`
+/// discriminator). See ADR-005. The `embedding` column is declared
+/// `Unsupported` because Prisma has no native `vector` type; the
+/// Phase 5 RAG code will query it via raw SQL.
+model SkillEmbedding {
+  id               String   @id @default(uuid())
+  frameworkType    String   @db.VarChar(50)
+  frameworkVersion String   @db.VarChar(20)
+  skillCode        String   @db.VarChar(50)
+  skillName        String   @db.VarChar(255)
+  category         String   @db.VarChar(100)
+  subcategory      String?  @db.VarChar(100)
+  level            Int?
+  content          String
+  embedding        Unsupported("vector(1536)")?
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now())
+
+  @@unique([frameworkType, frameworkVersion, skillCode, level], name: "idx_unique_framework_skill_level")
+  @@index([frameworkType])
+  @@index([frameworkType, level])
+  @@index([skillCode])
+  @@map("skill_embeddings")
+}
+
+/// Scaffold for SME review reports. Phase 3 creates the table so the
+/// deployment has the full schema baseline; Phase 6 (claim extraction
+/// pipeline) will add the `claims` FK and richer fields.
+model AssessmentReport {
+  id            String            @id @default(uuid())
+  sessionId     String            @unique
+  session       AssessmentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  reviewToken   String            @unique @db.VarChar(50)
+  // generated | sent | in_review | completed
+  status        String            @default("generated") @db.VarChar(32)
+  metadata      Json              @default("{}")
+  generatedAt   DateTime          @default(now())
+  smeReviewedAt DateTime?
+  expiresAt     DateTime?
+
+  @@index([reviewToken])
+  @@index([status])
+  @@index([generatedAt])
+  @@map("assessment_reports")
 }

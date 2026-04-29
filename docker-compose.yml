@@ -1,0 +1,136 @@
+# AI Skills Assessor — local multi-container stack (Phase 3, v0.5.0).
+#
+# Mirrors the Railway deployment topology on a laptop:
+#
+#   postgres (pgvector/pgvector:pg16) ─┬─► voice-engine (FastAPI :8000)
+#                                      └─► web (Next.js :3000) ─► voice-engine
+#
+#   whisper-stt (optional, :8001) ─► voice-engine  [STT_PROVIDER=whisper]
+#   kokoro-tts  (optional, :8880) ─► voice-engine  [TTS_PROVIDER=kokoro]
+#
+# Usage (default — cloud providers):
+#   docker compose up --build
+#
+# Usage (self-hosted STT + TTS):
+#   STT_PROVIDER=whisper TTS_PROVIDER=kokoro docker compose --profile selfhosted up --build
+#
+# Usage (self-hosted STT only):
+#   STT_PROVIDER=whisper docker compose --profile stt up --build
+#
+# Usage (self-hosted TTS only):
+#   TTS_PROVIDER=kokoro docker compose --profile tts up --build
+#
+# For iterative development prefer the instructions in
+# docs/guides/local-setup.md §5 (three native processes + a docker
+# postgres); this compose file exists so the full image-build pipeline
+# can be exercised locally before a push.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_skills_assessor
+    ports:
+      - "5432:5432"
+    volumes:
+      - ai-skills-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_skills_assessor"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── Optional: self-hosted Whisper STT (CPU, faster-whisper tiny.en) ────────
+  # Activate with: docker compose --profile stt up  OR  --profile selfhosted up
+  # Memory recommendation: 4 GB (Railway: set service memory limit to 4096 MB)
+  whisper-stt:
+    profiles: ["stt", "selfhosted"]
+    build:
+      context: .
+      dockerfile: apps/whisper-stt/Dockerfile
+    environment:
+      PORT: "8001"
+      WHISPER_MODEL: "${WHISPER_MODEL:-tiny.en}"
+      VAD_THRESHOLD: "${VAD_THRESHOLD:-0.5}"
+      SILENCE_DURATION_MS: "${SILENCE_DURATION_MS:-700}"
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    mem_limit: 4g
+
+  # ── Optional: self-hosted Kokoro TTS (CPU) ─────────────────────────────────
+  # Pre-built image from ghcr.io/remsky/kokoro-fastapi-cpu
+  # Activate with: docker compose --profile tts up  OR  --profile selfhosted up
+  # Memory recommendation: 2 GB (Railway: set service memory limit to 2048 MB)
+  kokoro-tts:
+    profiles: ["tts", "selfhosted"]
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    ports:
+      - "8880:8880"
+    environment:
+      PORT: "8880"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8880/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    mem_limit: 2g
+
+  voice-engine:
+    build:
+      context: ./apps/voice-engine
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/ai_skills_assessor"
+      DAILY_API_KEY: "${DAILY_API_KEY:-}"
+      DAILY_DOMAIN: "${DAILY_DOMAIN:-}"
+      DAILY_GEO: "${DAILY_GEO:-ap-southeast-1}"
+      LOG_LEVEL: "INFO"
+      USE_IN_MEMORY_ADAPTERS: "${USE_IN_MEMORY_ADAPTERS:-0}"
+      PORT: "8000"
+      # STT provider — set to "whisper" to use the local whisper-stt service
+      STT_PROVIDER: "${STT_PROVIDER:-deepgram}"
+      DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY:-}"
+      DEEPGRAM_MODEL: "${DEEPGRAM_MODEL:-nova-2-phonecall}"
+      WHISPER_STT_URL: "${WHISPER_STT_URL:-ws://whisper-stt:8001/ws/transcribe}"
+      # TTS provider — set to "kokoro" to use the local kokoro-tts service
+      TTS_PROVIDER: "${TTS_PROVIDER:-elevenlabs}"
+      ELEVENLABS_API_KEY: "${ELEVENLABS_API_KEY:-}"
+      ELEVENLABS_VOICE_ID: "${ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}"
+      KOKORO_TTS_URL: "${KOKORO_TTS_URL:-http://kokoro-tts:8880}"
+      KOKORO_VOICE: "${KOKORO_VOICE:-af_bella}"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    environment:
+      VOICE_ENGINE_URL: "http://voice-engine:8000"
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      voice-engine:
+        condition: service_healthy
+
+volumes:
+  ai-skills-pg:

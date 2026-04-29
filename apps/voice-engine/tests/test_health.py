@@ -1,31 +1,39 @@
-"""Smoke tests for the Phase 1 FastAPI surface."""
+"""Smoke tests for the voice engine's health endpoint.
+
+Phase 3 (v0.4.0) turned ``/health`` into a deep healthcheck that also
+probes the persistence backend via ``IPersistence.ping()``. Railway's
+automatic rollback uses this endpoint — see
+``docs/development/adr/ADR-006-deployment-platform.md``.
+"""
 
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
 
-def test_health_returns_ok(client: TestClient) -> None:
+def test_health_returns_ok_with_version_and_db(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload == {"status": "ok", "version": "0.5.0", "database": "ok"}
 
 
-def test_assessment_trigger_returns_pending_session(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/assessment/trigger",
-        json={
-            "phone_number": "+61412345678",
-            "candidate_id": "11111111-1111-1111-1111-111111111111",
-        },
-    )
-    assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "pending"
-    assert "session_id" in body
-    assert "created_at" in body
+def test_health_reports_degraded_when_db_unreachable(
+    client: TestClient,
+) -> None:
+    # Swap the app's persistence with one whose ``ping`` always fails.
+    class _UnreachablePersistence:
+        async def ping(self) -> bool:
+            return False
 
-
-def test_assessment_trigger_validates_payload(client: TestClient) -> None:
-    response = client.post("/api/v1/assessment/trigger", json={})
-    assert response.status_code == 422
+    original = client.app.state.persistence
+    try:
+        client.app.state.persistence = _UnreachablePersistence()
+        response = client.get("/health")
+        assert response.status_code == 503
+        payload = response.json()
+        assert payload["status"] == "degraded"
+        assert payload["database"] == "unreachable"
+        assert payload["version"] == "0.5.0"
+    finally:
+        client.app.state.persistence = original
