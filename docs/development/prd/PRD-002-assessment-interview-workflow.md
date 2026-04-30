@@ -6,8 +6,14 @@ Draft
 ## Date
 2026-04-18
 
+## Last Updated
+2026-04-30
+
 ## Document Owner
 AI Skills Assessor Team
+
+## Build Phase
+Phase 5 (RAG Knowledge Base, Framework Configuration & SFIA Data Ingestion) and Phase 6 (Claim Extraction Pipeline)
 
 ## References
 - PRD-001: Voice-AI SFIA Skills Assessment Platform (parent platform goals)
@@ -76,10 +82,7 @@ An automated interview system that:
 1. **Open Question**: Bot asks: "What are the main IT skills or technical areas you've worked with in the last 3 years?"
 2. **Candidate Response**: Candidate speaks freely (typically 1–5 minutes).
 3. **Continuous RAG Query**: Voice engine queries the knowledge base in real time using candidate keywords to prepare follow-up probes.
-4. **Interjection Rule**: 
-   - If candidate speaks >60 seconds without mentioning a verifiable work claim (activity, tool, outcome), bot gently interrupts once: "That's helpful context. Can you tell me about a specific project or task where you used [skill]?"
-   - This happens at most once per call.
-5. **Skill Pool Identification**: Implicit — the claims in phase 2 determine which skills were discussed.
+4. **Skill Pool Identification**: Implicit — the claims in phase 2 determine which skills were discussed.
 
 **Output**: Transcript segment tagged `phase:discovery`, list of candidate's keywords.
 
@@ -143,10 +146,10 @@ An automated interview system that:
    - `evidence_segments` — [timestamp ranges] in transcript supporting the claim
    - `framework_type` — Which framework (e.g., "sfia-9", "togaf-2024")
 
-3. **Confidence-Based Flagging**:
-   - `confidence >= 0.8`: Auto-approved for SME review (shown with green indicator)
-   - `0.5 <= confidence < 0.8`: Flagged for SME attention (yellow indicator, "LLM uncertain")
-   - `confidence < 0.5`: Rejected; not shown unless explicitly requested by SME
+3. **Confidence-Based Flagging** (display indicator only — all claims go to SME for review):
+   - `confidence >= 0.8`: Green indicator (high confidence)
+   - `0.5 <= confidence < 0.8`: Yellow indicator ("LLM uncertain — verify carefully")
+   - `confidence < 0.5`: Red indicator ("low confidence — manual verification required")
 
 **Acceptance Criteria**:
 - Claim extraction completes within 5 minutes of transcript reception.
@@ -278,7 +281,6 @@ All data structures are **framework-agnostic** and use metadata tagging for exte
 ### 8.1 Pipecat for Interview State Machine
 - **Why**: Pipecat provides frame-based, real-time voice AI with declarative state machines (Flows).
 - **Consequence**: Interview logic maps directly to Pipecat Flows (Discovery → Evidence → Closure).
-- **Interjection Rule Implementation**: Bot monitors STT output in real time. If no claim-like pattern detected >60s, trigger the interjection flow.
 
 ### 8.2 Daily for Telephony
 - **Why**: PSTN dial-out capability with Sydney (`ap-southeast-2`) presence, native WebRTC support.
@@ -290,9 +292,11 @@ All data structures are **framework-agnostic** and use metadata tagging for exte
 - **Consequence**: At each evidence-gathering turn, bot queries the vector store for the relevant skill definition and naturally injects it into the question.
 - **Extensibility**: New frameworks added by inserting rows in `FrameworkDefinition`; no schema change.
 
-### 8.4 Post-Call Claim Extraction via Claude
-- **Why**: Claude 3.5 Sonnet handles long-context transcripts (full call) and structured output (JSON mode).
-- **Version Lock**: Pinned to Claude 3.5 Sonnet; upgrades require explicit version bump.
+### 8.4 Claude Model Tiers
+- **In-call responses** (real-time, during live assessment): `claude-haiku-4-5` — low latency, suitable for conversational turn-by-turn responses.
+- **Post-call analysis** (claim extraction, final assessment scoring before SME review): `claude-sonnet-4-6` — deep analysis of full transcript, structured JSON output, higher accuracy for confidence scoring.
+- **Rationale**: Haiku handles latency-sensitive in-call work; Sonnet handles thoroughness-sensitive post-call work.
+- **Version Lock**: Model IDs are pinned; upgrades require an explicit version bump and re-validation of extraction prompt outputs.
 - **Consequence**: Claim extraction is not real-time but deterministic and auditable.
 
 ### 8.5 Framework-Agnostic Data Model
@@ -308,12 +312,11 @@ All data structures are **framework-agnostic** and use metadata tagging for exte
 |-------------|--------|-----------|
 | **Call Setup Latency** | < 5 seconds from dial to candidate answer | Must feel immediate |
 | **STT Latency** | < 1 second (streaming) | Candidate expects natural conversation feel |
-| **Interjection Response Time** | < 500ms from detecting no-claim to audio prompt | Should feel real-time, not canned |
 | **RAG Query Time** | < 200ms for top-5 skill definitions | Must not break conversation flow |
 | **Claim Extraction Time** | < 5 minutes post-call | SME needs report quickly |
 | **Call Duration** | 15–40 minutes typical | Sufficient for discovery + evidence gathering |
 | **Concurrent Call Limit** | 10+ simultaneous (v1) | Enterprise pilot scale |
-| **Transcript Storage** | Full audio + STT indefinite (but transcribed text only >= 12 months) | Compliance + audit trail |
+| **Transcript Storage** | Full audio + STT transcript retained indefinitely | Compliance + audit trail |
 
 ---
 
@@ -322,10 +325,11 @@ All data structures are **framework-agnostic** and use metadata tagging for exte
 | System | Interface | Purpose |
 |--------|-----------|---------|
 | **Daily.co** | REST API + WebRTC | PSTN dial-out, room URLs, call recording |
-| **STT Provider** (TBD) | WebSocket (Pipecat-managed) | Real-time speech-to-text (Deepgram / Azure / Google) |
-| **TTS Provider** (TBD) | WebSocket (Pipecat-managed) | Real-time text-to-speech (Google / Azure / ElevenLabs) |
+| **Deepgram** (online) / **Faster Whisper** (offline) | WebSocket (Pipecat-managed) | Real-time speech-to-text |
+| **ElevenLabs** (online) / **Kokoro** (offline) | WebSocket (Pipecat-managed) | Real-time text-to-speech |
 | **PostgreSQL + pgvector** | TCP (pg protocol) | Transcript, claims, framework definitions, embeddings |
-| **Anthropic Claude** | REST API | Post-call claim extraction (batch) |
+| **Anthropic Claude Haiku 4.5** | REST API | Real-time in-call LLM responses |
+| **Anthropic Claude Sonnet 4.6** | REST API | Post-call claim extraction and final assessment scoring |
 
 ---
 
@@ -364,14 +368,36 @@ All data structures are **framework-agnostic** and use metadata tagging for exte
 
 ---
 
+## 13a. Minimum Viable Version (v1)
+
+**Must ship (offline-first):**
+- Offline STT via Faster Whisper
+- Offline TTS via Kokoro
+- Full interview state machine: Discovery → Evidence → Closure (no interjection rule)
+- Post-call claim extraction pipeline (Claude Sonnet 4.6)
+- Confidence indicators on claims (display only — all claims sent to SME)
+- Single framework per call (SFIA 9)
+- Transcript + audio retained indefinitely
+
+**Online providers (secondary — can ship after offline validated):**
+- Deepgram for STT
+- ElevenLabs for TTS
+
+**Deferred to v2+:**
+- Multi-framework support per deployment
+- Multi-language support
+- Real-time claim extraction (post-call only in v1)
+
+---
+
 ## 14. Open Questions
 
-1. **STT Provider Selection**: Deepgram vs. Azure vs. Google? Need latency + cost benchmarks for `ap-southeast-2`.
-2. **TTS Provider Selection**: Google Cloud TTS vs. Azure vs. ElevenLabs? Quality preference?
-3. **Interjection Rule Refinement**: Should interjection be framework-aware (e.g., detect "no SFIA claim" vs. generic no-claim)? Or framework-agnostic?
-4. **Claim Confidence Thresholds**: What confidence scores trigger SME highlights vs. auto-flag vs. reject? (Currently assumed: 0.8+ auto-approved, 0.5–0.8 flagged, < 0.5 rejected.)
-5. **Framework Version Handling**: Can the system run assessments with mixed framework versions (e.g., "sfia-9" and "sfia-10" definitions in parallel)? Or is a framework global?
-6. **Call Recording Retention**: Audio files indefinite, or prune after N months? Legal/compliance requirement TBD.
+1. - [x] **STT Provider Selection**: Deepgram (online), Faster Whisper (offline). Offline-first for v1.
+2. - [x] **TTS Provider Selection**: ElevenLabs (online), Kokoro (offline). Offline-first for v1.
+3. - [x] **Interjection Rule**: Removed from scope entirely.
+4. - [x] **Claim Confidence Thresholds**: Confidence is a display indicator only (green/yellow/red). No auto-approval — all claims are sent to SME for review regardless of score.
+5. - [x] **Framework Version Handling**: One framework per call, selected at initialization based on interview configuration. No mixed-framework calls.
+6. - [x] **Call Recording Retention**: Both audio files and STT transcripts retained indefinitely.
 
 ---
 
@@ -380,12 +406,13 @@ All data structures are **framework-agnostic** and use metadata tagging for exte
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-04-18 | AI Skills Assessor Team | Initial draft |
+| 2026-04-30 | AI Skills Assessor Team | Resolved all open questions: STT → Deepgram/Faster Whisper; TTS → ElevenLabs/Kokoro; removed interjection rule; confidence thresholds changed to display-only (no auto-approve); one framework per call; indefinite retention for audio + transcripts. Updated model references to Claude 4 family (Haiku in-call, Sonnet post-call). Added Minimum Viable Version section. |
 
 ---
 
 ## 16. Dependencies
 
 - **PRD-001** (parent): Defines platform goals, SME review workflow, success metrics.
-- **Phase 2** (Voice Engine Core): Implements this workflow.
-- **Phase 3** (RAG Knowledge Base): Implements framework definitions + RAG queries.
-- **Phase 4** (Claim Extraction Pipeline): Implements post-call LLM pipeline.
+- **Phase 4** (Assessment Workflow & Interjection): Implements the interview state machine (SfiaFlowController).
+- **Phase 5** (RAG Knowledge Base): Implements framework definitions, data ingestion, and RAG queries.
+- **Phase 6** (Claim Extraction Pipeline): Implements post-call LLM extraction pipeline.
