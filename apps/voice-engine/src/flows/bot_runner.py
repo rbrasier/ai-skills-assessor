@@ -414,9 +414,13 @@ class SFIACallBot:
     # ─── Construction ────────────────────────────────────────────────
 
     async def _build(self) -> Any:
+        import asyncpg
+
+        from src.adapters.pgvector_knowledge_base import PgVectorKnowledgeBase
         from src.domain.services.transcript_recorder import TranscriptRecorder
         from src.flows.assessment_pipeline import build_sfia_pipeline
-        from src.flows.sfia_flow_controller import SfiaFlowController
+        from src.flows.sfia_flow_controller import _FALLBACK_SYSTEM_PROMPT, SfiaFlowController
+        from src.flows.system_prompt_builder import SystemPromptBuilder
 
         if self._transport_mode == "livekit":
             from pipecat.transports.livekit.transport import (
@@ -453,12 +457,30 @@ class SFIACallBot:
 
         self._transport = transport
 
+        # Build DB pool, system prompt, and knowledge base for this call.
+        db_pool = await asyncpg.create_pool(self._settings.database_url)
+        self._db_pool = db_pool
+
+        knowledge_base: Any = PgVectorKnowledgeBase(db_pool=db_pool)
+
+        try:
+            system_prompt = await SystemPromptBuilder(db_pool).build_cached_system_prompt()
+        except Exception:
+            logger.warning(
+                "SFIACallBot: SystemPromptBuilder failed (framework data not seeded?) "
+                "— using fallback persona for session %s",
+                self._session_id,
+            )
+            system_prompt = _FALLBACK_SYSTEM_PROMPT
+
         recorder = TranscriptRecorder()
         self._recorder = recorder
 
         controller = SfiaFlowController(
             recorder=recorder,
             on_call_ended=self._handle_bot_initiated_hangup,
+            system_prompt=system_prompt,
+            knowledge_base=knowledge_base,
         )
         self._controller = controller
 
@@ -587,6 +609,13 @@ class SFIACallBot:
                 )
 
         await self._listener.on_call_ended(self._session_id)
+
+        db_pool = getattr(self, "_db_pool", None)
+        if db_pool is not None:
+            try:
+                await db_pool.close()
+            except Exception:
+                logger.debug("SFIACallBot: db_pool.close() raised for %s", self._session_id)
 
     # ─── Public lifecycle ────────────────────────────────────────────
 

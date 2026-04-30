@@ -14,6 +14,11 @@ Design principles
 * **Phase tracking is decoupled** — handlers call ``recorder.set_phase()`` so
   the :class:`TranscriptFrameObserver` always knows which flow state produced
   each speaker turn.
+* **RAG injection at state-transition** — ``handle_skills_identified()`` queries
+  ``IKnowledgeBase`` once and stores the formatted context; the evidence
+  gathering node builder embeds it in ``task_messages``. No per-turn queries.
+* **Static system prompt** — injected at construction time (pre-built by
+  ``SystemPromptBuilder``); replaces the old hardcoded ``_BOT_PERSONA`` constant.
 
 pipecat-ai-flows API (v0.0.10+)
 --------------------------------
@@ -32,11 +37,14 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from src.domain.ports.knowledge_base import IKnowledgeBase, SkillDefinition
 from src.domain.services.transcript_recorder import TranscriptRecorder
 
 logger = logging.getLogger(__name__)
 
-_BOT_PERSONA = (
+# Fallback persona used when SystemPromptBuilder fails to fetch framework data
+# (e.g. frameworks table not yet seeded). Keeps the bot functional.
+_FALLBACK_SYSTEM_PROMPT = (
     "You are Noa, a warm and professional AI skills assessor from Resonant. "
     "You conduct structured SFIA-based skills assessments over the phone. "
     "Keep your language conversational, concise, and encouraging. "
@@ -58,21 +66,23 @@ class SfiaFlowController:
         *,
         recorder: TranscriptRecorder,
         on_call_ended: Callable[[], Awaitable[None] | None],
+        system_prompt: str,
+        knowledge_base: IKnowledgeBase,
+        framework_type: str = "sfia-9",
     ) -> None:
         self._recorder = recorder
         self._on_call_ended = on_call_ended
+        self._system_prompt = system_prompt
+        self._knowledge_base = knowledge_base
+        self._framework_type = framework_type
         self._identified_skills: list[dict[str, Any]] = []
+        self._rag_context: str = ""
 
     @property
     def identified_skills(self) -> list[dict[str, Any]]:
         return list(self._identified_skills)
 
     # ─── Public handlers (testable without Pipecat) ──────────────────
-    #
-    # Handlers perform two tasks:
-    #   1. Pure side-effects (phase tracking, skill storage) — always run.
-    #   2. Return the next NodeConfig — requires pipecat-ai-flows [voice] extras.
-    #      Falls back to None when the package is not installed (lean CI).
 
     async def handle_consent_given(
         self, args: dict[str, Any], flow_manager: Any
@@ -93,10 +103,29 @@ class SfiaFlowController:
     async def handle_skills_identified(
         self, args: dict[str, Any], flow_manager: Any
     ) -> tuple[None, Any]:
-        """Skills extracted from SkillDiscovery — transition to EvidenceGathering."""
+        """Skills extracted from SkillDiscovery — query RAG, then transition."""
         skills = args.get("skills", [])
         self._identified_skills = skills
-        logger.info("SfiaFlow: skills_identified (%d) → evidence_gathering", len(skills))
+        skill_codes = [s["skill_code"] for s in skills if "skill_code" in s]
+
+        try:
+            results: list[SkillDefinition] = []
+            for code in skill_codes:
+                definitions = await self._knowledge_base.query_by_skill_code(
+                    skill_code=code,
+                    framework_type=self._framework_type,
+                )
+                results.extend(definitions)
+            self._rag_context = _format_rag_context(results) if results else ""
+        except Exception:
+            logger.exception("SfiaFlow: RAG query failed — proceeding without context")
+            self._rag_context = ""
+
+        logger.info(
+            "SfiaFlow: skills_identified (%d) → evidence_gathering (rag=%d chars)",
+            len(skills),
+            len(self._rag_context),
+        )
         self._recorder.set_phase("evidence_gathering")
         return None, _try_build(self._build_evidence_gathering_node)
 
@@ -140,7 +169,7 @@ class SfiaFlowController:
     def _build_introduction_node(self) -> Any:
         FlowsFunctionSchema = _import_flows_schema()
         return {
-            "role_message": _BOT_PERSONA,
+            "role_message": self._system_prompt,
             "task_messages": [
                 {
                     "role": "user",
@@ -182,7 +211,7 @@ class SfiaFlowController:
     def _build_skill_discovery_node(self) -> Any:
         FlowsFunctionSchema = _import_flows_schema()
         return {
-            "role_message": _BOT_PERSONA,
+            "role_message": self._system_prompt,
             "task_messages": [
                 {
                     "role": "user",
@@ -246,24 +275,26 @@ class SfiaFlowController:
             for s in self._identified_skills
         ) or "the areas discussed"
 
+        rag_block = (
+            f"\n\n>>> SKILL DEFINITIONS START\n{self._rag_context}\n>>> SKILL DEFINITIONS END"
+            if self._rag_context
+            else ""
+        )
+
         return {
-            "role_message": _BOT_PERSONA,
+            "role_message": self._system_prompt,
             "task_messages": [
                 {
                     "role": "user",
                     "content": (
                         f"You are now gathering evidence for the candidate's skills in: "
-                        f"{skills_summary}. "
-                        "For each skill area, ask the candidate for a concrete example from "
-                        "their work. Probe gently for:\n"
-                        "  • Autonomy — did they make decisions independently?\n"
-                        "  • Influence — who did their work impact?\n"
-                        "  • Complexity — what made the work challenging?\n"
-                        "  • Knowledge — what did they learn or apply?\n"
-                        "Aim for at least one specific example per skill area. "
-                        "When you have gathered sufficient evidence across all skill areas "
-                        "(or the candidate has exhausted their examples), "
-                        "call evidence_complete."
+                        f"{skills_summary}."
+                        f"{rag_block}\n\n"
+                        "Use the skill definitions above (if present) to ask "
+                        "level-appropriate probing questions. For each skill, ask for "
+                        "a concrete work example. Probe for: Autonomy, Influence, "
+                        "Complexity, Knowledge. When sufficient evidence is gathered "
+                        "across all skill areas, call evidence_complete."
                     ),
                 }
             ],
@@ -284,7 +315,7 @@ class SfiaFlowController:
     def _build_summary_node(self) -> Any:
         FlowsFunctionSchema = _import_flows_schema()
         return {
-            "role_message": _BOT_PERSONA,
+            "role_message": self._system_prompt,
             "task_messages": [
                 {
                     "role": "user",
@@ -312,7 +343,7 @@ class SfiaFlowController:
     def _build_closing_node(self) -> Any:
         FlowsFunctionSchema = _import_flows_schema()
         return {
-            "role_message": _BOT_PERSONA,
+            "role_message": self._system_prompt,
             "task_messages": [
                 {
                     "role": "user",
@@ -334,6 +365,15 @@ class SfiaFlowController:
                 ),
             ],
         }
+
+
+def _format_rag_context(results: list[SkillDefinition]) -> str:
+    lines = []
+    for skill in results:
+        level_str = f" — Level {skill.level}" if skill.level is not None else ""
+        lines.append(f"\n**{skill.skill_name} ({skill.skill_code}){level_str}**")
+        lines.append(skill.content)
+    return "\n".join(lines)
 
 
 def _try_build(builder: Any) -> Any:
