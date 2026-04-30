@@ -1,7 +1,7 @@
 # PRD-002: Assessment Interview Workflow
 
 ## Status
-Draft
+🟢 Approved
 
 ## Date
 2026-04-18
