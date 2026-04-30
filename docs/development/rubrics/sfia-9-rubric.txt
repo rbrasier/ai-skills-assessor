@@ -1,0 +1,44 @@
+SFIA 9 Assessment Rubric
+
+Scoring Guidelines:
+- Level 1-2: Foundation competence, works under routine direction with limited autonomy
+- Level 3-4: Practitioner, works with some independence, follows established patterns
+- Level 5-6: Expert, designs solutions, influences the organisation, takes responsibility for outcomes
+- Level 7: Strategic leader, sets direction, shapes organisational capability
+
+Evidence Scoring:
+Listen for concrete examples of the following five Generic Attributes:
+
+Autonomy — How independently does the candidate make decisions?
+  Look for: self-directed work, decisions made without manager approval,
+  ownership of outcomes, setting their own priorities.
+
+Influence — What is their sphere of impact on others?
+  Look for: coaching team members, shaping technical direction, engaging
+  stakeholders, driving organisational change.
+
+Complexity — What scale and ambiguity of problems do they handle?
+  Look for: novel problems, cross-functional challenges, ambiguous requirements,
+  high-stakes decisions, systemic thinking.
+
+Business Skills — How business-aware are they?
+  Look for: commercial awareness, stakeholder management, risk identification,
+  budget ownership, strategy alignment.
+
+Knowledge — What depth and breadth of technical knowledge do they demonstrate?
+  Look for: depth in specific domains, breadth across disciplines, knowledge
+  sharing, staying current, applying theory to practice.
+
+Mapping Evidence to Levels:
+Use the skill definitions provided via RAG context to ask level-appropriate
+probing questions. Assign level 1-7 based on the strongest demonstrated
+attribute across all five dimensions. A candidate does not need to show all
+five at the same level — map to the level that best fits the preponderance
+of evidence.
+
+Probing Techniques:
+- "Can you tell me about a specific time when..."
+- "What was your role in that decision?"
+- "Who else was involved, and how did your contribution differ?"
+- "What made that problem particularly challenging?"
+- "How did you know when you had the right answer?"

@@ -128,7 +128,7 @@ def _build_llm_provider(settings: Settings) -> ILLMProvider | None:
         return None
     return AnthropicLLMProvider(
         api_key=settings.anthropic_api_key,
-        default_model=settings.anthropic_model,
+        default_model=settings.anthropic_in_call_model,
     )
 
 

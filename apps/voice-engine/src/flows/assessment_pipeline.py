@@ -77,7 +77,7 @@ async def build_sfia_pipeline(
 
     llm = AnthropicLLMService(
         api_key=settings.anthropic_api_key,
-        model=settings.anthropic_model,
+        model=settings.anthropic_in_call_model,
     )
 
     context = OpenAILLMContext()
@@ -113,7 +113,7 @@ async def build_sfia_pipeline(
     )
     await flow_manager.initialize(initial_node=controller.get_initial_node())
 
-    logger.info("SFIAAssessmentPipeline: pipeline ready (model=%s)", settings.anthropic_model)
+    logger.info("SFIAAssessmentPipeline: pipeline ready (model=%s)", settings.anthropic_in_call_model)
     return task
 
 

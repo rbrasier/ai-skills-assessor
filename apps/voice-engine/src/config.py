@@ -56,12 +56,16 @@ class Settings(BaseSettings):
     # Token TTL (seconds) for both bot and browser participant.
     livekit_token_ttl_seconds: int = 3600
 
-    # ─── AI providers (Phase 3 Revision 1) ────────────────────────
-    # All three are optional at boot — missing keys cause a 503 at
+    # ─── AI providers ─────────────────────────────────────────────
+    # All are optional at boot — missing keys cause a 503 at
     # `/api/v1/assessment/trigger` with a loud log warning so local
     # dev / tests remain painless.
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-3-5-haiku-latest"
+    # Real-time in-call model — low latency, used by Pipecat pipeline.
+    anthropic_in_call_model: str = "claude-haiku-4-5"
+    # Post-call model — higher quality, used for claim extraction (Phase 6).
+    anthropic_post_call_model: str = "claude-sonnet-4-6"
+    openai_api_key: str = ""  # required for embedding ingestion scripts
     deepgram_api_key: str = ""
     deepgram_model: str = "nova-2-phonecall"
     elevenlabs_api_key: str = ""

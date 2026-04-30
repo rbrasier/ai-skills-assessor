@@ -1,19 +1,20 @@
-// AI Skills Assessor — Phase 3 schema (v0.4.0).
+// AI Skills Assessor — Phase 5 schema (v0.5.0).
 //
 // Scope additions in this phase:
-//   - pgvector extension enabled on the Postgres database (required by
-//     ADR-005 for RAG skill retrieval) via a raw-SQL migration.
-//   - `skill_embeddings` table — ready for SFIA ingestion in Phase 5.
-//   - `assessment_reports` scaffold — the richer `claims` relation is
-//     added in Phase 6 (claim extraction pipeline).
+//   - `SkillEmbedding` removed (replaced by the normalized framework tables below).
+//   - `Framework` — master registry of assessment frameworks (SFIA 9, TOGAF, …).
+//   - `FrameworkAttributes` — Generic Attributes per level (Autonomy, Influence, …).
+//   - `FrameworkSkills` — skill catalog (one row per skill code).
+//   - `FrameworkSkillLevels` — level-specific content + pgvector embeddings.
+//     The `embedding` column is `Unsupported` because Prisma has no native
+//     `vector` type; the RAG adapter queries it via raw SQL.
 //
 // Phase 2 scope (retained): candidates and assessment sessions, both
-// with JSONB `metadata` columns for forward-compatible fields
-// (employee_id, failureReason, cancelledAt, …). `candidates.email`
-// is the primary key — per phase-2-basic-voice-engine.md §1.9.
+// with JSONB `metadata` columns for forward-compatible fields.
+// Phase 3 scope (retained): `assessment_reports` scaffold.
 //
-// SFIA-specific tables (beyond `skill_embeddings`), claims, and
-// transcripts are introduced by later phases.
+// See ADR-005 and the Phase 5 implementation doc for the IVFFlat index
+// creation SQL (run post-migration as a raw statement).
 
 generator client {
   provider        = "prisma-client-js"
@@ -67,30 +68,86 @@ model AssessmentSession {
   @@map("assessment_sessions")
 }
 
-/// Vector store of framework-skill-level embeddings (SFIA 9 today,
-/// TOGAF / ITIL / PMBOK in the future via the `frameworkType`
-/// discriminator). See ADR-005. The `embedding` column is declared
-/// `Unsupported` because Prisma has no native `vector` type; the
-/// Phase 5 RAG code will query it via raw SQL.
-model SkillEmbedding {
-  id               String   @id @default(uuid())
-  frameworkType    String   @db.VarChar(50)
-  frameworkVersion String   @db.VarChar(20)
-  skillCode        String   @db.VarChar(50)
-  skillName        String   @db.VarChar(255)
-  category         String   @db.VarChar(100)
-  subcategory      String?  @db.VarChar(100)
+/// Master framework registry. Each (type, version) tuple is a unique framework.
+/// The `rubric` field stores assessor behavioral scoring guidance, cached in the
+/// system prompt during assessment initialization.
+model Framework {
+  id        String   @id @default(uuid())
+  type      String   @db.VarChar(50)
+  version   String   @db.VarChar(20)
+  name      String   @db.VarChar(255)
+  rubric    String
+  isActive  Boolean  @default(true)
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attributes FrameworkAttributes[]
+  skills     FrameworkSkills[]
+
+  @@unique([type, version])
+  @@index([type])
+  @@map("frameworks")
+}
+
+/// Generic Attributes (Autonomy, Influence, Complexity, Business Skills, Knowledge)
+/// with level-specific descriptors (1-7). One row per (framework, attribute, level).
+/// Used to populate the static cached system prompt during assessment initialization.
+model FrameworkAttributes {
+  id          String    @id @default(uuid())
+  frameworkId String
+  framework   Framework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  attribute   String    @db.VarChar(100)
+  level       Int
+  description String
+  metadata    Json      @default("{}")
+  createdAt   DateTime  @default(now())
+
+  @@unique([frameworkId, attribute, level])
+  @@index([frameworkId])
+  @@map("framework_attributes")
+}
+
+/// Skill catalog for a framework. One row per skill (code + name + categories).
+/// Separates skill identity from level-specific content and embeddings.
+model FrameworkSkills {
+  id          String    @id @default(uuid())
+  frameworkId String
+  framework   Framework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  skillCode   String    @db.VarChar(50)
+  skillName   String    @db.VarChar(255)
+  category    String    @db.VarChar(100)
+  subcategory String?   @db.VarChar(100)
+  description String
+  guidance    String?
+  metadata    Json      @default("{}")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  levels FrameworkSkillLevels[]
+
+  @@unique([frameworkId, skillCode])
+  @@index([frameworkId])
+  @@map("framework_skills")
+}
+
+/// Level-specific content and embeddings for framework skills.
+/// One row per (skill, level) combination.
+/// The `embedding` column is Unsupported because Prisma lacks native pgvector support;
+/// queries use raw SQL. See the Phase 5 implementation doc for IVFFlat index creation.
+model FrameworkSkillLevels {
+  id               String          @id @default(uuid())
+  frameworkSkillId String
+  frameworkSkill   FrameworkSkills @relation(fields: [frameworkSkillId], references: [id], onDelete: Cascade)
   level            Int?
   content          String
   embedding        Unsupported("vector(1536)")?
-  metadata         Json     @default("{}")
-  createdAt        DateTime @default(now())
+  metadata         Json            @default("{}")
+  createdAt        DateTime        @default(now())
 
-  @@unique([frameworkType, frameworkVersion, skillCode, level], name: "idx_unique_framework_skill_level")
-  @@index([frameworkType])
-  @@index([frameworkType, level])
-  @@index([skillCode])
-  @@map("skill_embeddings")
+  @@unique([frameworkSkillId, level], name: "idx_unique_skill_level")
+  @@index([frameworkSkillId])
+  @@map("framework_skill_levels")
 }
 
 /// Scaffold for SME review reports. Phase 3 creates the table so the
