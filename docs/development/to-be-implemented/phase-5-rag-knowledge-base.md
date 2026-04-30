@@ -16,25 +16,72 @@ To Be Implemented
 
 ## Prerequisites
 
-⚠️ **Version Bump Required**: This phase introduces a new Prisma migration (`FrameworkAttributes`, `FrameworkSkills`, and `FrameworkSkillLevels` models) and an optional embedding dimension config. **Before implementation begins**, run:
+⚠️ **Version Bump Required**: This phase introduces a new Prisma migration (`Framework`, `FrameworkAttributes`, `FrameworkSkills`, and `FrameworkSkillLevels` models) and removes the existing `SkillEmbedding` model. **Before implementation begins**, run:
 
 ```bash
 /bump-version
 ```
 
-Choose a MINOR bump (e.g., v0.6.0 → v0.7.0). Then create the migration:
+Choose a MINOR bump (`v0.4.1` → `v0.5.0`). Then create the migration:
 
 ```bash
 cd packages/database
-pnpm prisma migrate dev --name v0_7_0_add_framework_config_and_skill_levels
+pnpm prisma migrate dev --name v0_5_0_add_framework_config_and_skill_levels
 ```
+
+---
+
+## 0. Phase 4 Compatibility — Breaking Changes
+
+Phase 5 makes several **breaking changes** to interfaces established in Phase 1–4. These are intentional clean cutovers; no backwards-compatibility shims are required.
+
+### 0.1 `IKnowledgeBase` port replacement
+
+**File:** `apps/voice-engine/src/domain/ports/knowledge_base.py`
+
+The Phase 1 stub defined `search_skills(query, framework="SFIA", limit)`. Phase 5 **replaces** this entirely with `query()` + `query_by_skill_code()` (see section 1.2). Update all call sites.
+
+### 0.2 `SkillDefinition` model replacement
+
+**File:** `apps/voice-engine/src/domain/models/skill.py`
+
+The Phase 1 `SkillDefinition(framework, code, name, level: SFIALevel, description)` dataclass and the `SFIALevel` enum are **removed**. The replacement `SkillDefinition` is defined in `domain/ports/knowledge_base.py` (see section 1.2). Delete the old file after updating imports.
+
+### 0.3 RAG injection strategy — state-transition only (not per-turn)
+
+The Pipecat Flows architecture sets `task_messages` once when a node is entered; they are not re-evaluated on each subsequent user turn within that state. Per-turn injection via `LLMMessagesFrame` interception was considered and rejected as fragile.
+
+**Chosen approach (Option C):** RAG context is injected once at state-transition time:
+
+- **`skill_discovery` node**: No RAG injection. Skills are unknown at entry; the LLM identifies them through conversation.
+- **`evidence_gathering` node**: `handle_skills_identified()` is already called with the identified skill codes before the node is built. The handler queries `IKnowledgeBase` and stores the formatted RAG context. `_build_evidence_gathering_node()` reads this stored context and embeds it in `task_messages`.
+
+This means `SfiaFlowController` receives an `IKnowledgeBase` instance at construction time. The `RAGContextInjector` class described in the original draft is not implemented — the injection logic lives directly in `handle_skills_identified()` and `_build_evidence_gathering_node()`.
+
+### 0.4 `SystemPromptBuilder` injection pattern
+
+`SystemPromptBuilder.build_cached_system_prompt()` is called **once at call initialisation** (in `SFIACallBot`, before `build_sfia_pipeline()` is called). The resulting string is passed into `SfiaFlowController.__init__()` as `system_prompt: str`, replacing the hardcoded `_BOT_PERSONA` constant. The controller never accesses the database directly.
+
+### 0.5 Config field renames
+
+`anthropic_model` is renamed to `anthropic_in_call_model` (default `claude-haiku-4-5`). A new field `anthropic_post_call_model` is added (default `claude-sonnet-4-6`). All existing references to `settings.anthropic_model` in `assessment_pipeline.py` and `bot_runner.py` must be updated.
+
+### 0.6 Prisma schema — `SkillEmbedding` removed
+
+`model SkillEmbedding` is removed from `packages/database/prisma/schema.prisma`. The four new models (`Framework`, `FrameworkAttributes`, `FrameworkSkills`, `FrameworkSkillLevels`) are added. The data migration SQL in section 7 handles moving any existing `skill_embeddings` rows before the old table is dropped.
+
+### 0.7 Transcript JSONB bloat — deferred to Phase 6
+
+Phase 4's decisions log flagged that storing transcripts in the session `metadata` JSONB column may become unwieldy for long calls. Moving transcripts to a dedicated table is deferred to Phase 6.
+
+---
 
 ## Objective
 
-Establish a tiered prompt architecture with Claude's native caching and dynamic RAG injection:
+Establish a tiered prompt architecture with Claude's native caching and state-transition RAG injection:
 
-1. **Static system prompt** (cached by Claude): Framework-agnostic assessor behavioral rubric + Generic Attributes definitions per framework
-2. **Dynamic RAG context** (per turn, injected into Pipecat task_messages): Skill definitions retrieved in real time from pgvector
+1. **Static system prompt** (fetched from DB once at call init, cached by Claude): Framework-agnostic assessor behavioral rubric + Generic Attributes definitions per framework
+2. **State-transition RAG context** (injected once when entering `evidence_gathering`): Skill definitions retrieved from pgvector based on identified skill codes
 3. **SFIA 9 data ingestion**: Extract skill definitions and attributes from the official SFIA 9 Excel file, store embeddings, and pre-populate the assessment system
 
 ---
@@ -179,7 +226,7 @@ model FrameworkSkills {
 
 ### 1.2 Ports: IEmbeddingService & IKnowledgeBase (Port Definitions)
 
-Define two ports in `apps/voice-engine/src/domain/ports/`:
+Define two ports in `apps/voice-engine/src/domain/ports/`. **Note:** `knowledge_base.py` already exists as a Phase 1 stub — Phase 5 **replaces** it entirely (see section 0.1). `embedding_service.py` is a new file.
 
 #### 1.2.1 IEmbeddingService
 
@@ -297,8 +344,9 @@ model FrameworkSkillLevels {
 - See section 1.4 for pgvector IVFFlat index creation (raw SQL, post-migration)
 
 **Migration note**:
-- If `skill_embeddings` exists from Phase 3, run the migration script in section 7 to create `framework_skills` and `framework_skill_levels`, migrate data, and drop the old table.
-- If the table doesn't exist, `prisma migrate dev` creates it with the new schema.
+- The existing `model SkillEmbedding` is **removed** from `packages/database/prisma/schema.prisma` as part of this phase. The four new models (`Framework`, `FrameworkAttributes`, `FrameworkSkills`, `FrameworkSkillLevels`) are added in its place.
+- The data migration SQL in section 7 handles migrating any existing `skill_embeddings` rows before dropping the old table.
+- Run `pnpm prisma migrate dev --name v0_5_0_add_framework_config_and_skill_levels` to apply the Prisma schema changes.
 
 ### 1.4 pgvector Index Creation
 
@@ -535,7 +583,7 @@ class OpenAIEmbeddingService(IEmbeddingService):
 
 **File:** `apps/voice-engine/src/adapters/pgvector_knowledge_base.py`
 
-Implements the `IKnowledgeBase` port using PostgreSQL pgvector:
+**Replaces** the Phase 1 stub in the same file (which raised `NotImplementedError`). Implements the `IKnowledgeBase` port using PostgreSQL pgvector:
 
 ```python
 import asyncpg
@@ -640,7 +688,9 @@ class PgVectorKnowledgeBase(IKnowledgeBase):
 
 **File:** `apps/voice-engine/src/flows/system_prompt_builder.py`
 
-Constructs the static, cacheable system prompt that includes bot persona, assessor rubric, and Generic Attributes definitions. Fetches from `frameworks` and `framework_descriptors` tables. This prompt is cached by Claude and reused across turns:
+Constructs the static, cacheable system prompt that includes bot persona, assessor rubric, and Generic Attributes definitions. Fetches from `frameworks` and `framework_attributes` tables.
+
+**Injection pattern**: `build_cached_system_prompt()` is called **once** in `SFIACallBot` at call initialisation (before `build_sfia_pipeline()`). The resulting string is passed to `SfiaFlowController.__init__(system_prompt=...)` and replaces the hardcoded `_BOT_PERSONA` constant. The controller never accesses the database directly. The prompt is then passed as `role_message` in each node config, allowing Claude to cache it across turns.
 
 ```python
 import asyncpg
@@ -753,100 +803,139 @@ Never quote framework codes to the candidate. Always translate framework concept
         return "\n".join(sections)
 ```
 
-### 1.9 Dynamic RAG Context Injector for Pipecat
+### 1.9 RAG Context Injection — State-Transition Strategy
 
-**File:** `apps/voice-engine/src/flows/rag_context_injector.py`
+No separate `RAGContextInjector` class is implemented. RAG context is injected once at state-transition time, directly inside `SfiaFlowController`.
 
-Injects RAG-retrieved skill context into Pipecat's `task_messages` **before each LLM call**. This component is called by `SfiaFlowController` after receiving user input:
+**Injection point**: `handle_skills_identified()` — this handler already fires with identified skill codes before the `evidence_gathering` node is built. It queries the knowledge base and stores the formatted context; `_build_evidence_gathering_node()` reads the stored context and embeds it in `task_messages`.
+
+**Updated `SfiaFlowController` constructor and handler**:
 
 ```python
-from domain.ports.knowledge_base import IKnowledgeBase, SkillDefinition
-
-class RAGContextInjector:
-    """
-    Manages dynamic RAG context injection into Pipecat task_messages.
-    
-    The static system prompt (cached) is separate; this handles per-turn
-    context updates during skill_discovery and evidence_gathering phases.
-    """
-    
-    def __init__(self, knowledge_base: IKnowledgeBase):
-        self.knowledge_base = knowledge_base
-        self._identified_skills: list[str] = []
-    
-    async def inject_context_for_turn(
+class SfiaFlowController:
+    def __init__(
         self,
-        user_text: str,
-        current_phase: str,
+        *,
+        recorder: TranscriptRecorder,
+        on_call_ended: Callable[[], Awaitable[None] | None],
+        system_prompt: str,                    # replaces _BOT_PERSONA constant
+        knowledge_base: IKnowledgeBase,        # new — injected at startup
         framework_type: str = "sfia-9",
-    ) -> str:
-        """
-        Retrieve RAG context and return as a formatted string to append
-        to the current task_messages before calling the LLM.
-        
-        Returns:
-            A string with RAG context, or empty string if no context needed.
-        """
-        # Only inject during these phases
-        if current_phase not in ("skill_discovery", "evidence_gathering"):
-            return ""
-        
-        # Determine query strategy
-        if current_phase == "evidence_gathering" and self._identified_skills:
-            results = await self.knowledge_base.query(
-                text=user_text,
-                framework_type=framework_type,
-                skill_codes=self._identified_skills,
-                top_k=3,  # Focused: top 3 related to identified skills
-            )
-        elif current_phase == "skill_discovery":
-            results = await self.knowledge_base.query(
-                text=user_text,
-                framework_type=framework_type,
-                top_k=5,  # Broader: top 5 across all skills
-            )
-        else:
-            return ""
-        
-        # Format results
-        if not results:
-            return ""
-        
-        return self._format_rag_context(results)
-    
-    def set_identified_skills(self, skill_codes: list[str]) -> None:
-        """Called when SfiaFlowController.handle_skills_identified() fires."""
-        self._identified_skills = skill_codes
-    
-    def _format_rag_context(self, results: list[SkillDefinition]) -> str:
-        """Format retrieved skills for insertion into task_messages."""
-        lines = [">>> RAG CONTEXT START"]
-        
-        for skill in results:
-            lines.append(f"\n**{skill.skill_name} ({skill.skill_code}) - Level {skill.level}**")
-            lines.append(f"[Relevance: {skill.similarity:.1%}]")
-            lines.append(f"\n{skill.content}")
-        
-        lines.append("\n>>> RAG CONTEXT END")
-        return "\n".join(lines)
+    ) -> None:
+        self._recorder = recorder
+        self._on_call_ended = on_call_ended
+        self._system_prompt = system_prompt
+        self._knowledge_base = knowledge_base
+        self._framework_type = framework_type
+        self._identified_skills: list[dict[str, Any]] = []
+        self._rag_context: str = ""            # populated by handle_skills_identified
+
+    async def handle_skills_identified(
+        self, args: dict[str, Any], flow_manager: Any
+    ) -> tuple[None, Any]:
+        """Skills extracted from SkillDiscovery — query RAG, then transition."""
+        skills = args.get("skills", [])
+        self._identified_skills = skills
+        skill_codes = [s["skill_code"] for s in skills if "skill_code" in s]
+
+        # Query knowledge base for all identified skill codes
+        try:
+            results = []
+            for code in skill_codes:
+                definitions = await self._knowledge_base.query_by_skill_code(
+                    skill_code=code,
+                    framework_type=self._framework_type,
+                )
+                results.extend(definitions)
+            self._rag_context = _format_rag_context(results) if results else ""
+        except Exception:
+            logger.exception("SfiaFlow: RAG query failed — proceeding without context")
+            self._rag_context = ""
+
+        logger.info(
+            "SfiaFlow: skills_identified (%d) → evidence_gathering (rag=%d chars)",
+            len(skills), len(self._rag_context),
+        )
+        self._recorder.set_phase("evidence_gathering")
+        return None, _try_build(self._build_evidence_gathering_node)
 ```
 
-**Integration with SfiaFlowController**: Modify `apps/voice-engine/src/flows/sfia_flow_controller.py` to call `RAGContextInjector` before each node's LLM execution:
+**Updated `_build_evidence_gathering_node()`** — embeds stored RAG context in `task_messages`:
 
 ```python
-# In _build_skill_discovery_node():
-rag_context = await self._rag_injector.inject_context_for_turn(
-    user_text=<captured from last user turn>,
-    current_phase="skill_discovery",
-)
+def _build_evidence_gathering_node(self) -> Any:
+    FlowsFunctionSchema = _import_flows_schema()
+    skills_summary = ", ".join(
+        s.get("skill_name", s.get("skill_code", "unknown"))
+        for s in self._identified_skills
+    ) or "the areas discussed"
 
-# Append to task_messages:
-task_messages = [
-    { "role": "user", "content": "Ask about main skills..." },
-]
-if rag_context:
-    task_messages.insert(0, { "role": "system", "content": rag_context })
+    rag_block = (
+        f"\n\n>>> SKILL DEFINITIONS START\n{self._rag_context}\n>>> SKILL DEFINITIONS END"
+        if self._rag_context else ""
+    )
+
+    return {
+        "role_message": self._system_prompt,
+        "task_messages": [
+            {
+                "role": "user",
+                "content": (
+                    f"You are now gathering evidence for: {skills_summary}."
+                    f"{rag_block}\n\n"
+                    "Use the skill definitions above (if present) to ask level-appropriate "
+                    "probing questions. For each skill, ask for a concrete work example. "
+                    "Probe for: Autonomy, Influence, Complexity, Knowledge. "
+                    "When sufficient evidence is gathered, call evidence_complete."
+                ),
+            }
+        ],
+        "functions": [...],  # same as before
+    }
 ```
+
+**Helper** (module-level):
+
+```python
+def _format_rag_context(results: list[SkillDefinition]) -> str:
+    lines = []
+    for skill in results:
+        level_str = f" — Level {skill.level}" if skill.level else ""
+        lines.append(f"\n**{skill.skill_name} ({skill.skill_code}){level_str}**")
+        lines.append(skill.content)
+    return "\n".join(lines)
+```
+
+**Phase coverage**:
+
+| Phase | RAG behaviour |
+|-------|--------------|
+| `introduction` | No RAG — fixed consent prompt |
+| `skill_discovery` | No RAG — skills unknown at entry |
+| `evidence_gathering` | RAG context injected once at node entry (from `handle_skills_identified`) |
+| `summary` | No RAG — summarisation prompt only |
+| `closing` | No RAG — fixed farewell |
+
+---
+
+## 1.10 Config Changes (`config.py`)
+
+**File:** `apps/voice-engine/src/config.py`
+
+The `anthropic_model` field is **renamed** and a new post-call field is added:
+
+```python
+# Before (Phase 4):
+anthropic_model: str = "claude-3-5-haiku-latest"
+
+# After (Phase 5):
+anthropic_in_call_model: str = "claude-haiku-4-5"       # real-time, low-latency in-call responses
+anthropic_post_call_model: str = "claude-sonnet-4-6"    # post-call claim extraction and scoring
+```
+
+Update all references to `settings.anthropic_model` in:
+- `apps/voice-engine/src/flows/assessment_pipeline.py` → `settings.anthropic_in_call_model`
+- `apps/voice-engine/src/flows/bot_runner.py` (if referenced there)
 
 ---
 
@@ -969,19 +1058,16 @@ Built once at call initialization, cached by Claude for the entire assessment:
 
 This prompt remains unchanged throughout the call and is cached, so subsequent LLM calls only incur token cost for the dynamic layer.
 
-#### Layer 2: Dynamic RAG Context (Pipecat task_messages)
+#### Layer 2: State-Transition RAG Context (Pipecat task_messages)
 
-Updated on every user turn during `skill_discovery` and `evidence_gathering`:
+Injected once when entering `evidence_gathering` — embedded directly in that node's `task_messages`:
 
 ```
-PER-TURN PIPECAT CONTEXT:
-├─ task_messages:
-│  ├─ [system]: ">>> RAG CONTEXT START\n{retrieved skill definitions}\n>>> RAG CONTEXT END"
-│  └─ [user]: "{phase-specific instruction}"
-└─ history: [all previous turns in conversation]
+EVIDENCE GATHERING NODE task_messages:
+└─ [user]: "{phase instruction}\n\n>>> SKILL DEFINITIONS START\n{skill definitions}\n>>> SKILL DEFINITIONS END\n\n{probing instructions}"
 ```
 
-When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves relevant skills and prepends a system message to `task_messages`.
+RAG context is fetched during `handle_skills_identified()` (the state transition from `skill_discovery`) and stored on the controller. No per-turn queries.
 
 ### Call Flow with Tiered Architecture
 
@@ -990,33 +1076,35 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 │ 1. Create AssessmentSession               │
 │ 2. Load framework config (sfia-9)         │
 │ 3. Build static system prompt             │
-│    - Fetch FrameworkScoringRubric         │
-│    - Fetch FrameworkDescriptor (all levels) │
-│    - Compose into SystemPromptBuilder     │
+│    - SystemPromptBuilder fetches rubric   │
+│    - Fetches FrameworkAttributes (35 rows)│
+│    - Returns prompt string                │
 │                                            │
-│ 4. Initialize Pipecat pipeline            │
-│    - Set system prompt (this is cached)   │
-│    - Initialize SfiaFlowController        │
-│    - Initialize RAGContextInjector        │
+│ 4. Initialize SfiaFlowController          │
+│    - Inject system_prompt string          │
+│    - Inject IKnowledgeBase instance       │
+│ 5. Initialize Pipecat pipeline            │
+│    - system_prompt passed as role_message │
 └────────────────────────────────────────────┘
            ↓
-┌─ FOR EACH TURN ───────────────────────────┐
-│ 1. Candidate speaks                       │
-│ 2. STT captures: "I've worked on Docker"  │
-│ 3. Check current phase (e.g., skill_discovery)
-│ 4. If skill_discovery or evidence_gathering:
-│    - Call RAGContextInjector.inject_context_for_turn()
-│    - Retrieve pgvector results (e.g., top 5 skills) │
-│    - Format as ">>> RAG CONTEXT START..."           │
-│    - Prepend to task_messages                       │
-│ 5. Call Claude with:                     │
-│    - system: [cached prompt]             │
-│    - messages: [history + RAG context]   │
-│ 6. Claude generates response              │
-│ 7. TTS plays response                     │
-│                                            │
-│ (For introduction, summary, closing:      │
-│  Skip step 4 — use fixed task_messages)  │
+┌─ SKILL DISCOVERY (multiple turns) ────────┐
+│ LLM converses using system_prompt only    │
+│ No RAG queries during this phase          │
+│ LLM calls skills_identified() when ready │
+└────────────────────────────────────────────┘
+           ↓
+┌─ handle_skills_identified() ──────────────┐
+│ 1. Store identified skill codes           │
+│ 2. Query IKnowledgeBase.query_by_skill_code│
+│    for each identified skill              │
+│ 3. Format results → self._rag_context     │
+│ 4. Transition to evidence_gathering node  │
+└────────────────────────────────────────────┘
+           ↓
+┌─ EVIDENCE GATHERING (multiple turns) ─────┐
+│ task_messages contains RAG context baked  │
+│ in at node entry — no per-turn queries    │
+│ LLM uses skill definitions to probe       │
 └────────────────────────────────────────────┘
 ```
 
@@ -1024,10 +1112,8 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 
 | Component | Latency | Notes |
 |-----------|---------|-------|
-| pgvector query | < 10ms | IVFFlat index, ~800 embeddings |
-| Embedding API call (single text) | ~100-200ms | OpenAI text-embedding-3-small |
-| RAG formatting & injection | < 5ms | String manipulation |
-| **Total RAG overhead per turn** | **~150-250ms** | Acceptable for natural conversation (~2-3s between turns) |
+| pgvector query (at state transition) | < 10ms per skill code | IVFFlat index, ~800 embeddings |
+| Total RAG overhead at transition | < 50ms | Queries are batched across identified skills |
 | Claude API call (with caching) | ~200-500ms | Cached system prompt reduces token cost |
 
 **Cache efficiency**: After the first turn, Claude's cache hit reduces input tokens by ~90% for the static system prompt, reducing both latency and cost.
@@ -1036,8 +1122,8 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 
 | Phase | RAG Behavior |
 |-------|--------------|
-| **introduction** | No RAG queries; fixed system prompt only |
-| **skill_discovery** | RAG query on every user turn; broad search (top 5) |
+| **introduction** | No RAG queries; system prompt only |
+| **skill_discovery** | No RAG queries; skills unknown |
 | **evidence_gathering** | RAG query on every user turn; focused search (top 3, filtered by identified skills) |
 | **summary** | No RAG queries; summarization prompt only |
 | **closing** | No RAG queries; fixed farewell |
@@ -1073,11 +1159,18 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 
 ### Port & Adapter Implementation
 
-- [ ] `IEmbeddingService` port defined with `embed(text)` and `embed_batch(texts)` methods
-- [ ] `IKnowledgeBase` port defined with `query()` and `query_by_skill_code()` methods
+- [ ] `IEmbeddingService` port defined at `domain/ports/embedding_service.py` with `embed(text)` and `embed_batch(texts)` methods
+- [ ] `IKnowledgeBase` port **replaced** at `domain/ports/knowledge_base.py` — old `search_skills()` removed; new `query()` and `query_by_skill_code()` methods defined; new `SkillDefinition` dataclass defined here
+- [ ] Old `SkillDefinition` and `SFIALevel` removed from `domain/models/skill.py`
 - [ ] `OpenAIEmbeddingService` adapter implements `IEmbeddingService`; uses `text-embedding-3-small` (1536 dims)
-- [ ] `PgVectorKnowledgeBase` adapter implements `IKnowledgeBase`; queries pgvector and returns `SkillDefinition` objects
+- [ ] `PgVectorKnowledgeBase` adapter **replaces** the Phase 1 stub; implements `IKnowledgeBase`; queries pgvector and returns `SkillDefinition` objects
 - [ ] Both adapters are dependency-injected (not hardcoded in core logic)
+
+### Config Changes
+
+- [ ] `anthropic_model` field **renamed** to `anthropic_in_call_model` with default `claude-haiku-4-5`
+- [ ] New `anthropic_post_call_model` field added with default `claude-sonnet-4-6`
+- [ ] All references to `settings.anthropic_model` updated to `settings.anthropic_in_call_model` in `assessment_pipeline.py` and `bot_runner.py`
 
 ### Static Prompt Architecture (Claude Caching)
 
@@ -1085,17 +1178,17 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 - [ ] Query `frameworks WHERE type='sfia-9' AND version='9.0'` returns rubric field; `isActive = true`
 - [ ] Query `framework_attributes WHERE frameworkId=...` returns all 35 attribute definitions
 - [ ] Built prompt includes bot persona, rubric, and Generic Attributes (5 attrs × 7 levels)
-- [ ] Prompt is marked for caching in Pipecat context (passed to Claude as system message)
+- [ ] Prompt string is injected into `SfiaFlowController.__init__(system_prompt=...)` and used as `role_message` in each node config
 - [ ] Cached prompt is reused across all turns in a single call (verified via prompt cache metrics in API response)
 
-### Dynamic RAG Context Injection
+### State-Transition RAG Context Injection
 
-- [ ] `RAGContextInjector.inject_context_for_turn()` queries pgvector during `skill_discovery` phase
-- [ ] RAG query uses broad search strategy in `skill_discovery`: `top_k=5`, no skill filters
-- [ ] RAG query uses focused strategy in `evidence_gathering`: `top_k=3`, filtered by `skill_codes`
-- [ ] RAG context formatted with ">>> RAG CONTEXT START / END" markers
-- [ ] RAG context is inserted as a system message into `task_messages` before LLM call
-- [ ] No RAG queries during `introduction`, `summary`, `closing` phases
+- [ ] `SfiaFlowController.__init__()` accepts `knowledge_base: IKnowledgeBase` and `system_prompt: str` arguments
+- [ ] `handle_skills_identified()` queries `IKnowledgeBase.query_by_skill_code()` for each identified skill code
+- [ ] RAG context formatted with `>>> SKILL DEFINITIONS START / END` markers and stored in `self._rag_context`
+- [ ] `_build_evidence_gathering_node()` embeds `self._rag_context` in `task_messages`
+- [ ] No RAG queries during `introduction`, `skill_discovery`, `summary`, `closing` phases
+- [ ] If knowledge base returns no results, `_rag_context` is empty string and evidence node proceeds without it
 - [ ] If `FrameworkSkillLevels` table is empty, RAG context gracefully returns empty string (fallback behavior)
 
 ### Integration & Latency
@@ -1150,7 +1243,7 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 4. ✅ Run extraction script: `extract_sfia_attributes.py`
 5. ✅ Run ingestion script: `ingest_sfia_skills.py`
 6. ✅ Load assessor rubric: `load_sfia_rubric.py`
-7. ✅ Deploy updated `sfia_flow_controller.py` with `RAGContextInjector` integration
+7. ✅ Deploy updated `sfia_flow_controller.py` with state-transition RAG injection and injected `system_prompt`
 8. ✅ Run integration tests against production database (no real calls)
 9. ✅ Monitor first 10 live calls for latency and prompt cache hit rate
 10. ✅ Document any schema tweaks or configuration changes in runbook
@@ -1261,6 +1354,7 @@ DROP TABLE skill_embeddings;
 
 | Date | Change | Notes |
 |------|--------|-------|
+| 2026-04-30 | Phase 4 compatibility audit + design decisions | Resolved 10 inconsistencies between Phase 4 implementation and Phase 5 plan: (1) RAG injection changed from per-turn to state-transition only (Option C — injected in `handle_skills_identified` / `_build_evidence_gathering_node`); (2) `IKnowledgeBase` clean cutover from `search_skills()` to `query()` + `query_by_skill_code()`; (3) `SkillDefinition` replaced in `domain/ports/knowledge_base.py`, old model removed from `domain/models/skill.py`; (4) `SystemPromptBuilder` result injected into `SfiaFlowController.__init__()` as `system_prompt` string, replacing `_BOT_PERSONA`; (5) `anthropic_model` renamed to `anthropic_in_call_model`, new `anthropic_post_call_model` added; (6) `SkillEmbedding` removed from `schema.prisma`; (7) transcript JSONB bloat deferred to Phase 6; (8) version bump numbers corrected to `0.4.1 → 0.5.0` |
 | 2026-04-30 | Refined DB schema — four-table model | Renamed `FrameworkDescriptor` → `FrameworkAttributes`; extracted `FrameworkSkills` catalog table (skill identity); renamed `SkillEmbedding` → `FrameworkSkillLevels` (now FK to `FrameworkSkills`); added `metadata` JSONB to all four tables; added `isActive` flag to `Framework`; updated ingestion scripts, adapter queries, and migration SQL to reflect new structure |
 | 2026-04-30 | Refine Phase 5 (Option A Normalized Schema) | Implemented tiered prompt strategy with Claude caching + dynamic RAG; normalized database schema with `Framework` parent table (stores rubric); refactored `SkillEmbedding` to use FK; added `FrameworkDescriptor` for Generic Attributes; resolved all audit findings; added schema migration script |
 | 2026-04-30 | Initial Phase 5 Draft | Architecture and deliverables outline |
