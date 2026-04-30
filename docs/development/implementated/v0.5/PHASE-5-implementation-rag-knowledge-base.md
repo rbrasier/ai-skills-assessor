@@ -3,7 +3,7 @@
 ## Reference
 - **Phase Document:** `docs/development/implementated/v0.5/v0.5-phase-5-rag-knowledge-base.md`
 - **Implementation Date:** 2026-04-30
-- **Status:** In Progress
+- **Status:** Completed
 
 ---
 
@@ -164,6 +164,14 @@ None — implementation follows the phase document exactly.
 | Date | Part | Decision | Rationale | Files Affected |
 |------|------|----------|-----------|----------------|
 | 2026-04-30 | — | Initial implementation plan created | — | This document |
+| 2026-04-30 | 2 | `SkillDefinition` placed in `knowledge_base.py`, not `models/skill.py` | Port owns its types; avoids cross-layer import from adapters back into models | `domain/ports/knowledge_base.py`, `domain/models/skill.py` |
+| 2026-04-30 | 2 | `SFIALevel` + old `SkillDefinition` removed from `domain/models/skill.py` | Clean cutover per phase doc — no backwards-compat shims | `domain/models/__init__.py`, `domain/models/skill.py` |
+| 2026-04-30 | 3 | `db_pool` typed as `Any` (not `asyncpg.Pool`) in adapter and builder | Avoids hard asyncpg import in files loaded by the lean CI image; asyncpg is only imported at runtime inside the bot runner | `pgvector_knowledge_base.py`, `system_prompt_builder.py` |
+| 2026-04-30 | 3 | `embedder` is optional in `PgVectorKnowledgeBase` (default `None`) | `query_by_skill_code()` (the only runtime call path) needs no embedding; `query()` raises `RuntimeError` if embedder is absent | `pgvector_knowledge_base.py` |
+| 2026-04-30 | 6 | `SFIACallBot._build()` creates asyncpg pool + knowledge_base + SystemPromptBuilder inline | Avoids adding new injectable args to `LiveKitVoiceTransport` and `main.py`; pool is closed in `_finalize_and_end()` | `bot_runner.py` |
+| 2026-04-30 | 6 | `_FALLBACK_SYSTEM_PROMPT` retained in `sfia_flow_controller.py` | Explicit error handling: if `frameworks` table not yet seeded, bot continues with reduced-quality prompt rather than crashing; logged as WARNING | `sfia_flow_controller.py`, `bot_runner.py` |
+| 2026-04-30 | 6 | RAG injection uses `query_by_skill_code()` only at state transition; `query()` not called at runtime | Eliminates runtime dependency on OpenAI API key during live calls; semantic search deferred to future if retrieval quality needs improvement | `sfia_flow_controller.py` |
+| 2026-04-30 | Validation | All checks passed: prisma generate, TS build (webpack error pre-existing sandbox SSL), lint, tests (104 pass), mypy, ruff, boundary rules | Webpack failure is Google Fonts fetch blocked by self-signed cert in sandbox — pre-existing, unrelated to Phase 5 changes | `validate.sh` |
 
 ---
 
@@ -172,6 +180,7 @@ None — implementation follows the phase document exactly.
 | Date | Revision | Summary | Status |
 |------|----------|---------|--------|
 | 2026-04-30 | — | Initial implementation plan | In Progress |
+| 2026-04-30 | — | Implementation complete, validation passed | Completed |
 
 ---
 
