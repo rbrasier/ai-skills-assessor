@@ -41,63 +41,89 @@ Establish a tiered prompt architecture with Claude's native caching and dynamic 
 
 ## 1. Deliverables
 
-### 1.1 Database Schema — Framework Configuration Tables
+### 1.1 Database Schema — Framework Configuration Tables (Option A: Normalized)
 
-Add two new Prisma models to `packages/database/prisma/schema.prisma`:
+Add three new Prisma models to `packages/database/prisma/schema.prisma`:
 
-#### 1.1.1 FrameworkDescriptor
+#### 1.1.1 Framework (Master Registry)
 
-Stores framework-agnostic structure (Generic Attributes definitions for each level):
+Stores framework metadata and assessor behavioral scoring guide:
 
 ```prisma
-/// Generic Attributes framework (Autonomy, Influence, Complexity, etc.)
-/// with level-specific descriptors (1-7). Used to populate the static cached
+/// Master framework registry. Each (type, version) tuple is a unique framework.
+/// The `rubric` field stores assessor behavioral scoring guidance, cached in the
 /// system prompt during assessment initialization.
-model FrameworkDescriptor {
-  id                String   @id @default(uuid())
-  frameworkType     String   @db.VarChar(50)      // e.g., "sfia-9", "togaf"
-  frameworkVersion  String   @db.VarChar(20)      // e.g., "9.0"
-  attribute         String   @db.VarChar(100)     // e.g., "Autonomy", "Influence"
-  level             Int                            // 1-7
-  description       String                         // Multi-sentence descriptor
-  createdAt         DateTime @default(now())
+model Framework {
+  id        String   @id @default(uuid())
+  type      String   @db.VarChar(50)      // e.g., "sfia-9", "togaf", "itil"
+  version   String   @db.VarChar(20)      // e.g., "9.0", "10.0"
+  name      String   @db.VarChar(255)     // e.g., "SFIA 9", "TOGAF 10"
+  rubric    String                         // Assessor behavioral scoring guide (long text)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@unique([frameworkType, frameworkVersion, attribute, level])
-  @@index([frameworkType])
-  @@index([frameworkType, frameworkVersion])
+  descriptors     FrameworkDescriptor[]
+  skillEmbeddings SkillEmbedding[]
+
+  @@unique([type, version])
+  @@index([type])
+  @@map("frameworks")
+}
+```
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | UUID | Unique framework identifier |
+| `type` | VARCHAR(50) | Framework type: "sfia-9", "togaf", "itil" |
+| `version` | VARCHAR(20) | Framework version: "9.0", "10.0" |
+| `name` | VARCHAR(255) | Human-readable name: "SFIA 9", "TOGAF 10" |
+| `rubric` | TEXT | Assessor behavioral scoring guide (200–500 words) |
+| `createdAt` | TIMESTAMPTZ | Creation timestamp |
+| `updatedAt` | TIMESTAMPTZ | Last update timestamp |
+
+**Notes:**
+- Single source of truth for each framework version
+- Rubric stored once (not duplicated across 35 rows)
+- Future frameworks (TOGAF, ITIL) require only data insertion, no schema changes
+
+#### 1.1.2 FrameworkDescriptor (Generic Attributes)
+
+Stores Generic Attributes definitions per level:
+
+```prisma
+/// Generic Attributes (Autonomy, Influence, Complexity, Business Skills, Knowledge)
+/// with level-specific descriptors (1-7). One row per (framework, attribute, level).
+/// Used to populate the static cached system prompt during assessment initialization.
+model FrameworkDescriptor {
+  id          String   @id @default(uuid())
+  frameworkId String
+  framework   Framework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  attribute   String   @db.VarChar(100)   // e.g., "Autonomy", "Influence"
+  level       Int                          // 1-7
+  description String                      // Level-specific definition
+  createdAt   DateTime @default(now())
+
+  @@unique([frameworkId, attribute, level])
+  @@index([frameworkId])
   @@map("framework_descriptors")
 }
 ```
 
-#### 1.1.2 FrameworkScoringRubric
-
-Stores the assessor's behavioral scoring guide per framework (cached in system prompt):
-
-```prisma
-/// Assessor behavioral scoring rubric: guidance for the LLM on how to score
-/// responsibility levels (1-7) for each attribute. Framework-specific.
-/// Injected into the static system prompt to ensure consistent scoring across all calls.
-model FrameworkScoringRubric {
-  id                String   @id @default(uuid())
-  frameworkType     String   @db.VarChar(50)
-  frameworkVersion  String   @db.VarChar(20)
-  rubric            String                         // Long-form text: scoring guidance
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  @@unique([frameworkType, frameworkVersion])
-  @@index([frameworkType])
-  @@map("framework_scoring_rubrics")
-}
-```
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | UUID | Unique descriptor identifier |
+| `frameworkId` | UUID | Foreign key → frameworks.id (CASCADE on delete) |
+| `attribute` | VARCHAR(100) | Attribute: "Autonomy", "Influence", "Complexity", "Business Skills", "Knowledge" |
+| `level` | INT | Responsibility level 1–7 |
+| `description` | TEXT | Level-specific definition text |
+| `createdAt` | TIMESTAMPTZ | Creation timestamp |
 
 **Notes:**
-- The `rubric` field stores the full assessor guidance (typically 200-500 words per framework).
-- For SFIA 9, this includes the scoring interpretation for Autonomy, Influence, Complexity, Business Skills, and Knowledge attributes.
-- Framework-agnostic: swap the rubric without schema changes.
-- The rubric is loaded into the static system prompt once per call initialization (see section 1.7).
+- SFIA 9: 35 rows (5 attributes × 7 levels)
+- One descriptor per framework+attribute+level combination
+- Loaded into system prompt during assessment initialization
 
-### 1.2 Ports: IEmbeddingService & IKnowledgeBase
+### 1.2 Ports: IEmbeddingService & IKnowledgeBase (Port Definitions)
 
 Define two ports in `apps/voice-engine/src/domain/ports/`:
 
@@ -176,37 +202,54 @@ class IKnowledgeBase(ABC):
         ...
 ```
 
-### 1.3 Database Schema — SkillEmbedding Table
+### 1.1.3 SkillEmbedding (Refactored with Foreign Key)
 
-**Update** `packages/database/prisma/schema.prisma` — the `SkillEmbedding` model already exists from Phase 3, but clarify field naming:
+Vector store for RAG retrieval — refactored to use foreign key to frameworks:
 
 ```prisma
 /// Vector store for framework skill definitions (SFIA 9, TOGAF, etc.).
 /// One row per (framework, skill, level) combination.
 /// The `embedding` column is Unsupported because Prisma lacks native pgvector support;
-/// queries use raw SQL. See section 1.6 for raw SQL index creation.
+/// queries use raw SQL. See section 1.4 for raw SQL index creation.
 model SkillEmbedding {
-  id               String   @id @default(uuid())
-  frameworkType    String   @db.VarChar(50)
-  frameworkVersion String   @db.VarChar(20)
-  skillCode        String   @db.VarChar(50)
-  skillName        String   @db.VarChar(255)
-  category         String   @db.VarChar(100)
-  subcategory      String?  @db.VarChar(100)
-  level            Int?                          // 1-7; NULL for skill summary
-  content          String                        // Chunked text for embedding
-  embedding        Unsupported("vector(1536)")? // OpenAI text-embedding-3-small
-  metadata         Json     @default("{}")       // Extensible data (e.g., keywords)
-  createdAt        DateTime @default(now())
+  id          String   @id @default(uuid())
+  frameworkId String
+  framework   Framework @relation(fields: [frameworkId], references: [id], onDelete: Cascade)
+  skillCode   String   @db.VarChar(50)
+  skillName   String   @db.VarChar(255)
+  category    String   @db.VarChar(100)
+  subcategory String?  @db.VarChar(100)
+  level       Int?                              // 1-7; NULL for skill summary
+  content     String                            // Chunked text for embedding
+  embedding   Unsupported("vector(1536)")?     // OpenAI text-embedding-3-small
+  metadata    Json     @default("{}")           // Extensible data (e.g., keywords)
+  createdAt   DateTime @default(now())
 
-  @@unique([frameworkType, frameworkVersion, skillCode, level], name: "idx_unique_framework_skill_level")
-  @@index([frameworkType])
+  @@unique([frameworkId, skillCode, level], name: "idx_unique_framework_skill_level")
+  @@index([frameworkId])
   @@index([skillCode])
   @@map("skill_embeddings")
 }
 ```
 
-**Migration note**: If the table doesn't exist from Phase 3, the `prisma migrate dev` command above will create it.
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | UUID | Unique embedding identifier |
+| `frameworkId` | UUID | Foreign key → frameworks.id (CASCADE on delete) |
+| `skillCode` | VARCHAR(50) | SFIA skill code: "PROG", "DENG", "CLOP", "SCTY" |
+| `skillName` | VARCHAR(255) | Skill name: "Programming/Software Development" |
+| `category` | VARCHAR(100) | Skill category: "Development and implementation" |
+| `subcategory` | VARCHAR(100) | Skill subcategory: "Software design" (optional) |
+| `level` | INT | Responsibility level 1–7 (NULL for skill summary) |
+| `content` | TEXT | Chunked text for embedding (skill desc + level descriptor) |
+| `embedding` | vector(1536) | OpenAI text-embedding-3-small vector (for similarity search) |
+| `metadata` | JSONB | Extensible (keywords, related skills, etc.) |
+| `createdAt` | TIMESTAMPTZ | Creation timestamp |
+
+**Migration note**: 
+- If the table exists from Phase 3 with `frameworkType` + `frameworkVersion`, run migration to rename those columns to `frameworkId` (FK).
+- If the table doesn't exist, the `prisma migrate dev` command creates it with the new schema.
+- See section 2 for migration script from denormalized to normalized schema.
 
 ### 1.4 pgvector Index Creation
 
@@ -523,16 +566,17 @@ class PgVectorKnowledgeBase(IKnowledgeBase):
 
 **File:** `apps/voice-engine/src/flows/system_prompt_builder.py`
 
-Constructs the static, cacheable system prompt that includes bot persona, assessor rubric, and Generic Attributes definitions. This prompt is cached by Claude and reused across turns:
+Constructs the static, cacheable system prompt that includes bot persona, assessor rubric, and Generic Attributes definitions. Fetches from `frameworks` and `framework_descriptors` tables. This prompt is cached by Claude and reused across turns:
 
 ```python
+import asyncpg
 from domain.ports.knowledge_base import IKnowledgeBase
 
 class SystemPromptBuilder:
     """Builds the static system prompt for caching by Claude."""
     
-    def __init__(self, knowledge_base: IKnowledgeBase):
-        self.knowledge_base = knowledge_base
+    def __init__(self, db_pool: asyncpg.Pool):
+        self.db_pool = db_pool
     
     async def build_cached_system_prompt(
         self,
@@ -546,11 +590,15 @@ class SystemPromptBuilder:
         This prompt is designed to be cached by Claude (at the system level),
         so updates are infrequent and the cache persists across multiple calls.
         """
-        # Fetch assessor behavioral scoring rubric
-        rubric = await self._fetch_scoring_rubric(framework_type, framework_version)
+        # Fetch framework record (includes rubric)
+        framework = await self._fetch_framework(framework_type, framework_version)
+        if not framework:
+            raise ValueError(f"Framework {framework_type} {framework_version} not found")
+        
+        rubric = framework['rubric']
         
         # Fetch Generic Attributes definitions (all 7 levels)
-        attributes_text = await self._build_attributes_section(framework_type, framework_version)
+        attributes_text = await self._build_attributes_section(framework['id'])
         
         return f"""You are Noa, a warm and professional AI skills assessor from Resonant. \
 You conduct structured SFIA-based skills assessments over the phone.
@@ -569,7 +617,7 @@ Keep your language conversational, concise, and encouraging.
 
 {rubric}
 
-## SFIA Generic Attributes Reference
+## Framework Generic Attributes Reference
 
 Use these definitions when scoring responsibility levels (1-7):
 
@@ -588,36 +636,47 @@ Use these definitions to:
 - Identify gaps or higher-level demonstrations
 - Stay grounded in verifiable, framework-aligned assessments
 
-Never quote SFIA codes to the candidate. Always translate framework concepts into natural language.
+Never quote framework codes to the candidate. Always translate framework concepts into natural language.
 """
     
-    async def _fetch_scoring_rubric(self, framework_type: str, framework_version: str) -> str:
-        """Fetch the assessor behavioral scoring rubric from database."""
-        # TODO: Query FrameworkScoringRubric table
-        # For now, return a template for SFIA
-        return (
-            "Score candidates on a scale of 1-7 based on demonstrated autonomy, influence, "
-            "complexity handling, and knowledge depth. Level 1: awareness, following direction. "
-            "Level 7: strategic leadership, organizational impact."
-        )
+    async def _fetch_framework(self, framework_type: str, framework_version: str) -> dict:
+        """Fetch framework record from database."""
+        async with self.db_pool.acquire() as conn:
+            return await conn.fetchrow(
+                "SELECT id, type, version, name, rubric FROM frameworks WHERE type = $1 AND version = $2",
+                framework_type, framework_version
+            )
     
-    async def _build_attributes_section(self, framework_type: str, framework_version: str) -> str:
+    async def _build_attributes_section(self, framework_id: str) -> str:
         """Fetch Generic Attributes and format for system prompt."""
-        # TODO: Query FrameworkDescriptor table
-        # Build a formatted section with all 5 attributes × 7 levels
-        return (
-            "### Autonomy\n"
-            "Level 1-2: Works under routine direction, needs guidance.\n"
-            "Level 3-4: Works with some independence, follows established patterns.\n"
-            "Level 5-6: Designs solutions, sets direction within scope.\n"
-            "Level 7: Sets organizational strategy and direction.\n\n"
-            "### Influence\n"
-            "Level 1-2: Interacts with immediate team.\n"
-            "Level 3-4: Influences peers and cross-functional teams.\n"
-            "Level 5-6: Influences organizational decisions.\n"
-            "Level 7: Sets strategic direction across organization.\n"
-            # ... (similar for Complexity, Business Skills, Knowledge)
-        )
+        async with self.db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT attribute, level, description
+                FROM framework_descriptors
+                WHERE framework_id = $1
+                ORDER BY attribute, level
+                """,
+                framework_id
+            )
+        
+        # Group by attribute
+        attributes = {}
+        for row in rows:
+            attr = row['attribute']
+            if attr not in attributes:
+                attributes[attr] = []
+            attributes[attr].append((row['level'], row['description']))
+        
+        # Format for prompt
+        sections = []
+        for attr in sorted(attributes.keys()):
+            section = f"### {attr}\n"
+            for level, description in attributes[attr]:
+                section += f"Level {level}: {description}\n"
+            sections.append(section)
+        
+        return "\n".join(sections)
 ```
 
 ### 1.9 Dynamic RAG Context Injector for Pipecat
@@ -732,52 +791,69 @@ The official SFIA 9 Excel file is located at `docs/development/contracts/sfia-9.
 
 ### SFIA 9 Pre-Load Process
 
-Before deployment, run the two ingestion scripts in order:
+Before deployment, run three scripts in order:
+
+#### Step 1: Create Framework Record
+
+Insert SFIA 9 framework with rubric:
 
 ```bash
-# 1. Extract Generic Attributes into FrameworkDescriptor table
+python apps/voice-engine/src/scripts/create_framework.py \
+  --framework-type sfia-9 \
+  --framework-version 9.0 \
+  --framework-name "SFIA 9" \
+  --rubric-file docs/development/rubrics/sfia-9-rubric.txt
+```
+
+**Contents of `docs/development/rubrics/sfia-9-rubric.txt`** (assessor guidance):
+```
+SFIA 9 Assessment Rubric
+
+Scoring Guidelines:
+- Level 1-2: Foundation competence, works under routine direction
+- Level 3-4: Practitioner, works with some independence, follows established patterns
+- Level 5-6: Expert, designs solutions, influences organization
+- Level 7: Strategic leader, sets direction, shapes capability
+
+Evidence Scoring:
+Listen for concrete examples of:
+- Autonomy: How independently do they make decisions?
+- Influence: What is their sphere of impact on others?
+- Complexity: What scale and ambiguity of problems do they handle?
+- Business Skills: How business-aware are they?
+- Knowledge: What depth and breadth of technical knowledge?
+
+Map evidence to SFIA skill definitions (provided via RAG context).
+Assign level 1-7 based on demonstrated attributes across all five dimensions.
+```
+
+Expected result: 1 row in `frameworks` table
+
+#### Step 2: Extract Generic Attributes
+
+Populate `framework_descriptors` with SFIA Generic Attributes:
+
+```bash
 python apps/voice-engine/src/scripts/extract_sfia_attributes.py \
   --excel docs/development/contracts/sfia-9.xlsx \
   --framework-type sfia-9 \
   --framework-version 9.0
+```
 
-# 2. Ingest skills and generate embeddings
+Expected result: 35 rows in `framework_descriptors` (5 attributes × 7 levels)
+
+#### Step 3: Ingest Skills and Embeddings
+
+Populate `skill_embeddings` with skill definitions and vectors:
+
+```bash
 python apps/voice-engine/src/scripts/ingest_sfia_skills.py \
   --excel docs/development/contracts/sfia-9.xlsx \
   --framework-type sfia-9 \
   --framework-version 9.0
 ```
 
-**Expected result**: 
-- ~85-95 rows in `FrameworkDescriptor` (5 attributes × 7 levels, plus summary rows)
-- ~500-800 chunks in `skill_embeddings` (120 skills × varying levels)
-
-### Framework Scoring Rubric Setup
-
-Post-ingestion, populate the `FrameworkScoringRubric` table with the assessor guidance. For SFIA 9, this includes interpretation of the Generic Attributes and scoring guidelines:
-
-```bash
-python apps/voice-engine/src/scripts/load_sfia_rubric.py \
-  --framework-type sfia-9 \
-  --rubric-file docs/development/scoring-rubrics/sfia-9-rubric.txt
-```
-
-**Contents of sfia-9-rubric.txt** (to be created):
-```
-SFIA 9 Assessment Rubric — Autonomy, Influence, Complexity, Business Skills, Knowledge
-
-Scoring Guidelines:
-- Level 1-2: Foundation competence, works under routine direction
-- Level 3-4: Practitioner, works with some independence
-- Level 5-6: Expert, sets direction, influences others
-- Level 7: Strategic, shapes organizational capability
-
-Evidence Scoring:
-- Listen for concrete examples of autonomy (decision-making), influence (impact on others),
-  complexity (ambiguity, scale, technical depth), and knowledge (depth, breadth, innovation).
-- Map evidence to SFIA skill definitions provided via RAG context.
-- Assign level 1-7 based on demonstrated attributes.
-```
+Expected result: ~500-800 rows in `skill_embeddings` (120 skills × varying levels)
 
 ### Future Frameworks
 
@@ -909,11 +985,13 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 
 ### Database Schema & Ingestion
 
-- [ ] `FrameworkDescriptor` table created with columns: `id`, `frameworkType`, `frameworkVersion`, `attribute`, `level`, `description`
-- [ ] `FrameworkScoringRubric` table created with columns: `id`, `frameworkType`, `frameworkVersion`, `rubric` (long text)
-- [ ] `SkillEmbedding` table exists with `embedding` column as `vector(1536)`
+- [ ] `Framework` table created with columns: `id`, `type`, `version`, `name`, `rubric`, `createdAt`, `updatedAt`
+- [ ] `FrameworkDescriptor` table created with columns: `id`, `frameworkId` (FK), `attribute`, `level`, `description`, `createdAt`
+- [ ] `SkillEmbedding` table refactored with `frameworkId` (FK) instead of `frameworkType` + `frameworkVersion`
+- [ ] `SkillEmbedding.embedding` column is `vector(1536)`
 - [ ] pgvector extension enabled; raw SQL migration runs without errors
 - [ ] IVFFlat index created on `skill_embeddings.embedding` with `lists = 100`
+- [ ] Create framework script inserts SFIA 9 into `frameworks` table (1 row)
 - [ ] Extract SFIA attributes script populates `FrameworkDescriptor` with 35 rows (5 attributes × 7 levels)
 - [ ] Ingest SFIA skills script populates `skill_embeddings` with 500–800 chunks (verified row count)
 - [ ] Ingestion is idempotent: re-running does not duplicate rows (ON CONFLICT updated, not inserted)
@@ -928,10 +1006,12 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 
 ### Static Prompt Architecture (Claude Caching)
 
-- [ ] `SystemPromptBuilder.build_cached_system_prompt()` successfully fetches `FrameworkScoringRubric` and `FrameworkDescriptor`
+- [ ] `SystemPromptBuilder.build_cached_system_prompt()` successfully fetches `Framework` and `FrameworkDescriptor` records
+- [ ] Query `frameworks WHERE type='sfia-9' AND version='9.0'` returns rubric field
+- [ ] Query `framework_descriptors WHERE frameworkId=...` returns all 35 attribute definitions
 - [ ] Built prompt includes bot persona, rubric, and Generic Attributes (5 attrs × 7 levels)
 - [ ] Prompt is marked for caching in Pipecat context (passed to Claude as system message)
-- [ ] Cached prompt is reused across all turns in a single call (verified via prompt cache metrics)
+- [ ] Cached prompt is reused across all turns in a single call (verified via prompt cache metrics in API response)
 
 ### Dynamic RAG Context Injection
 
@@ -999,8 +1079,77 @@ When `RAGContextInjector.inject_context_for_turn()` is called, it retrieves rele
 9. ✅ Monitor first 10 live calls for latency and prompt cache hit rate
 10. ✅ Document any schema tweaks or configuration changes in runbook
 
+### Schema Migration (If Migrating from Phase 3)
+
+If `skill_embeddings` exists from Phase 3 with denormalized `frameworkType` + `frameworkVersion` columns, execute this migration:
+
+```sql
+-- 1. Create Framework table
+CREATE TABLE frameworks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type VARCHAR(50) NOT NULL,
+    version VARCHAR(20) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    rubric TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(type, version)
+);
+
+-- 2. Insert SFIA 9 framework
+INSERT INTO frameworks (type, version, name, rubric)
+VALUES ('sfia-9', '9.0', 'SFIA 9', 'Score candidates on 1-7 based on...');
+
+-- 3. Create FrameworkDescriptor table
+CREATE TABLE framework_descriptors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    framework_id UUID NOT NULL REFERENCES frameworks(id) ON DELETE CASCADE,
+    attribute VARCHAR(100) NOT NULL,
+    level INT NOT NULL,
+    description TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(framework_id, attribute, level),
+    INDEX(framework_id)
+);
+
+-- 4. Migrate SkillEmbedding
+ALTER TABLE skill_embeddings RENAME TO skill_embeddings_old;
+
+CREATE TABLE skill_embeddings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    framework_id UUID NOT NULL REFERENCES frameworks(id) ON DELETE CASCADE,
+    skill_code VARCHAR(50) NOT NULL,
+    skill_name VARCHAR(255) NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    subcategory VARCHAR(100),
+    level INT,
+    content TEXT NOT NULL,
+    embedding vector(1536),
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(framework_id, skill_code, level)
+);
+
+CREATE INDEX idx_skill_embeddings_framework_id ON skill_embeddings(framework_id);
+CREATE INDEX idx_skill_embeddings_skill_code ON skill_embeddings(skill_code);
+CREATE INDEX idx_skill_embeddings_embedding ON skill_embeddings 
+    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+
+-- 5. Migrate data
+INSERT INTO skill_embeddings (framework_id, skill_code, skill_name, category, subcategory, level, content, embedding, metadata, created_at)
+SELECT 
+    (SELECT id FROM frameworks WHERE type = framework_type AND version = framework_version),
+    skill_code, skill_name, category, subcategory, level, content, embedding, metadata, created_at
+FROM skill_embeddings_old;
+
+-- 6. Verify and cleanup
+SELECT COUNT(*) AS migrated_rows FROM skill_embeddings;
+DROP TABLE skill_embeddings_old;
+```
+
 ### Revision History
 
 | Date | Change | Notes |
 |------|--------|-------|
-| 2026-04-30 | Refine Phase 5 | Implemented tiered prompt strategy with Claude caching + dynamic RAG; added framework configuration tables; corrected field naming (frameworkVersion); resolved high-priority audit findings |
+| 2026-04-30 | Refine Phase 5 (Option A Normalized Schema) | Implemented tiered prompt strategy with Claude caching + dynamic RAG; normalized database schema with `Framework` parent table (stores rubric); refactored `SkillEmbedding` to use FK; added `FrameworkDescriptor` for Generic Attributes; resolved all audit findings; added schema migration script |
+| 2026-04-30 | Initial Phase 5 Draft | Architecture and deliverables outline |
