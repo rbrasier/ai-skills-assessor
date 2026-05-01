@@ -161,7 +161,7 @@ def _build_post_call_pipeline(
     # Build pgvector knowledge base with embedder if openai_api_key is set.
     knowledge_base: Any = None
     try:
-        from src.adapters.pgvector_knowledge_base import PgVectorKnowledgeBase
+        from src.adapters.pgvector_knowledge_base import PgVectorKnowledgeBase  # noqa: F401
 
         if settings.openai_api_key:
             from src.adapters.openai_embedder import OpenAIEmbeddingService

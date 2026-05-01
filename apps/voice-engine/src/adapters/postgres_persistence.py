@@ -12,7 +12,7 @@ without requiring a live database.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from src.domain.models.assessment import (
@@ -20,7 +20,6 @@ from src.domain.models.assessment import (
     AssessmentStatus,
     Candidate,
 )
-from src.domain.models.transcript import Transcript
 from src.domain.ports.persistence import IPersistence
 
 
@@ -368,7 +367,7 @@ class PostgresPersistence(IPersistence):
                 expert_review_token,
                 supervisor_review_token,
                 overall_confidence,
-                _to_naive(datetime.now(timezone.utc)),
+                _to_naive(datetime.now(UTC)),
                 _to_naive(expires_at),
             )
 
@@ -456,7 +455,7 @@ class PostgresPersistence(IPersistence):
                     claim = {**claim, "expert_level": patch["expert_level"]}
                 updated_claims.append(claim)
 
-            now = _to_naive(datetime.now(timezone.utc))
+            now = _to_naive(datetime.now(UTC))
             updated_row = await conn.fetchrow(
                 """
                 UPDATE assessment_sessions
@@ -522,7 +521,7 @@ class PostgresPersistence(IPersistence):
                     }
                 updated_claims.append(claim)
 
-            now = _to_naive(datetime.now(timezone.utc))
+            now = _to_naive(datetime.now(UTC))
             reviews_completed_at = now if expert_already_done else None
             new_status = "reviews_complete" if expert_already_done else "in_review"
 

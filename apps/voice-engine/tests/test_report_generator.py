@@ -5,8 +5,8 @@ Verifies dual NanoID generation, confidence computation, expiry, and persistence
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -81,10 +81,10 @@ async def test_generate_expiry_is_30_days() -> None:
     persistence = AsyncMock()
     gen = ReportGenerator(persistence=persistence, base_url="https://example.com")
 
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     result_obj = ClaimExtractionResult(session_id="s5", claims=[], total_claims=0)
     report = await gen.generate("s5", result_obj, "Eve")
-    after = datetime.now(timezone.utc)
+    after = datetime.now(UTC)
 
     expected_min = before + timedelta(days=29, hours=23)
     expected_max = after + timedelta(days=30, hours=1)

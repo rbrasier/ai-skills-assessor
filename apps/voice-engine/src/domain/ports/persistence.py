@@ -23,7 +23,6 @@ from src.domain.models.assessment import (
     AssessmentStatus,
     Candidate,
 )
-from src.domain.models.transcript import Transcript
 
 
 class IPersistence(ABC):

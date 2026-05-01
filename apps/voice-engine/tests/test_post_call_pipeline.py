@@ -6,14 +6,14 @@ to verify the pipeline orchestration without requiring LLM or DB.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.adapters.in_memory_persistence import InMemoryPersistence
 from src.domain.models.assessment import AssessmentSession, AssessmentStatus
-from src.domain.models.claim import AssessmentReport, Claim, ClaimExtractionResult, EvidenceSegment
+from src.domain.models.claim import AssessmentReport, ClaimExtractionResult
 from src.domain.services.post_call_pipeline import PostCallPipeline
 
 pytestmark = pytest.mark.asyncio
@@ -48,8 +48,8 @@ def _make_report(session_id: str = _SESSION_ID) -> AssessmentReport:
         claims=[],
         total_claims=0,
         overall_confidence=0.0,
-        generated_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        generated_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(days=30),
     )
 
 

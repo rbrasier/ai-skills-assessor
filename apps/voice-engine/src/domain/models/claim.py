@@ -12,7 +12,7 @@ Dual-token review model (phase-6-revision-dual-review-tokens):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -54,7 +54,7 @@ class ClaimExtractionResult(BaseModel):
     session_id: str
     claims: list[Claim]
     total_claims: int
-    extracted_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    extracted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class AssessmentReport(BaseModel):
@@ -77,7 +77,7 @@ class AssessmentReport(BaseModel):
     claims: list[Claim]
     total_claims: int
     overall_confidence: float
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: str = "awaiting_expert"
     expires_at: datetime
     # Expert review audit (set on PUT /review/expert/{token})

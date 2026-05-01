@@ -15,7 +15,7 @@ def test_health_returns_ok_with_version_and_db(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     payload = response.json()
-    assert payload == {"status": "ok", "version": "0.6.0", "database": "ok"}
+    assert payload == {"status": "ok", "version": "0.7.0", "database": "ok"}
 
 
 def test_health_reports_degraded_when_db_unreachable(
@@ -34,6 +34,6 @@ def test_health_reports_degraded_when_db_unreachable(
         payload = response.json()
         assert payload["status"] == "degraded"
         assert payload["database"] == "unreachable"
-        assert payload["version"] == "0.6.0"
+        assert payload["version"] == "0.7.0"
     finally:
         client.app.state.persistence = original

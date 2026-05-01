@@ -19,8 +19,12 @@ from src.config import Settings
 # ── Settings validation ────────────────────────────────────────────────────────
 
 
-def test_default_tts_provider_is_elevenlabs() -> None:
+def test_default_tts_provider_is_elevenlabs(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Suppress .env file and process-env overrides so we test the declared default,
+    # not whatever the developer's local config happens to set.
+    monkeypatch.delenv("TTS_PROVIDER", raising=False)
     s = Settings(
+        _env_file=None,
         daily_api_key="x",
         daily_domain="x.daily.co",
     )
@@ -40,8 +44,10 @@ def test_tts_provider_kokoro_accepted() -> None:
     assert s.kokoro_voice == "af_bella"
 
 
-def test_kokoro_defaults() -> None:
-    s = Settings(daily_api_key="x", daily_domain="x.daily.co")
+def test_kokoro_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KOKORO_TTS_URL", raising=False)
+    monkeypatch.delenv("TTS_PROVIDER", raising=False)
+    s = Settings(_env_file=None, daily_api_key="x", daily_domain="x.daily.co")
     assert s.kokoro_tts_url == ""
     assert s.kokoro_voice == "af_bella"
     assert s.kokoro_sample_rate == 24000

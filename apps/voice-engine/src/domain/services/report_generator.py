@@ -7,7 +7,7 @@ role-specific review URLs, and persists both tokens via IPersistence.save_report
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from nanoid import generate as nanoid_generate
 
@@ -36,7 +36,7 @@ class ReportGenerator:
         supervisor_token = nanoid_generate(_NANOID_ALPHABET, _NANOID_LENGTH)
         expert_url = f"{self.base_url}/review/expert/{expert_token}"
         supervisor_url = f"{self.base_url}/review/supervisor/{supervisor_token}"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires_at = now + timedelta(days=_LINK_EXPIRY_DAYS)
 
         overall_confidence = (
