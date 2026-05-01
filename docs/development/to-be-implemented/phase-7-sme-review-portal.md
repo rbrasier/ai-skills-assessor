@@ -4,18 +4,37 @@
 To Be Implemented
 
 ## Date
-2026-04-18
+2026-05-01
 
 ## References
-- PRD-001: Voice-AI Skills Assessment Platform
+- PRD-001: Voice-AI Skills Assessment Platform (candidate self-service intake; read-only admin monitoring)
+- PRD-002: Assessment Interview Workflow (post-call report shape, SME review expectations)
+- ADR-001: Hexagonal Architecture (UI calls APIs/adapters — no business rules duplicated in the frontend)
+- ADR-004: Voice Engine Technology (FastAPI voice engine owns persistence for sessions and reports in current plan)
+- [Assessment Report Contract](../contracts/assessment-report-contract.md): shared `AssessmentReport` / `ExtractedClaim` shapes
 - Phase 1: Foundation & Monorepo Scaffold (Next.js shell)
-- Phase 6: Claim Extraction Pipeline (produces reports)
+- Phase 6: Claim Extraction Pipeline (produces `claims_json`, `review_token`, `GET /api/v1/review/{token}`)
+
+**Cross-document note:** PRD-001 §5.2 Data Flow diagram still shows an admin “Trigger Call” arrow; **candidate self-service at `/` is the sole initiation path** per PRD-001 §4.1. This phase document supersedes that diagram for implementation order.
 
 ## Objective
 
-Build the Next.js frontend with two primary interfaces: a read-only Admin Dashboard for monitoring assessment status and history, and an SME Review Portal where subject matter experts can review, approve, adjust, or reject AI-extracted claims. The portal is accessed via unique NanoID-based URLs.
+Build the Next.js frontend (`packages/web`) with two primary interfaces: a read-only Admin Dashboard for monitoring assessment status and history, and an SME Review Portal where subject matter experts can review, approve, adjust, or reject AI-extracted claims. The SME route is accessed via unique NanoID-based URLs (`/review/[token]`).
 
-**Note:** Assessment calls are candidate-initiated via the self-service portal (`/`, Phase 2). The admin dashboard is monitoring-only — it does not trigger calls.
+**Note:** Assessment calls are candidate-initiated via the self-service portal at **`/`** (candidate intake from Phase 2). The admin dashboard is monitoring-only — it does not trigger calls or outbound dial.
+
+---
+
+## 0. Prerequisites (Phase 6 API surface)
+
+Phase 6 defines **`GET /api/v1/review/{review_token}`** returning report payload or **404** when the token is missing or expired. Phase 7 UI assumes **additional voice-engine endpoints** for persisting SME decisions (not yet listed in the Phase 6 excerpt):
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `PATCH` | `/api/v1/review/{review_token}/claims/{claim_id}` | Persist per-claim decision: `approved` \| `adjusted` \| `rejected`; optional `adjusted_level` (1–7), `notes` |
+| `POST` | `/api/v1/review/{review_token}/submit` | Finalise review: set `report_status` to completed, set `sme_reviewed_at`, reject further edits |
+
+**Rule:** Implement or extend these on the voice engine (or a dedicated BFF that writes through the same persistence port) **before** marking Phase 7 complete; the acceptance criteria below reference this contract.
 
 ---
 
@@ -29,65 +48,73 @@ Build the Next.js frontend with two primary interfaces: a read-only Admin Dashbo
 - Lucide-React for icons
 - Server Components by default, Client Components where interactivity is needed
 
-**Route Structure:**
+**Route structure (path collision avoided):** The candidate portal **must remain at `/`**. Admin routes live under the **`/dashboard`** prefix so `/` is not overwritten.
 
 ```
-apps/web/src/app/
+packages/web/src/app/
 ├── layout.tsx                          ← Root layout (Tailwind, fonts, metadata)
-├── page.tsx                            ← Candidate self-service portal (Phase 2: intake form + call status)
-├── (dashboard)/
+├── page.tsx                            ← Candidate self-service portal (Phase 2: intake + call status)
+├── (dashboard)/                        ← Route group; URLs below omit the group name
 │   ├── layout.tsx                      ← Dashboard layout (sidebar, header)
-│   ├── page.tsx                        ← Dashboard home (recent assessments — read-only)
-│   ├── assessments/
-│   │   ├── page.tsx                    ← Assessment list (read-only)
-│   │   └── [id]/
-│   │       └── page.tsx               ← Assessment detail (status, transcript, recording)
-│   └── candidates/
-│       ├── page.tsx                    ← Candidate list
-│       └── [id]/
-│           └── page.tsx               ← Candidate profile + assessment history
+│   ├── dashboard/
+│   │   ├── page.tsx                    ← GET /dashboard — recent assessments (read-only)
+│   │   ├── assessments/
+│   │   │   ├── page.tsx                ← GET /dashboard/assessments — list
+│   │   │   └── [id]/
+│   │   │       └── page.tsx            ← GET /dashboard/assessments/[id] — detail
+│   │   └── candidates/
+│   │       ├── page.tsx                ← GET /dashboard/candidates
+│   │       └── [id]/
+│   │           └── page.tsx            ← GET /dashboard/candidates/[id]
+│   └── api/                            ← Next.js Route Handlers (server-only secrets)
+│       └── admin/
+│           └── sessions/
+│               └── route.ts            ← GET: proxy to voice engine admin list API
 ├── (review)/
-│   └── [token]/
-│       ├── layout.tsx                  ← Minimal review layout (no sidebar)
-│       └── page.tsx                    ← SME review interface
-└── api/
+│   └── review/
+│       └── [token]/
+│           ├── layout.tsx              ← Minimal review layout (no sidebar)
+│           └── page.tsx                ← GET /review/[token] — SME review UI
+└── api/                                ← Optional: other public proxies if needed
     └── assessment/
         └── status/
-            └── route.ts               ← GET: status proxy to voice engine
+            └── route.ts                ← GET: status proxy for candidate page (if not folded into Phase 2)
 ```
 
-**Note:** There is no `/assessments/new` route. Calls are triggered by candidates via the self-service portal (`/`). The admin dashboard has no trigger capability.
+**Note:** There is no `/assessments/new` route and no admin “new assessment” flow. Candidates start assessments only from `/`.
+
+**Session status vocabulary (UI):** Use the same labels as the backend where possible. **`processed`** means post-call extraction finished and a report exists; **`completed`** may mean call ended without processing — align column badges with API `status` and `report_status` fields to avoid confusion (e.g. show “Report ready” when `report_status` is `generated` or later).
 
 ### 1.2 Admin Dashboard (Read-Only Monitoring)
 
 The admin dashboard provides read-only visibility into all assessment sessions. It does **not** trigger calls — assessment initiation is candidate self-service via the portal at `/` (Phase 2).
 
-**Routes:**
-- `/` (dashboard home) → Recent sessions overview
-- `/assessments` → Paginated session list with filters
-- `/assessments/[id]` → Session detail (transcript, recording, extracted claims)
-- `/candidates` → Candidate list (keyed by WORK EMAIL)
-- `/candidates/[id]` → Candidate profile + assessment history
+**Routes (all under `/dashboard`):**
+- `/dashboard` → Recent sessions overview (read-only)
+- `/dashboard/assessments` → Paginated session list with filters
+- `/dashboard/assessments/[id]` → Session detail (transcript, recording, extracted claims when present)
+- `/dashboard/candidates` → Candidate list (keyed by WORK EMAIL)
+- `/dashboard/candidates/[id]` → Candidate profile + assessment history
 
-**Data source:** Admin dashboard calls `GET /api/v1/admin/sessions` with optional filters:
-- Status: `pending`, `dialling`, `in_progress`, `completed`, `failed`, `cancelled`
+**Data source:** Dashboard server components or Route Handlers call the voice engine **`GET /api/v1/admin/sessions`** (or equivalent agreed in Phase 1/6) with optional filters:
+- Status: `pending`, `dialling`, `in_progress`, `completed`, `processed`, `failed`, `cancelled`
 - Email: search by candidate WORK EMAIL
 - Date range: `since` / `until`
 
 #### Assessment List
 
-**Route:** `/assessments`
+**Route:** `/dashboard/assessments`
 
 Displays a table of all assessments with:
 - Candidate work email
-- Phone number (masked: +XX*****XXX)
-- Status badge (pending, dialling, in_progress, completed, processed, failed, cancelled)
-- Started date/time
-- Actions (view detail, trigger processing)
+- Phone number (masked: show country code + last 3–4 digits only, e.g. `+61 •••••7890`)
+- Status badge aligned with API: `pending`, `dialling`, `in_progress`, `completed`, `processed`, `failed`, `cancelled`
+- Started date/time (timezone: display in browser locale or fixed `Australia/Sydney` — pick one and document in UI copy)
+- Actions: **View detail** only (read-only). Optional **Copy review link** when `review_url` or `review_token` is present — never “trigger processing” from the dashboard.
 
 #### Assessment Detail
 
-**Route:** `/assessments/[id]`
+**Route:** `/dashboard/assessments/[id]`
 
 Shows:
 - Assessment status timeline
@@ -170,7 +197,7 @@ This is the critical deliverable — the interface SMEs use to review AI-extract
 #### Key Components
 
 ```
-apps/web/src/components/
+packages/web/src/components/
 ├── review/
 │   ├── ReviewPage.tsx              ← Main review page (server component)
 │   ├── ClaimReviewCard.tsx         ← Individual claim review widget
@@ -182,7 +209,6 @@ apps/web/src/components/
 ├── dashboard/
 │   ├── AssessmentTable.tsx         ← Assessment list table
 │   ├── StatusBadge.tsx             ← Status pill component
-│   ├── TriggerAssessmentForm.tsx   ← New assessment form
 │   └── TranscriptViewer.tsx        ← Transcript display
 └── ui/
     ├── Button.tsx
@@ -196,42 +222,51 @@ apps/web/src/components/
 
 ### 1.4 API Integration
 
-#### Review API Calls (Client-Side)
+- **Admin session list/detail:** Prefer **server-side** `fetch` from Server Components or Route Handlers (`packages/web/src/app/(dashboard)/api/...`) so voice-engine base URL and any future admin secrets stay **server-only** (`VOICE_ENGINE_URL`, not `NEXT_PUBLIC_*`).
+- **SME review (`/review/[token]`):** Loading report data can use the public **`NEXT_PUBLIC_VOICE_ENGINE_URL`** only if the voice engine is intentionally public on that host; otherwise proxy **`GET /api/v1/review/{token}`** through a Next Route Handler as well. Mutations (`PATCH` claim, `POST` submit) **must not rely on hidden secrets** — token-in-URL is the credential — but using same-origin Route Handlers avoids CORS and centralises logging.
+
+#### Review API Calls (example client module)
+
+Use JSON keys that match the FastAPI/Pydantic models (e.g. `adjusted_level` snake_case) unless the API is standardised on camelCase — align with generated types from the Assessment Report Contract.
 
 ```typescript
-// lib/api-client.ts
+// packages/web/src/lib/review-api.ts
 
-const VOICE_ENGINE_URL = process.env.NEXT_PUBLIC_VOICE_ENGINE_URL || "http://localhost:8000";
+const base =
+  typeof window === "undefined"
+    ? process.env.VOICE_ENGINE_URL ?? "http://localhost:8000"
+    : process.env.NEXT_PUBLIC_VOICE_ENGINE_URL ?? "http://localhost:8000";
 
 export async function getReviewByToken(token: string) {
-  const res = await fetch(`${VOICE_ENGINE_URL}/api/v1/review/${token}`);
-  if (!res.ok) throw new Error("Review not found");
+  const res = await fetch(`${base}/api/v1/review/${token}`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Review load failed: ${res.status}`);
   return res.json();
 }
 
 export async function submitClaimReview(
   token: string,
   claimId: string,
-  review: {
+  body: {
     status: "approved" | "adjusted" | "rejected";
-    adjustedLevel?: number;
+    adjusted_level?: number;
     notes?: string;
   }
 ) {
-  const res = await fetch(`${VOICE_ENGINE_URL}/api/v1/review/${token}/claims/${claimId}`, {
+  const res = await fetch(`${base}/api/v1/review/${token}/claims/${claimId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(review),
+    body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error("Failed to submit review");
+  if (res.status === 409) throw new Error("Review already finalised");
+  if (!res.ok) throw new Error(`Claim update failed: ${res.status}`);
   return res.json();
 }
 
 export async function submitFinalReview(token: string) {
-  const res = await fetch(`${VOICE_ENGINE_URL}/api/v1/review/${token}/submit`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error("Failed to submit final review");
+  const res = await fetch(`${base}/api/v1/review/${token}/submit`, { method: "POST" });
+  if (res.status === 409) throw new Error("Already submitted");
+  if (!res.ok) throw new Error(`Final submit failed: ${res.status}`);
   return res.json();
 }
 ```
@@ -268,35 +303,77 @@ export async function submitFinalReview(token: string) {
 
 ---
 
-## 3. Acceptance Criteria
+## 3. Build Order (within Phase 7)
 
-- [ ] Dashboard: `/assessments` shows a paginated list of assessments (read-only, no trigger form).
-- [ ] Dashboard: `/assessments` supports filtering by status, candidate email, and date range.
-- [ ] Dashboard: `/assessments/[id]` shows assessment detail with transcript and recording.
-- [ ] Review: `/review/[token]` loads the correct report for a valid token.
-- [ ] Review: `/review/[token]` shows 404 for invalid/expired tokens.
-- [ ] Review: Claims are displayed with verbatim quote, interpretation, and AI mapping.
-- [ ] Review: SME can approve a claim with one click.
-- [ ] Review: SME can adjust a claim's level and provide notes.
-- [ ] Review: SME can reject a claim with optional notes.
-- [ ] Review: Progress indicator updates as claims are reviewed.
-- [ ] Review: Skill summary table updates in real time as claims are reviewed.
-- [ ] Review: "Submit Final Assessment" is only enabled when all claims are reviewed.
-- [ ] Review: Final submission updates the report status and timestamps.
-- [ ] Responsive: Review portal is usable on 768px+ screens.
-- [ ] Accessibility: All form elements have labels; keyboard navigation works.
+1. **Route scaffolding:** `/dashboard/*` layout + placeholder pages without breaking `/` from Phase 2.
+2. **Admin list:** Table + filters + pagination against `GET /api/v1/admin/sessions` (or proxied equivalent).
+3. **Admin detail:** Transcript viewer + recording player + read-only claims when `claims_json` present.
+4. **Review page:** Load report by token; 404/expired states; claim card + navigation.
+5. **Review mutations:** Wire `PATCH` per claim and `POST` submit; handle idempotency/`409` when already finalised.
+6. **Polish:** Skill summary aggregation, accessibility pass, tablet breakpoints.
 
-## 4. Dependencies
+---
 
-- **Phase 1**: Next.js shell, shared types.
-- **Phase 4**: Report generation (produces the data displayed in the review portal).
-- **External**: Voice engine API must be running for API calls.
+## 4. Definition of Done
 
-## 5. Risks
+- All **§5 Acceptance Criteria** are checked off in a test environment against a running voice engine with seed data.
+- No admin UI path triggers outbound calls or re-runs extraction without an explicitly documented operator-only flow (none in v1).
+- Types for API responses align with [Assessment Report Contract](../contracts/assessment-report-contract.md) (or generated TS types from it).
+- Error states are implemented for: empty assessment list, session with no transcript yet, session with failed extraction, invalid/expired review token, network failure on submit (user-visible message + retry).
+
+---
+
+## 5. Acceptance Criteria
+
+- [ ] Dashboard: `/dashboard/assessments` shows a **paginated** list (default **25** rows per page, configurable in code) with **no** call-trigger or processing-trigger controls.
+- [ ] Dashboard: `/dashboard/assessments` supports filtering by **status**, **candidate email** (substring match), and **date range** (`since` / `until` ISO dates) as passed to the admin API.
+- [ ] Dashboard: `/dashboard/assessments/[id]` shows session detail; **transcript** when present; **recording** player when `recording_url` present; **extracted claims** when report exists; link or button to open **`/review/[token]`** when review token exists.
+- [ ] Review: `/review/[token]` loads the report returned by `GET /api/v1/review/{token}` for a valid, unexpired token.
+- [ ] Review: `/review/[token]` shows a dedicated **not found / expired** UI when the API returns **404** (do not leak whether a token ever existed).
+- [ ] Review: Each claim shows **verbatim quote**, **interpretation**, **SFIA skill code/name**, **level**, **confidence**, and **reasoning** per contract fields.
+- [ ] Review: SME can **approve** a claim with one explicit action (e.g. button) without mandatory notes.
+- [ ] Review: SME can **adjust** a claim: change level (**1–7**), optional notes; cannot submit adjust without a selected level.
+- [ ] Review: SME can **reject** a claim with optional notes.
+- [ ] Review: Progress indicator reflects **count of claims with a terminal SME decision** / total claims.
+- [ ] Review: Skill summary reflects current decisions **after each successful PATCH** (optimistic update allowed if rolled back on failure).
+- [ ] Review: "Submit Final Assessment" is **disabled** until every claim has a terminal decision; **enabled** when all are decided.
+- [ ] Review: Successful final submission returns **2xx** and UI shows confirmation; subsequent submit shows **clear already-submitted state** (e.g. `409` handling).
+- [ ] Responsive: Review portal layout is usable at **768px** width and above (tablet).
+- [ ] Accessibility: Visible labels, focus order, and keyboard operation for approve/adjust/reject and navigation.
+
+## 6. Technical Constraints
+
+- **ADR-001:** Frontend contains presentation and API orchestration only; persistence rules remain in core/voice-engine services.
+- **ADR-004:** Review and admin APIs are served by the **voice engine (FastAPI)** unless a later ADR introduces a separate BFF; Next Route Handlers may proxy only.
+- **Contract:** Claim `id` values are UUIDs matching Phase 6 `claims_json` — use them in `PATCH` paths.
+- **CORS / auth:** SME links are **unauthenticated**; rate limiting is server-side (see §1.5).
+
+## 7. Dependencies
+
+| Dependency | Role | Status |
+|------------|------|--------|
+| Phase 1 | Next.js shell, routing, shared types | 🔵 Planned / in progress (per repo state) |
+| Phase 2 | Candidate **`/`** intake + call status (must not regress) | 🔵 Planned / in progress |
+| Phase 6 | `claims_json`, `review_token`, `GET /api/v1/review/{token}`, persistence | 🔵 To Be Implemented |
+| Phase 6 extension | `PATCH` claim + `POST` submit final (see §0) | 🔵 Required before Phase 7 complete |
+| Voice engine | Running API for admin + review routes | External |
+
+If Phase 6 ships without the PATCH/POST endpoints, Phase 7 stops at **read-only** review UI until those endpoints exist.
+
+## 8. Risks
 
 | Risk | Mitigation |
 |------|------------|
 | SME experience confusing | User testing with real SFIA practitioners; iterate on layout |
 | Review link sharing (unintended access) | NanoID entropy is sufficient; add optional PIN in v2 |
-| Large number of claims per assessment | Pagination + sequential review mode |
-| Network errors during review submission | Optimistic UI with retry; save review state locally |
+| Large number of claims per assessment | Sequential review mode + optional list view; summary collapses long lists |
+| Network errors during review submission | Retry with exponential backoff; show persistent error banner; optional localStorage draft for in-progress notes (not for security tokens) |
+| Phase 6 / API mismatch | Lock request/response shapes to Assessment Report Contract + explicit FastAPI models; add contract tests or OpenAPI snapshot |
+
+---
+
+## Revision History
+
+| Date | Change |
+|------|--------|
+| 2026-05-01 | Refine pass: fixed `/` vs dashboard route clash (`/dashboard/*`), removed trigger-processing contradiction, aligned paths with `packages/web`, added Phase 6 PATCH/POST prerequisite, ADR/contract refs, build order, Definition of Done, testable acceptance criteria |
