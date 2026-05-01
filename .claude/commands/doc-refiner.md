@@ -275,6 +275,6 @@ After saving, tell the user:
 Then check for downstream effects:
 - **If a PRD was updated:** Does the phase document that contains it need to reflect any changes? Check the phase's Definition of Done against the new acceptance criteria.
 - **If an ADR was updated:** Does CLAUDE.md need to be updated to reflect the new/revised rule? Does the Mandatory ADR Reads table in CLAUDE.md still reflect the right task types?
-- **If a Phase was updated:** Are any PRD deliverables now more specific than what the phase says? Do any implementation documents in `/docs/development/implementated/v{MAJOR}.{MINOR}/` need a note added?
+- **If a Phase was updated:** Are any PRD deliverables now more specific than what the phase says? Do any implementation documents in `/docs/development/implemented/v{MAJOR}.{MINOR}/` need a note added?
 
 Report any downstream effects and ask the user if they want to address them now or later. Do not make downstream changes without confirmation.
