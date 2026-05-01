@@ -6,6 +6,10 @@ and admin querying. All methods are async so concrete adapters can use
 
 Phase 6 adds transcript and report persistence methods that write to
 dedicated columns on ``assessment_sessions`` (promoted from JSONB metadata).
+
+Phase 6 Revision (dual-review-tokens) extends save_report() to take
+separate expert + supervisor tokens, and adds role-specific read and
+save methods for the two-stage review workflow.
 """
 
 from __future__ import annotations
@@ -27,13 +31,7 @@ class IPersistence(ABC):
 
     @abstractmethod
     async def ping(self) -> bool:
-        """Probe the backing store. Returns ``True`` when reachable.
-
-        Added in Phase 3 / v0.4.0 so the ``/health`` endpoint can tell
-        Railway that a deploy is unhealthy when the DB is unreachable.
-        Adapters should swallow expected connection errors and return
-        ``False`` — they must never raise.
-        """
+        """Probe the backing store. Returns ``True`` when reachable."""
         ...
 
     # ─── Candidate ───────────────────────────────────────────────────
@@ -105,11 +103,7 @@ class IPersistence(ABC):
         session_id: str,
         transcript_json: dict[str, Any],
     ) -> None:
-        """Write transcript JSON to assessment_sessions.transcript_json.
-
-        Phase 6 replacement for the Phase 4 merge_session_metadata() approach.
-        TranscriptRecorder.finalize() calls this method from Phase 6 onwards.
-        """
+        """Write transcript JSON to assessment_sessions.transcript_json."""
         ...
 
     @abstractmethod
@@ -127,14 +121,17 @@ class IPersistence(ABC):
         self,
         session_id: str,
         claims: list[dict[str, Any]],
-        review_token: str,
+        expert_review_token: str,
+        supervisor_review_token: str,
         overall_confidence: float,
         expires_at: datetime,
     ) -> None:
-        """Write claims_json and report metadata to assessment_sessions.
+        """Write claims_json and dual review tokens to assessment_sessions.
 
-        Sets: claims_json, review_token, overall_confidence,
-        report_status='generated', report_generated_at=now(), expires_at.
+        Sets: claims_json, expert_review_token, supervisor_review_token,
+        overall_confidence, report_status='awaiting_expert',
+        report_generated_at=now(), expires_at.
+        Also dual-writes review_token=expert_review_token for compat.
         """
         ...
 
@@ -143,25 +140,61 @@ class IPersistence(ABC):
         self,
         session_id: str,
     ) -> dict[str, Any] | None:
-        """Read report metadata and claims_json for a session.
+        """Read report metadata and claims_json for a session."""
+        ...
 
-        Returns a dict with keys: session_id, claims_json, review_token,
-        report_status, overall_confidence, report_generated_at,
-        sme_reviewed_at, expires_at. Returns None if no report exists.
+    @abstractmethod
+    async def get_report_by_expert_token(
+        self,
+        expert_review_token: str,
+    ) -> dict[str, Any] | None:
+        """Read report data by expert NanoID token. Returns None if not found."""
+        ...
+
+    @abstractmethod
+    async def get_report_by_supervisor_token(
+        self,
+        supervisor_review_token: str,
+    ) -> dict[str, Any] | None:
+        """Read report data by supervisor NanoID token. Returns None if not found."""
+        ...
+
+    @abstractmethod
+    async def save_expert_review(
+        self,
+        expert_review_token: str,
+        reviewer_full_name: str,
+        reviewer_email: str,
+        claims_patch: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Merge expert_level per claim; set expert audit columns.
+
+        Advances report_status to 'awaiting_supervisor'.
+        Returns updated report dict (session_id, report_status, reviews_completed_at).
+        Raises ValueError if token not found.
+        Raises RuntimeError if expert review already submitted (for 409 response).
         """
         ...
 
     @abstractmethod
-    async def get_report_by_token(
+    async def save_supervisor_review(
         self,
-        review_token: str,
-    ) -> dict[str, Any] | None:
-        """Read session and report data by NanoID review token.
+        supervisor_review_token: str,
+        reviewer_full_name: str,
+        reviewer_email: str,
+        claims_patch: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Merge supervisor_decision + supervisor_comment per claim; set audit columns.
 
-        Used by the public SME review endpoint. Returns None if token not
-        found or expired.
+        If expert review already submitted, also sets reviews_completed_at and
+        advances report_status to 'reviews_complete'.
+        Returns updated report dict.
+        Raises ValueError if token not found.
+        Raises RuntimeError if supervisor review already submitted.
         """
         ...
+
+    # ─── Metadata ────────────────────────────────────────────────────
 
     @abstractmethod
     async def merge_session_metadata(
@@ -169,9 +202,5 @@ class IPersistence(ABC):
         session_id: str,
         metadata: dict[str, Any],
     ) -> None:
-        """Merge additional metadata into a session without changing its status.
-
-        Used for identified_skills and recording_duration_seconds. Transcript
-        data is written via save_transcript() from Phase 6 onwards.
-        """
+        """Merge additional metadata into a session without changing its status."""
         ...

@@ -22,6 +22,7 @@ class AssessmentStatus(str, Enum):
     DIALLING = "dialling"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    PROCESSED = "processed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 

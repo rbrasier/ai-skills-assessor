@@ -33,7 +33,7 @@ from src.domain.services.call_manager import (
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
 
-_VOICE_ENGINE_VERSION = "0.5.0"
+_VOICE_ENGINE_VERSION = "0.6.0"
 
 router = APIRouter()
 
@@ -286,6 +286,204 @@ async def list_admin_sessions(
         offset=offset,
     )
     return [SessionSummaryPayload(**s) for s in summaries]
+
+
+# ─── Phase 6: Post-call pipeline & report retrieval ─────────────
+
+
+class ProcessAssessmentResult(BaseModel):
+    session_id: str
+    expert_review_url: str
+    supervisor_review_url: str
+    total_claims: int
+    overall_confidence: float
+    status: str
+
+
+class AssessmentReportPayload(BaseModel):
+    session_id: str
+    candidate_name: str | None = None
+    expert_review_token: str | None = None
+    supervisor_review_token: str | None = None
+    overall_confidence: float | None = None
+    report_status: str | None = None
+    claims_json: list[Any] = []
+    report_generated_at: str | None = None
+    expires_at: str | None = None
+    expert_submitted_at: str | None = None
+    expert_reviewer_name: str | None = None
+    expert_reviewer_email: str | None = None
+    supervisor_submitted_at: str | None = None
+    supervisor_reviewer_name: str | None = None
+    supervisor_reviewer_email: str | None = None
+    reviews_completed_at: str | None = None
+
+
+class ExpertReviewClaimItem(BaseModel):
+    id: str
+    expert_level: int = Field(ge=1, le=7)
+
+
+class ExpertReviewSubmitPayload(BaseModel):
+    reviewer_full_name: str = Field(min_length=1)
+    reviewer_email: str
+    claims: list[ExpertReviewClaimItem]
+
+
+class SupervisorReviewClaimItem(BaseModel):
+    id: str
+    supervisor_decision: str = Field(pattern="^(verified|rejected)$")
+    supervisor_comment: str = Field(min_length=1)
+
+
+class SupervisorReviewSubmitPayload(BaseModel):
+    reviewer_full_name: str = Field(min_length=1)
+    reviewer_email: str
+    claims: list[SupervisorReviewClaimItem]
+
+
+class ReviewSaveResponse(BaseModel):
+    session_id: str
+    report_status: str
+    reviews_completed_at: str | None = None
+    claims: list[Any] = []
+
+
+def _post_call_pipeline(request: Request) -> Any:
+    pipeline = getattr(request.app.state, "post_call_pipeline", None)
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="Post-call pipeline not configured")
+    return pipeline
+
+
+def _persistence(request: Request) -> IPersistence:
+    p: IPersistence | None = getattr(request.app.state, "persistence", None)
+    if p is None:
+        raise HTTPException(status_code=503, detail="Voice engine not ready")
+    return p
+
+
+@router.post(
+    "/api/v1/assessment/{session_id}/process",
+    response_model=ProcessAssessmentResult,
+    tags=["assessment"],
+)
+async def process_assessment(session_id: str, request: Request) -> ProcessAssessmentResult:
+    """Trigger the post-call pipeline for a completed session.
+
+    Extracts claims, maps to SFIA, generates dual review tokens, and
+    updates the session status to 'processed'.
+    """
+    pipeline = _post_call_pipeline(request)
+    try:
+        report = await pipeline.process(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Pipeline processing failed") from exc
+
+    return ProcessAssessmentResult(
+        session_id=session_id,
+        expert_review_url=report.expert_review_url,
+        supervisor_review_url=report.supervisor_review_url,
+        total_claims=report.total_claims,
+        overall_confidence=report.overall_confidence,
+        status="processed",
+    )
+
+
+@router.get(
+    "/api/v1/assessment/{session_id}/report",
+    response_model=AssessmentReportPayload,
+    tags=["assessment"],
+)
+async def get_assessment_report(session_id: str, request: Request) -> AssessmentReportPayload:
+    """Return the generated report for a session, or 404 if not yet processed."""
+    persistence = _persistence(request)
+    report_data = await persistence.get_report(session_id)
+    if not report_data:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return AssessmentReportPayload(**report_data)
+
+
+@router.get(
+    "/api/v1/review/expert/{token}",
+    response_model=AssessmentReportPayload,
+    tags=["review"],
+)
+async def get_expert_review(token: str, request: Request) -> AssessmentReportPayload:
+    """Expert reviewer — fetch report by expert NanoID token."""
+    persistence = _persistence(request)
+    report_data = await persistence.get_report_by_expert_token(token)
+    if not report_data:
+        raise HTTPException(status_code=404, detail="Review not found or expired")
+    return AssessmentReportPayload(**report_data)
+
+
+@router.put(
+    "/api/v1/review/expert/{token}",
+    response_model=ReviewSaveResponse,
+    tags=["review"],
+)
+async def submit_expert_review(
+    token: str,
+    payload: ExpertReviewSubmitPayload,
+    request: Request,
+) -> ReviewSaveResponse:
+    """Expert reviewer — submit expert_level per claim."""
+    persistence = _persistence(request)
+    try:
+        result = await persistence.save_expert_review(
+            expert_review_token=token,
+            reviewer_full_name=payload.reviewer_full_name,
+            reviewer_email=payload.reviewer_email,
+            claims_patch=[c.model_dump() for c in payload.claims],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ReviewSaveResponse(**result)
+
+
+@router.get(
+    "/api/v1/review/supervisor/{token}",
+    response_model=AssessmentReportPayload,
+    tags=["review"],
+)
+async def get_supervisor_review(token: str, request: Request) -> AssessmentReportPayload:
+    """Supervisor reviewer — fetch report by supervisor NanoID token."""
+    persistence = _persistence(request)
+    report_data = await persistence.get_report_by_supervisor_token(token)
+    if not report_data:
+        raise HTTPException(status_code=404, detail="Review not found or expired")
+    return AssessmentReportPayload(**report_data)
+
+
+@router.put(
+    "/api/v1/review/supervisor/{token}",
+    response_model=ReviewSaveResponse,
+    tags=["review"],
+)
+async def submit_supervisor_review(
+    token: str,
+    payload: SupervisorReviewSubmitPayload,
+    request: Request,
+) -> ReviewSaveResponse:
+    """Supervisor reviewer — submit supervisor_decision + supervisor_comment per claim."""
+    persistence = _persistence(request)
+    try:
+        result = await persistence.save_supervisor_review(
+            supervisor_review_token=token,
+            reviewer_full_name=payload.reviewer_full_name,
+            reviewer_email=payload.reviewer_email,
+            claims_patch=[c.model_dump() for c in payload.claims],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ReviewSaveResponse(**result)
 
 
 # ─── LiveKit join page ───────────────────────────────────────────

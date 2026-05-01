@@ -34,9 +34,11 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 
+from src.adapters.anthropic_claim_llm_provider import AnthropicClaimLLMProvider
 from src.adapters.anthropic_llm_provider import AnthropicLLMProvider
 from src.adapters.daily_transport import DailyVoiceTransport
 from src.adapters.in_memory_persistence import InMemoryPersistence
@@ -46,6 +48,9 @@ from src.domain.ports.llm_provider import ILLMProvider
 from src.domain.ports.persistence import IPersistence
 from src.domain.ports.voice_transport import IVoiceTransport
 from src.domain.services.call_manager import CallManager
+from src.domain.services.claim_extractor import ClaimExtractor
+from src.domain.services.post_call_pipeline import PostCallPipeline
+from src.domain.services.report_generator import ReportGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +137,112 @@ def _build_llm_provider(settings: Settings) -> ILLMProvider | None:
     )
 
 
+def _build_post_call_pipeline(
+    settings: Settings,
+    persistence: IPersistence,
+) -> PostCallPipeline | None:
+    """Build the Phase 6 post-call pipeline if Anthropic credentials are set.
+
+    Returns None in in-memory / test mode — the POST /process endpoint will
+    return 503 when the pipeline is absent, which is expected in lean CI.
+    """
+    if not settings.anthropic_api_key:
+        logger.warning(
+            "ANTHROPIC_API_KEY not set — post-call claim extraction pipeline disabled. "
+            "POST /api/v1/assessment/{session_id}/process will return 503."
+        )
+        return None
+
+    claim_llm = AnthropicClaimLLMProvider(
+        api_key=settings.anthropic_api_key,
+        model=settings.anthropic_post_call_model,
+    )
+
+    # Build pgvector knowledge base with embedder if openai_api_key is set.
+    knowledge_base: Any = None
+    try:
+        from src.adapters.pgvector_knowledge_base import PgVectorKnowledgeBase
+
+        if settings.openai_api_key:
+            from src.adapters.openai_embedder import OpenAIEmbeddingService
+
+            embedder = OpenAIEmbeddingService(api_key=settings.openai_api_key)
+            knowledge_base = _PgVectorKBWrapper(
+                database_url=settings.database_url, embedder=embedder
+            )
+        else:
+            logger.warning(
+                "OPENAI_API_KEY not set — claim-to-SFIA RAG mapping will use empty "
+                "skill context. Claims will be extracted but may lack accurate SFIA levels."
+            )
+    except ImportError:
+        logger.warning("pgvector adapter not available — knowledge base disabled")
+
+    claim_extractor = ClaimExtractor(
+        llm_provider=claim_llm,
+        knowledge_base=knowledge_base or _NullKnowledgeBase(),
+    )
+    report_generator = ReportGenerator(
+        persistence=persistence,
+        base_url=settings.base_url,
+    )
+    return PostCallPipeline(
+        claim_extractor=claim_extractor,
+        report_generator=report_generator,
+        persistence=persistence,
+    )
+
+
+class _NullKnowledgeBase:
+    """Stub knowledge base that returns no results — used when pgvector unavailable."""
+
+    async def query(self, *args: Any, **kwargs: Any) -> list:
+        return []
+
+    async def query_by_skill_code(self, *args: Any, **kwargs: Any) -> list:
+        return []
+
+
+class _PgVectorKBWrapper:
+    """Lazy-pool pgvector knowledge base for the post-call pipeline.
+
+    Creates its own asyncpg pool on first use, separate from the one owned
+    by PostgresPersistence. Closed on lifespan shutdown.
+    """
+
+    def __init__(self, database_url: str, embedder: Any) -> None:
+        self._database_url = database_url
+        self._embedder = embedder
+        self._kb: Any = None
+        self._pool: Any = None
+
+    async def _get_kb(self) -> Any:
+        if self._kb is None:
+            import asyncpg
+
+            from src.adapters.pgvector_knowledge_base import PgVectorKnowledgeBase
+
+            self._pool = await asyncpg.create_pool(self._database_url)
+            self._kb = PgVectorKnowledgeBase(
+                db_pool=self._pool, embedder=self._embedder
+            )
+        return self._kb
+
+    async def query(self, *args: Any, **kwargs: Any) -> list:
+        kb = await self._get_kb()
+        return await kb.query(*args, **kwargs)
+
+    async def query_by_skill_code(self, *args: Any, **kwargs: Any) -> list:
+        kb = await self._get_kb()
+        return await kb.query_by_skill_code(*args, **kwargs)
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+            self._kb = None
+
+
 def _validate_dialing_env(settings: Settings) -> None:
     """Enforce that the selected transport has the env vars it needs to run."""
     if settings.dialing_method == "browser":
@@ -174,6 +285,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     persistence = _build_persistence(settings)
     llm_provider = _build_llm_provider(settings)
+    post_call_pipeline = _build_post_call_pipeline(settings, persistence)
 
     if settings.dialing_method == "browser":
         from src.adapters.livekit_transport import LiveKitVoiceTransport
@@ -207,6 +319,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.voice_transport = transport
     app.state.llm_provider = llm_provider
     app.state.call_manager = call_manager
+    app.state.post_call_pipeline = post_call_pipeline
 
     try:
         yield
@@ -218,17 +331,27 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         close_transport = getattr(transport, "close", None)
         if callable(close_transport):
             await close_transport()
+        # Close the knowledge base pool if it was opened
+        if post_call_pipeline is not None:
+            try:
+                kb = getattr(
+                    getattr(post_call_pipeline, "claim_extractor", None), "kb", None
+                )
+                close_kb = getattr(kb, "close", None)
+                if callable(close_kb):
+                    await close_kb()
+            except Exception:
+                pass
 
 
 def create_app() -> FastAPI:
     _configure_logging()
     app = FastAPI(
         title="AI Skills Assessor — Voice Engine",
-        version="0.4.2",
+        version="0.6.0",
         description=(
-            "Phase 3 Revision 2: basic live call via Daily (telephone) or "
-            "self-hosted LiveKit (browser) — greeting, one question, "
-            "LLM ack, hangup."
+            "Phase 6: SFIA assessment flow with claim extraction pipeline, "
+            "dual expert/supervisor review tokens, and post-call report generation."
         ),
         lifespan=_lifespan,
     )

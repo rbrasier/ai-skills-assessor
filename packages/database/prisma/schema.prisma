@@ -63,8 +63,21 @@ model AssessmentSession {
   candidateName      String?   @db.VarChar(255) @map("candidate_name")
   transcriptJson     Json?     @map("transcript_json")
   claimsJson         Json?     @map("claims_json")
+  // Dual review tokens (phase-6-revision-dual-review-tokens)
+  expertReviewToken       String?   @unique @db.VarChar(21) @map("expert_review_token")
+  supervisorReviewToken   String?   @unique @db.VarChar(21) @map("supervisor_review_token")
+  // Expert reviewer audit
+  expertSubmittedAt       DateTime? @map("expert_submitted_at")
+  expertReviewerName      String?   @db.VarChar(255) @map("expert_reviewer_name")
+  expertReviewerEmail     String?   @db.VarChar(255) @map("expert_reviewer_email")
+  // Supervisor reviewer audit
+  supervisorSubmittedAt   DateTime? @map("supervisor_submitted_at")
+  supervisorReviewerName  String?   @db.VarChar(255) @map("supervisor_reviewer_name")
+  supervisorReviewerEmail String?   @db.VarChar(255) @map("supervisor_reviewer_email")
+  reviewsCompletedAt      DateTime? @map("reviews_completed_at")
+  // Deprecated single review token — retained during migration
   reviewToken        String?   @unique @db.VarChar(21) @map("review_token")
-  reportStatus       String?   @db.VarChar(20) @map("report_status")
+  reportStatus       String?   @db.VarChar(30) @map("report_status")
   overallConfidence  Float?    @map("overall_confidence")
   reportGeneratedAt  DateTime? @map("report_generated_at")
   smeReviewedAt      DateTime? @map("sme_reviewed_at")

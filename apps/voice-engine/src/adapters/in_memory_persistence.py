@@ -29,7 +29,9 @@ class InMemoryPersistence(IPersistence):
         self._transcripts: dict[str, Transcript] = {}
         self._transcript_jsons: dict[str, dict[str, Any]] = {}
         self._reports: dict[str, dict[str, Any]] = {}
-        self._tokens: dict[str, str] = {}  # review_token → session_id
+        # token → session_id maps for both roles
+        self._expert_tokens: dict[str, str] = {}
+        self._supervisor_tokens: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
     async def ping(self) -> bool:
@@ -173,7 +175,8 @@ class InMemoryPersistence(IPersistence):
         self,
         session_id: str,
         claims: list[dict[str, Any]],
-        review_token: str,
+        expert_review_token: str,
+        supervisor_review_token: str,
         overall_confidence: float,
         expires_at: datetime,
     ) -> None:
@@ -182,15 +185,26 @@ class InMemoryPersistence(IPersistence):
             report = {
                 "session_id": session_id,
                 "claims_json": claims,
-                "review_token": review_token,
-                "report_status": "generated",
+                "expert_review_token": expert_review_token,
+                "supervisor_review_token": supervisor_review_token,
+                # Deprecated compat field
+                "review_token": expert_review_token,
+                "report_status": "awaiting_expert",
                 "overall_confidence": overall_confidence,
                 "report_generated_at": now.isoformat(),
                 "sme_reviewed_at": None,
+                "expert_submitted_at": None,
+                "expert_reviewer_name": None,
+                "expert_reviewer_email": None,
+                "supervisor_submitted_at": None,
+                "supervisor_reviewer_name": None,
+                "supervisor_reviewer_email": None,
+                "reviews_completed_at": None,
                 "expires_at": expires_at.isoformat(),
             }
             self._reports[session_id] = report
-            self._tokens[review_token] = session_id
+            self._expert_tokens[expert_review_token] = session_id
+            self._supervisor_tokens[supervisor_review_token] = session_id
 
     async def get_report(
         self,
@@ -199,15 +213,114 @@ class InMemoryPersistence(IPersistence):
         async with self._lock:
             return self._reports.get(session_id)
 
-    async def get_report_by_token(
+    async def get_report_by_expert_token(
         self,
-        review_token: str,
+        expert_review_token: str,
     ) -> dict[str, Any] | None:
         async with self._lock:
-            session_id = self._tokens.get(review_token)
+            session_id = self._expert_tokens.get(expert_review_token)
             if session_id is None:
                 return None
             return self._reports.get(session_id)
+
+    async def get_report_by_supervisor_token(
+        self,
+        supervisor_review_token: str,
+    ) -> dict[str, Any] | None:
+        async with self._lock:
+            session_id = self._supervisor_tokens.get(supervisor_review_token)
+            if session_id is None:
+                return None
+            return self._reports.get(session_id)
+
+    async def save_expert_review(
+        self,
+        expert_review_token: str,
+        reviewer_full_name: str,
+        reviewer_email: str,
+        claims_patch: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        async with self._lock:
+            session_id = self._expert_tokens.get(expert_review_token)
+            if session_id is None:
+                raise ValueError(f"Expert token not found: {expert_review_token}")
+            report = self._reports.get(session_id)
+            if report is None:
+                raise ValueError(f"Report not found for session: {session_id}")
+            if report.get("expert_submitted_at") is not None:
+                raise RuntimeError("Expert review already submitted")
+
+            patch_by_id = {p["id"]: p for p in claims_patch}
+            updated_claims = []
+            for claim in report.get("claims_json", []):
+                patch = patch_by_id.get(claim.get("id", ""))
+                if patch:
+                    claim = {**claim, "expert_level": patch["expert_level"]}
+                updated_claims.append(claim)
+
+            now = datetime.now(UTC).isoformat()
+            report.update({
+                "claims_json": updated_claims,
+                "expert_submitted_at": now,
+                "expert_reviewer_name": reviewer_full_name,
+                "expert_reviewer_email": reviewer_email,
+                "report_status": "awaiting_supervisor",
+            })
+            return {
+                "session_id": session_id,
+                "report_status": report["report_status"],
+                "reviews_completed_at": report.get("reviews_completed_at"),
+                "claims": updated_claims,
+            }
+
+    async def save_supervisor_review(
+        self,
+        supervisor_review_token: str,
+        reviewer_full_name: str,
+        reviewer_email: str,
+        claims_patch: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        async with self._lock:
+            session_id = self._supervisor_tokens.get(supervisor_review_token)
+            if session_id is None:
+                raise ValueError(f"Supervisor token not found: {supervisor_review_token}")
+            report = self._reports.get(session_id)
+            if report is None:
+                raise ValueError(f"Report not found for session: {session_id}")
+            if report.get("supervisor_submitted_at") is not None:
+                raise RuntimeError("Supervisor review already submitted")
+
+            patch_by_id = {p["id"]: p for p in claims_patch}
+            updated_claims = []
+            for claim in report.get("claims_json", []):
+                patch = patch_by_id.get(claim.get("id", ""))
+                if patch:
+                    claim = {
+                        **claim,
+                        "supervisor_decision": patch["supervisor_decision"],
+                        "supervisor_comment": patch["supervisor_comment"],
+                    }
+                updated_claims.append(claim)
+
+            now = datetime.now(UTC)
+            reviews_completed_at = None
+            if report.get("expert_submitted_at") is not None:
+                reviews_completed_at = now.isoformat()
+
+            report.update({
+                "claims_json": updated_claims,
+                "supervisor_submitted_at": now.isoformat(),
+                "supervisor_reviewer_name": reviewer_full_name,
+                "supervisor_reviewer_email": reviewer_email,
+                "report_status": "reviews_complete" if reviews_completed_at else "in_review",
+                "reviews_completed_at": reviews_completed_at,
+            })
+            return {
+                "session_id": session_id,
+                "report_status": report["report_status"],
+                "reviews_completed_at": reviews_completed_at,
+                "claims": updated_claims,
+            }
 
     # ─── Metadata ────────────────────────────────────────────────────
 
