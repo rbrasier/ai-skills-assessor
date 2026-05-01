@@ -22,6 +22,7 @@ class AssessmentStatus(str, Enum):
     DIALLING = "dialling"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    PROCESSED = "processed"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -79,3 +80,5 @@ class AssessmentSession:
     started_at: datetime | None = None
     ended_at: datetime | None = None
     created_at: datetime | None = None
+    # Phase 6: denormalised from Candidate at session creation to avoid JOIN in pipeline
+    candidate_name: str | None = None

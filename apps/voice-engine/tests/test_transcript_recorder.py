@@ -111,7 +111,8 @@ def test_snippet_empty_when_no_turns() -> None:
 # ─── Finalize ────────────────────────────────────────────────────────────────
 
 
-async def test_finalize_calls_merge_session_metadata() -> None:
+async def test_finalize_calls_save_transcript() -> None:
+    """Phase 6: finalize() writes to transcript_json column via save_transcript()."""
     recorder = TranscriptRecorder()
     recorder.record_turn(speaker="bot", text="Hello.")
 
@@ -123,14 +124,23 @@ async def test_finalize_calls_merge_session_metadata() -> None:
         recording_duration_seconds=120,
     )
 
+    # save_transcript must be called with the transcript dict
+    persistence.save_transcript.assert_awaited_once_with(
+        "sess-123",
+        {"turns": [{"timestamp": persistence.save_transcript.call_args[0][1]["turns"][0]["timestamp"],
+                    "speaker": "bot", "text": "Hello.", "phase": "introduction",
+                    "vad_confidence": None}]},
+    )
+
+    # merge_session_metadata must be called for identified_skills + duration
     persistence.merge_session_metadata.assert_awaited_once()
     call_args = persistence.merge_session_metadata.call_args
     assert call_args[0][0] == "sess-123"
     metadata = call_args[0][1]
-    assert "transcript_json" in metadata
-    assert metadata["transcript_json"]["turns"][0]["text"] == "Hello."
     assert metadata["identified_skills"] == [{"skill_code": "PROG", "skill_name": "Programming"}]
     assert metadata["recording_duration_seconds"] == 120
+    # transcript_json must NOT be in the metadata dict (it's saved separately)
+    assert "transcript_json" not in metadata
 
 
 async def test_finalize_without_optional_fields() -> None:
@@ -140,18 +150,29 @@ async def test_finalize_without_optional_fields() -> None:
     persistence = AsyncMock()
     await recorder.finalize("sess-456", persistence)
 
-    metadata = persistence.merge_session_metadata.call_args[0][1]
-    assert "transcript_json" in metadata
-    assert "identified_skills" not in metadata
-    assert "recording_duration_seconds" not in metadata
+    # save_transcript called
+    persistence.save_transcript.assert_awaited_once()
+    # merge_session_metadata NOT called — no optional fields
+    persistence.merge_session_metadata.assert_not_awaited()
 
 
-async def test_finalize_swallows_persistence_errors() -> None:
+async def test_finalize_swallows_save_transcript_errors() -> None:
+    recorder = TranscriptRecorder()
+    recorder.record_turn(speaker="bot", text="Hi.")
+
+    persistence = AsyncMock()
+    persistence.save_transcript.side_effect = RuntimeError("DB down")
+
+    # Should not raise
+    await recorder.finalize("sess-789", persistence)
+
+
+async def test_finalize_swallows_merge_metadata_errors() -> None:
     recorder = TranscriptRecorder()
     recorder.record_turn(speaker="bot", text="Hi.")
 
     persistence = AsyncMock()
     persistence.merge_session_metadata.side_effect = RuntimeError("DB down")
 
-    # Should not raise
-    await recorder.finalize("sess-789", persistence)
+    # Should not raise — identified_skills triggers the merge call
+    await recorder.finalize("sess-789", persistence, identified_skills=[])

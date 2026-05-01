@@ -12,7 +12,7 @@ without requiring a live database.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from src.domain.models.assessment import (
@@ -69,6 +69,7 @@ def _row_to_session(row: Any) -> AssessmentSession:
         started_at=row["startedAt"],
         ended_at=row["endedAt"],
         created_at=row["createdAt"],
+        candidate_name=row.get("candidate_name"),
     )
 
 
@@ -148,8 +149,9 @@ class PostgresPersistence(IPersistence):
                 """
                 INSERT INTO assessment_sessions (
                     "id", "candidateId", "phoneNumber", "status", "metadata",
-                    "dailyRoomUrl", "recordingUrl", "startedAt", "endedAt", "createdAt"
-                ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
+                    "dailyRoomUrl", "recordingUrl", "startedAt", "endedAt",
+                    "createdAt", "candidate_name"
+                ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)
                 RETURNING *
                 """,
                 session.id,
@@ -164,6 +166,7 @@ class PostgresPersistence(IPersistence):
                 _to_naive(session.started_at),
                 _to_naive(session.ended_at),
                 _to_naive(session.created_at) or datetime.now(),
+                session.candidate_name,
             )
             return _row_to_session(row)
 
@@ -222,9 +225,6 @@ class PostgresPersistence(IPersistence):
         )
 
         async with pool.acquire() as conn:
-            # Merge metadata JSONB server-side so callers don't race on
-            # stale reads. ``$2::jsonb`` with ``||`` preserves existing keys
-            # unless overridden.
             merge_json = json.dumps(metadata or {})
             row = await conn.fetchrow(
                 """
@@ -290,10 +290,275 @@ class PostgresPersistence(IPersistence):
 
     # ─── Transcript ──────────────────────────────────────────────────
 
-    async def save_transcript(self, transcript: Transcript) -> None:
-        # Phase 2 does not generate transcripts. The schema will gain a
-        # transcripts table in a later phase.
-        return None
+    async def save_transcript(
+        self,
+        session_id: str,
+        transcript_json: dict[str, Any],
+    ) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET "transcript_json" = $2::jsonb
+                WHERE "id" = $1
+                """,
+                session_id,
+                json.dumps(transcript_json),
+            )
+
+    async def get_transcript(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                'SELECT "transcript_json" FROM assessment_sessions WHERE "id" = $1',
+                session_id,
+            )
+            if row is None:
+                return None
+            val = row["transcript_json"]
+            if val is None:
+                return None
+            if isinstance(val, str):
+                return json.loads(val)
+            return val
+
+    # ─── Report ──────────────────────────────────────────────────────
+
+    _REPORT_COLS = """
+        "id", "candidate_name", "claims_json",
+        "expert_review_token", "supervisor_review_token", "review_token",
+        "report_status", "overall_confidence",
+        "report_generated_at", "sme_reviewed_at", "expires_at",
+        "expert_submitted_at", "expert_reviewer_name", "expert_reviewer_email",
+        "supervisor_submitted_at", "supervisor_reviewer_name",
+        "supervisor_reviewer_email", "reviews_completed_at"
+    """
+
+    async def save_report(
+        self,
+        session_id: str,
+        claims: list[dict[str, Any]],
+        expert_review_token: str,
+        supervisor_review_token: str,
+        overall_confidence: float,
+        expires_at: datetime,
+    ) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET
+                    "claims_json"              = $2::jsonb,
+                    "expert_review_token"      = $3,
+                    "supervisor_review_token"  = $4,
+                    "review_token"             = $3,
+                    "overall_confidence"       = $5,
+                    "report_status"            = 'awaiting_expert',
+                    "report_generated_at"      = $6,
+                    "expires_at"               = $7
+                WHERE "id" = $1
+                """,
+                session_id,
+                json.dumps(claims),
+                expert_review_token,
+                supervisor_review_token,
+                overall_confidence,
+                _to_naive(datetime.now(timezone.utc)),
+                _to_naive(expires_at),
+            )
+
+    async def get_report(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT {self._REPORT_COLS}
+                FROM assessment_sessions
+                WHERE "id" = $1
+                  AND "report_status" IS NOT NULL
+                """,
+                session_id,
+            )
+            return _report_row_to_dict(row) if row is not None else None
+
+    async def get_report_by_expert_token(
+        self,
+        expert_review_token: str,
+    ) -> dict[str, Any] | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT {self._REPORT_COLS}
+                FROM assessment_sessions
+                WHERE "expert_review_token" = $1
+                """,
+                expert_review_token,
+            )
+            return _report_row_to_dict(row) if row is not None else None
+
+    async def get_report_by_supervisor_token(
+        self,
+        supervisor_review_token: str,
+    ) -> dict[str, Any] | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT {self._REPORT_COLS}
+                FROM assessment_sessions
+                WHERE "supervisor_review_token" = $1
+                """,
+                supervisor_review_token,
+            )
+            return _report_row_to_dict(row) if row is not None else None
+
+    async def save_expert_review(
+        self,
+        expert_review_token: str,
+        reviewer_full_name: str,
+        reviewer_email: str,
+        claims_patch: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT {self._REPORT_COLS}
+                FROM assessment_sessions
+                WHERE "expert_review_token" = $1
+                """,
+                expert_review_token,
+            )
+            if row is None:
+                raise ValueError(f"Expert token not found: {expert_review_token}")
+            if row["expert_submitted_at"] is not None:
+                raise RuntimeError("Expert review already submitted")
+
+            session_id = row["id"]
+            claims_json = row["claims_json"]
+            if isinstance(claims_json, str):
+                claims_json = json.loads(claims_json)
+
+            patch_by_id = {p["id"]: p for p in claims_patch}
+            updated_claims = []
+            for claim in (claims_json or []):
+                patch = patch_by_id.get(claim.get("id", ""))
+                if patch:
+                    claim = {**claim, "expert_level": patch["expert_level"]}
+                updated_claims.append(claim)
+
+            now = _to_naive(datetime.now(timezone.utc))
+            updated_row = await conn.fetchrow(
+                """
+                UPDATE assessment_sessions
+                SET
+                    "claims_json"           = $2::jsonb,
+                    "expert_submitted_at"   = $3,
+                    "expert_reviewer_name"  = $4,
+                    "expert_reviewer_email" = $5,
+                    "report_status"         = 'awaiting_supervisor'
+                WHERE "id" = $1
+                RETURNING "id", "report_status", "reviews_completed_at"
+                """,
+                session_id,
+                json.dumps(updated_claims),
+                now,
+                reviewer_full_name,
+                reviewer_email,
+            )
+            return {
+                "session_id": session_id,
+                "report_status": updated_row["report_status"],
+                "reviews_completed_at": None,
+                "claims": updated_claims,
+            }
+
+    async def save_supervisor_review(
+        self,
+        supervisor_review_token: str,
+        reviewer_full_name: str,
+        reviewer_email: str,
+        claims_patch: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT {self._REPORT_COLS}
+                FROM assessment_sessions
+                WHERE "supervisor_review_token" = $1
+                """,
+                supervisor_review_token,
+            )
+            if row is None:
+                raise ValueError(f"Supervisor token not found: {supervisor_review_token}")
+            if row["supervisor_submitted_at"] is not None:
+                raise RuntimeError("Supervisor review already submitted")
+
+            session_id = row["id"]
+            expert_already_done = row["expert_submitted_at"] is not None
+            claims_json = row["claims_json"]
+            if isinstance(claims_json, str):
+                claims_json = json.loads(claims_json)
+
+            patch_by_id = {p["id"]: p for p in claims_patch}
+            updated_claims = []
+            for claim in (claims_json or []):
+                patch = patch_by_id.get(claim.get("id", ""))
+                if patch:
+                    claim = {
+                        **claim,
+                        "supervisor_decision": patch["supervisor_decision"],
+                        "supervisor_comment": patch["supervisor_comment"],
+                    }
+                updated_claims.append(claim)
+
+            now = _to_naive(datetime.now(timezone.utc))
+            reviews_completed_at = now if expert_already_done else None
+            new_status = "reviews_complete" if expert_already_done else "in_review"
+
+            updated_row = await conn.fetchrow(
+                """
+                UPDATE assessment_sessions
+                SET
+                    "claims_json"                = $2::jsonb,
+                    "supervisor_submitted_at"    = $3,
+                    "supervisor_reviewer_name"   = $4,
+                    "supervisor_reviewer_email"  = $5,
+                    "report_status"              = $6,
+                    "reviews_completed_at"       = $7
+                WHERE "id" = $1
+                RETURNING "id", "report_status", "reviews_completed_at"
+                """,
+                session_id,
+                json.dumps(updated_claims),
+                now,
+                reviewer_full_name,
+                reviewer_email,
+                new_status,
+                reviews_completed_at,
+            )
+            return {
+                "session_id": session_id,
+                "report_status": updated_row["report_status"],
+                "reviews_completed_at": (
+                    updated_row["reviews_completed_at"].isoformat()
+                    if updated_row["reviews_completed_at"]
+                    else None
+                ),
+                "claims": updated_claims,
+            }
+
+    # ─── Metadata ────────────────────────────────────────────────────
 
     async def merge_session_metadata(
         self,
@@ -311,6 +576,40 @@ class PostgresPersistence(IPersistence):
                 session_id,
                 json.dumps(metadata),
             )
+
+
+def _report_row_to_dict(row: Any) -> dict[str, Any]:
+    claims_json = row["claims_json"]
+    if isinstance(claims_json, str):
+        claims_json = json.loads(claims_json)
+
+    def _iso(val: Any) -> str | None:
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val.isoformat()
+        return str(val)
+
+    return {
+        "session_id": row["id"],
+        "candidate_name": row.get("candidate_name"),
+        "claims_json": claims_json or [],
+        "expert_review_token": row.get("expert_review_token"),
+        "supervisor_review_token": row.get("supervisor_review_token"),
+        "review_token": row.get("review_token"),
+        "report_status": row["report_status"],
+        "overall_confidence": row.get("overall_confidence"),
+        "report_generated_at": _iso(row.get("report_generated_at")),
+        "sme_reviewed_at": _iso(row.get("sme_reviewed_at")),
+        "expires_at": _iso(row.get("expires_at")),
+        "expert_submitted_at": _iso(row.get("expert_submitted_at")),
+        "expert_reviewer_name": row.get("expert_reviewer_name"),
+        "expert_reviewer_email": row.get("expert_reviewer_email"),
+        "supervisor_submitted_at": _iso(row.get("supervisor_submitted_at")),
+        "supervisor_reviewer_name": row.get("supervisor_reviewer_name"),
+        "supervisor_reviewer_email": row.get("supervisor_reviewer_email"),
+        "reviews_completed_at": _iso(row.get("reviews_completed_at")),
+    }
 
 
 __all__ = ["PostgresPersistence"]

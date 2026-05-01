@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # Phase 3 basic scripted conversation. Requires ANTHROPIC_API_KEY.
     enable_sfia_flow: bool = False
 
+    # ─── Phase 6: post-call pipeline ──────────────────────────────
+    # Public base URL used to construct review links in reports.
+    # Should be the external URL of the voice engine (e.g. https://voice.example.com).
+    # Falls back to localhost for local dev.
+    base_url: str = "http://localhost:8000"
+
     # ─── Runtime knobs ────────────────────────────────────────────
     log_level: str = "INFO"
     # Railway injects `PORT` at runtime; local dev + tests use 8000.

@@ -109,6 +109,7 @@ class CallManager(ICallLifecycleListener):
         if candidate is None:  # pragma: no cover — defensive
             raise CandidateNotFoundError(candidate_email)
 
+        full_name = f"{candidate.first_name} {candidate.last_name}".strip() or None
         session = AssessmentSession(
             id=str(uuid4()),
             candidate_id=candidate.email,
@@ -116,6 +117,7 @@ class CallManager(ICallLifecycleListener):
             status=AssessmentStatus.PENDING,
             metadata={"dialing_method": dialing_method or "pstn"},
             created_at=datetime.now(UTC),
+            candidate_name=full_name,
         )
         created = await self._persistence.create_session(session)
 

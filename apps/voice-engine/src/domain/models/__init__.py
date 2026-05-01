@@ -7,17 +7,18 @@ from src.domain.models.assessment import (
     CallConnection,
     Candidate,
 )
-from src.domain.models.claim import Claim, ClaimMapping
+from src.domain.models.claim import AssessmentReport, Claim, ClaimExtractionResult
 from src.domain.models.transcript import Transcript, TranscriptSegment
 
 __all__ = [
+    "AssessmentReport",
     "AssessmentSession",
     "AssessmentStatus",
     "CallConfig",
     "CallConnection",
     "Candidate",
     "Claim",
-    "ClaimMapping",
+    "ClaimExtractionResult",
     "Transcript",
     "TranscriptSegment",
 ]

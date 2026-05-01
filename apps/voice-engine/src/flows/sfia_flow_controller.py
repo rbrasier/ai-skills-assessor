@@ -33,12 +33,16 @@ Return ``(None, next_node_config)`` to transition, or ``(None, None)`` to stay.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.domain.ports.knowledge_base import IKnowledgeBase, SkillDefinition
 from src.domain.services.transcript_recorder import TranscriptRecorder
+
+if TYPE_CHECKING:
+    from src.domain.services.post_call_pipeline import PostCallPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +73,16 @@ class SfiaFlowController:
         system_prompt: str,
         knowledge_base: IKnowledgeBase,
         framework_type: str = "sfia-9",
+        session_id: str = "",
+        post_call_pipeline: PostCallPipeline | None = None,
     ) -> None:
         self._recorder = recorder
         self._on_call_ended = on_call_ended
         self._system_prompt = system_prompt
         self._knowledge_base = knowledge_base
         self._framework_type = framework_type
+        self._session_id = session_id
+        self._post_call_pipeline = post_call_pipeline
         self._identified_skills: list[dict[str, Any]] = []
         self._rag_context: str = ""
 
@@ -148,15 +156,38 @@ class SfiaFlowController:
     async def handle_end_call(
         self, args: dict[str, Any], flow_manager: Any
     ) -> tuple[None, None]:
-        """Call complete — trigger transcript finalisation and pipeline teardown."""
-        logger.info("SfiaFlow: call_ended — finalising session")
+        """Call complete — trigger transcript finalisation and pipeline teardown.
+
+        _on_call_ended() → SFIACallBot._finalize_and_end() → recorder.finalize()
+        guarantees the transcript is persisted before the background pipeline reads it.
+        """
+        logger.info("SfiaFlow: call_ended — finalising session %s", self._session_id)
         try:
             result = self._on_call_ended()
             if isinstance(result, Awaitable):
                 await result
         except Exception:
             logger.exception("SfiaFlow: on_call_ended callback raised")
+
+        if self._post_call_pipeline and self._session_id:
+            asyncio.create_task(
+                self._run_pipeline_safe(self._session_id),
+                name=f"post-call-pipeline-{self._session_id}",
+            )
+
         return None, None
+
+    async def _run_pipeline_safe(self, session_id: str) -> None:
+        """Run PostCallPipeline, logging errors without crashing call teardown."""
+        try:
+            await self._post_call_pipeline.process(session_id)  # type: ignore[union-attr]
+        except Exception:
+            logger.exception(
+                "PostCallPipeline failed for session %s — "
+                "manual re-trigger via POST /api/v1/assessment/%s/process",
+                session_id,
+                session_id,
+            )
 
     # ─── Entry point ─────────────────────────────────────────────────
 
