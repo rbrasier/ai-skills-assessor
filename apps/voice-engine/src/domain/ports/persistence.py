@@ -3,6 +3,9 @@
 Phase 2 extends the Phase 1 port with candidate CRUD, status updates,
 and admin querying. All methods are async so concrete adapters can use
 ``asyncpg`` (or similar) without blocking the event loop.
+
+Phase 6 adds transcript and report persistence methods that write to
+dedicated columns on ``assessment_sessions`` (promoted from JSONB metadata).
 """
 
 from __future__ import annotations
@@ -97,11 +100,66 @@ class IPersistence(ABC):
     # ─── Transcript ──────────────────────────────────────────────────
 
     @abstractmethod
-    async def save_transcript(self, transcript: Transcript) -> None:
-        """Persist a transcript and its segments.
+    async def save_transcript(
+        self,
+        session_id: str,
+        transcript_json: dict[str, Any],
+    ) -> None:
+        """Write transcript JSON to assessment_sessions.transcript_json.
 
-        Phase 2 does not generate transcripts yet; adapters may stub
-        this method, but the port shape is preserved for Phase 3+.
+        Phase 6 replacement for the Phase 4 merge_session_metadata() approach.
+        TranscriptRecorder.finalize() calls this method from Phase 6 onwards.
+        """
+        ...
+
+    @abstractmethod
+    async def get_transcript(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Read transcript_json for a session. Returns None if not yet persisted."""
+        ...
+
+    # ─── Report ──────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def save_report(
+        self,
+        session_id: str,
+        claims: list[dict[str, Any]],
+        review_token: str,
+        overall_confidence: float,
+        expires_at: datetime,
+    ) -> None:
+        """Write claims_json and report metadata to assessment_sessions.
+
+        Sets: claims_json, review_token, overall_confidence,
+        report_status='generated', report_generated_at=now(), expires_at.
+        """
+        ...
+
+    @abstractmethod
+    async def get_report(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        """Read report metadata and claims_json for a session.
+
+        Returns a dict with keys: session_id, claims_json, review_token,
+        report_status, overall_confidence, report_generated_at,
+        sme_reviewed_at, expires_at. Returns None if no report exists.
+        """
+        ...
+
+    @abstractmethod
+    async def get_report_by_token(
+        self,
+        review_token: str,
+    ) -> dict[str, Any] | None:
+        """Read session and report data by NanoID review token.
+
+        Used by the public SME review endpoint. Returns None if token not
+        found or expired.
         """
         ...
 
@@ -113,8 +171,7 @@ class IPersistence(ABC):
     ) -> None:
         """Merge additional metadata into a session without changing its status.
 
-        Phase 4 uses this to store transcript_json, identified_skills, and
-        recording_duration_seconds in the JSONB metadata column without
-        overwriting the session's current status.
+        Used for identified_skills and recording_duration_seconds. Transcript
+        data is written via save_transcript() from Phase 6 onwards.
         """
         ...

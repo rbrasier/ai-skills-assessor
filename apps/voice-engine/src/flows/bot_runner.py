@@ -394,6 +394,7 @@ class SFIACallBot:
         listener: ICallLifecycleListener,
         persistence: Any,  # IPersistence — Any to avoid import cycle in lean CI
         transport_mode: str = "livekit",
+        post_call_pipeline: Any = None,  # PostCallPipeline | None — injected at startup
     ) -> None:
         self._session_id = session_id
         self._phone_number = phone_number
@@ -404,6 +405,7 @@ class SFIACallBot:
         self._listener = listener
         self._persistence = persistence
         self._transport_mode = transport_mode
+        self._post_call_pipeline = post_call_pipeline
 
         self._transport: Any = None
         self._task: Any = None
@@ -421,6 +423,8 @@ class SFIACallBot:
         from src.flows.assessment_pipeline import build_sfia_pipeline
         from src.flows.sfia_flow_controller import _FALLBACK_SYSTEM_PROMPT, SfiaFlowController
         from src.flows.system_prompt_builder import SystemPromptBuilder
+
+        post_call_pipeline = getattr(self, "_post_call_pipeline", None)
 
         if self._transport_mode == "livekit":
             from pipecat.transports.livekit.transport import (
@@ -481,6 +485,8 @@ class SFIACallBot:
             on_call_ended=self._handle_bot_initiated_hangup,
             system_prompt=system_prompt,
             knowledge_base=knowledge_base,
+            session_id=self._session_id,
+            post_call_pipeline=post_call_pipeline,
         )
         self._controller = controller
 

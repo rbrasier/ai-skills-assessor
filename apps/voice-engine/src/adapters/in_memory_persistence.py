@@ -27,6 +27,9 @@ class InMemoryPersistence(IPersistence):
         self._candidates: dict[str, Candidate] = {}
         self._sessions: dict[str, AssessmentSession] = {}
         self._transcripts: dict[str, Transcript] = {}
+        self._transcript_jsons: dict[str, dict[str, Any]] = {}
+        self._reports: dict[str, dict[str, Any]] = {}
+        self._tokens: dict[str, str] = {}  # review_token → session_id
         self._lock = asyncio.Lock()
 
     async def ping(self) -> bool:
@@ -147,9 +150,66 @@ class InMemoryPersistence(IPersistence):
         )
         return items[offset : offset + limit]
 
-    async def save_transcript(self, transcript: Transcript) -> None:
+    # ─── Transcript ──────────────────────────────────────────────────
+
+    async def save_transcript(
+        self,
+        session_id: str,
+        transcript_json: dict[str, Any],
+    ) -> None:
         async with self._lock:
-            self._transcripts[transcript.id] = transcript
+            self._transcript_jsons[session_id] = transcript_json
+
+    async def get_transcript(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        async with self._lock:
+            return self._transcript_jsons.get(session_id)
+
+    # ─── Report ──────────────────────────────────────────────────────
+
+    async def save_report(
+        self,
+        session_id: str,
+        claims: list[dict[str, Any]],
+        review_token: str,
+        overall_confidence: float,
+        expires_at: datetime,
+    ) -> None:
+        async with self._lock:
+            now = datetime.now(UTC)
+            report = {
+                "session_id": session_id,
+                "claims_json": claims,
+                "review_token": review_token,
+                "report_status": "generated",
+                "overall_confidence": overall_confidence,
+                "report_generated_at": now.isoformat(),
+                "sme_reviewed_at": None,
+                "expires_at": expires_at.isoformat(),
+            }
+            self._reports[session_id] = report
+            self._tokens[review_token] = session_id
+
+    async def get_report(
+        self,
+        session_id: str,
+    ) -> dict[str, Any] | None:
+        async with self._lock:
+            return self._reports.get(session_id)
+
+    async def get_report_by_token(
+        self,
+        review_token: str,
+    ) -> dict[str, Any] | None:
+        async with self._lock:
+            session_id = self._tokens.get(review_token)
+            if session_id is None:
+                return None
+            return self._reports.get(session_id)
+
+    # ─── Metadata ────────────────────────────────────────────────────
 
     async def merge_session_metadata(
         self,

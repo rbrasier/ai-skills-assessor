@@ -122,30 +122,40 @@ class TranscriptRecorder:
         identified_skills: list[dict[str, Any]] | None = None,
         recording_duration_seconds: int | None = None,
     ) -> None:
-        """Persist transcript data to the session's metadata JSONB.
+        """Persist transcript to the dedicated transcript_json column (Phase 6+).
 
-        Merges ``transcript_json``, ``identified_skills`` (if provided), and
-        ``recording_duration_seconds`` (if provided) into the existing session
-        metadata without changing the session's status.
+        Writes the transcript dict to ``assessment_sessions.transcript_json``
+        via ``persistence.save_transcript()``. Remaining metadata fields
+        (identified_skills, recording_duration_seconds) are merged via
+        ``persistence.merge_session_metadata()`` as before.
         """
-        metadata: dict[str, Any] = {"transcript_json": self.to_dict()}
-        if identified_skills is not None:
-            metadata["identified_skills"] = identified_skills
-        if recording_duration_seconds is not None:
-            metadata["recording_duration_seconds"] = recording_duration_seconds
-
         try:
-            await persistence.merge_session_metadata(session_id, metadata)
+            await persistence.save_transcript(session_id, self.to_dict())
             logger.info(
-                "TranscriptRecorder: finalized %d turns for session %s",
+                "TranscriptRecorder: saved %d turns for session %s",
                 self.turn_count,
                 session_id,
             )
         except Exception:
             logger.exception(
-                "TranscriptRecorder: failed to persist transcript for session %s",
+                "TranscriptRecorder: failed to save transcript for session %s",
                 session_id,
             )
+
+        extra: dict[str, Any] = {}
+        if identified_skills is not None:
+            extra["identified_skills"] = identified_skills
+        if recording_duration_seconds is not None:
+            extra["recording_duration_seconds"] = recording_duration_seconds
+
+        if extra:
+            try:
+                await persistence.merge_session_metadata(session_id, extra)
+            except Exception:
+                logger.exception(
+                    "TranscriptRecorder: failed to merge metadata for session %s",
+                    session_id,
+                )
 
 
 __all__ = ["TranscriptRecorder"]

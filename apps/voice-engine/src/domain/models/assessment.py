@@ -79,3 +79,5 @@ class AssessmentSession:
     started_at: datetime | None = None
     ended_at: datetime | None = None
     created_at: datetime | None = None
+    # Phase 6: denormalised from Candidate at session creation to avoid JOIN in pipeline
+    candidate_name: str | None = None

@@ -48,7 +48,7 @@ model AssessmentSession {
   candidateId  String    @db.VarChar(255)
   candidate    Candidate @relation(fields: [candidateId], references: [email], onDelete: Cascade)
   phoneNumber  String    @db.VarChar(32)
-  // pending | dialling | in_progress | completed | failed | cancelled
+  // pending | dialling | in_progress | completed | failed | cancelled | processed
   status       String    @default("pending") @db.VarChar(32)
   // JSONB container for optional / extensible fields:
   //   { "failureReason": "...", "cancelledAt": "...", ... }
@@ -58,6 +58,17 @@ model AssessmentSession {
   startedAt    DateTime?
   endedAt      DateTime?
   createdAt    DateTime  @default(now())
+
+  // Phase 6: claim extraction pipeline columns
+  candidateName      String?   @db.VarChar(255) @map("candidate_name")
+  transcriptJson     Json?     @map("transcript_json")
+  claimsJson         Json?     @map("claims_json")
+  reviewToken        String?   @unique @db.VarChar(21) @map("review_token")
+  reportStatus       String?   @db.VarChar(20) @map("report_status")
+  overallConfidence  Float?    @map("overall_confidence")
+  reportGeneratedAt  DateTime? @map("report_generated_at")
+  smeReviewedAt      DateTime? @map("sme_reviewed_at")
+  expiresAt          DateTime? @map("expires_at")
 
   assessmentReport AssessmentReport?
 
