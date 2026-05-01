@@ -6,7 +6,7 @@ You are helping the user document an amendment or revision to an existing phase 
 
 The user has specified: $ARGUMENTS
 
-- If a phase number was given, find the corresponding implementation document within subfolders under `docs/development/implementated/*/*PHASE-X-implementation-*.md`
+- If a phase number was given, find the corresponding implementation document within subfolders under `docs/development/implemented/*/*PHASE-X-implementation-*.md`
 - If nothing was specified, list all implementation documents found and ask which one to revise
 - Read the existing implementation document thoroughly to understand prior decisions and strategy
 
@@ -14,7 +14,7 @@ The user has specified: $ARGUMENTS
 
 ## Step 2: Determine revision number
 
-Check `docs/development/implementated/` for existing revision documents:
+Check `docs/development/implemented/` for existing revision documents:
 - Look for files matching `PHASE-X-*.md`
 - Find the highest revision number (Y) that exists
 - The new revision will be Y+1
