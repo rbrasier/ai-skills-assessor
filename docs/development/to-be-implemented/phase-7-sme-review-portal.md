@@ -13,7 +13,9 @@ To Be Implemented
 - ADR-004: Voice Engine Technology (FastAPI voice engine owns persistence in the current plan)
 - [Assessment Report Contract](../contracts/assessment-report-contract.md): canonical dual-review payloads and claim shapes
 - [Phase 6 revision: dual review tokens](phase-6-revision-dual-review-tokens.md): backend deltas on top of baseline Phase 6 (single-token pipeline)
-- **UI reference (visual + structure):** [`frontend/public/admin.html`](../../../frontend/public/admin.html) — the **assessment detail modal** only (`.modal-overlay` / `.modal` and inner sections). SME and supervisor pages render **that modal pattern full-viewport**; they **must not** expose the admin shell (sidebar, stats, charts, assessment table).
+- **UI reference:** [`frontend/public/admin.html`](../../../frontend/public/admin.html)
+  - **Token routes** (`/review/expert/*`, `/review/supervisor/*`): **modal only** — `.modal-overlay` / `.modal` (experts/supervisors **must not** see sidebar, stats, charts, or main table).
+  - **Operator dashboard** (`/dashboard/*`): **full page parity** with `admin.html` — `.shell` layout (sidebar + main), topbar, stats row, charts row, assessments table; row click opens the **same** assessment detail modal component (read-only for operators unless product adds actions later).
 - Phase 4 ([implemented](../implemented/v0.5/PHASE-4-implementation-assessment-workflow.md)): structured `transcript_json` (turns, timestamps, phases) for the transcript panel
 - Phase 5 ([implemented](../implemented/v0.5/PHASE-5-implementation-rag-knowledge-base.md)): SFIA skill definitions used when enriching claims (skill names/descriptors in breakdown rows)
 - Phase 6: Claim Extraction Pipeline — baseline delivers `claims_json`, transcript column, single `review_token` + `GET /review/{token}`; **dual-token APIs** require [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) (see §0)
@@ -24,16 +26,19 @@ To Be Implemented
 
 ## Objective
 
-Build Next.js routes so **two independent reviewers** complete their work through **two unique NanoID URLs**, using the **same modal layout as `frontend/public/admin.html`** (header with candidate facts, score strip, AI summary, SFIA competency breakdown table, transcript section). **Only the controls allowed for that role are editable**; everything else is read-only.
+Build Next.js UI in two surfaces, both styled from **`frontend/public/admin.html`**:
 
-| Reviewer | URL pattern (example) | May edit | Must collect on save |
-|----------|----------------------|----------|----------------------|
-| **SME (subject matter expert)** | `/review/expert/[token]` | Per claim/skill row: **endorse** the AI-suggested SFIA level **or adjust** to a different level (1–7). Optional short note per row if product requires it; default is level-only. | Full name, work email |
-| **Supervisor** | `/review/supervisor/[token]` | Per claim/skill row: **verify** or **reject** the **claims register** entry; **comment** on each row (required for both outcomes). | Full name, work email |
+1. **Expert & supervisor token URLs** — Full-viewport **modal only** (same sections as the mock modal): candidates endorse/adjust levels or verify/reject + comment; identity at save (see role table below).
+
+2. **Operator admin dashboard** (`/dashboard/*`) — **Mirror the rest of `admin.html`**: sidebar navigation, topbar (including link back to candidate portal `/`), stats cards, charts row (calls per day + outcomes donut), and **All assessments** table with search/filter; opening a row shows the **same** modal component used on token routes, in **operator read-only** mode (no expert/supervisor edit controls unless explicitly added later).
 
 **Final outcome:** The assessment **does not** move to the terminal **final outcome** state until **both** the SME save **and** the supervisor save have succeeded. Order does not matter unless product later defines dependencies.
 
-**Admin dashboard:** Unchanged in scope — authenticated operators use `/dashboard/*` with the full admin chrome. **Experts and supervisors never see that chrome** — only the modal-style review surface.
+| Reviewer | URL pattern (example) | Chrome | May edit | Must collect on save |
+|----------|----------------------|--------|----------|----------------------|
+| **SME (subject matter expert)** | `/review/expert/[token]` | Modal only | Per claim: endorse/adjust SFIA level **1–7** | Full name, work email |
+| **Supervisor** | `/review/supervisor/[token]` | Modal only | Per claim: verify/reject + **comment** (every row) | Full name, work email |
+| **Operator** | `/dashboard/...` | Full `admin.html` shell | Monitoring only (no call trigger); optional copy expert/supervisor links | N/A (authenticated dashboard — auth mechanism as per Phase 1/product) |
 
 ---
 
@@ -51,7 +56,7 @@ Payload shapes and enums are **normative** in [Assessment Report Contract](../co
 
 ### 1.1 Application layout
 
-**Tech stack:** Next.js 14+ App Router, Tailwind (map CSS variables from `admin.html` modal tokens: `--paper`, `--ink`, `--accent`, `--line`, fonts Inter Tight / Instrument Serif / JetBrains Mono), Lucide icons optional.
+**Tech stack:** Next.js 14+ App Router, Tailwind — map **all** `:root` tokens from `admin.html` (`--paper`, `--ink`, `--accent`, `--line`, status colours, fonts Inter Tight / Instrument Serif / JetBrains Mono). Lucide icons optional (mock uses inline SVG).
 
 **Route structure:**
 
@@ -59,8 +64,10 @@ Payload shapes and enums are **normative** in [Assessment Report Contract](../co
 packages/web/src/app/
 ├── layout.tsx
 ├── page.tsx                                    ← Candidate portal (Phase 2) — unchanged
-├── (dashboard)/                                ← Full admin UI — operators only
-│   └── ...                                     ← §1.4 admin (existing plan)
+├── (dashboard)/                                ← Mirrors full admin.html shell (§1.4)
+│   ├── layout.tsx                              ← .shell: sidebar + main wrapper
+│   └── dashboard/
+│       └── page.tsx                            ← GET /dashboard — overview matching mock
 ├── (review-expert)/
 │   └── review/
 │       └── expert/
@@ -76,7 +83,10 @@ packages/web/src/app/
 └── api/                                        ← Proxies as needed
 ```
 
-**Layout rule:** Pages under `/review/expert/*` and `/review/supervisor/*` render **only** the modal container (equivalent to `#modalOverlay` + `#modal` content). **Do not** mount `.shell`, `.sidebar`, `.main` page chrome from `admin.html`.
+**Layout rules:**
+
+- **`/review/expert/*` and `/review/supervisor/*`:** Render **only** the modal host (equivalent to `#modalOverlay` + `#modal`). **Do not** mount `.shell`, sidebar, stats, or main table.
+- **`/dashboard/*`:** Render the **full** `.shell` grid from `admin.html` (sidebar | main). Reuse shared tokens (`--paper`, `--ink`, `--accent`, fonts).
 
 ### 1.2 Modal UI parity (`frontend/public/admin.html`)
 
@@ -95,72 +105,104 @@ Port the **modal** sections to React components so behaviour matches the mock:
 - **Expert:** Per row: level control (endorse AI level vs select adjusted 1–7). Primary **Save** opens or precedes a step collecting **full name** + **email** (validate email format), then submits.
 - **Supervisor:** Per row: **Verify** or **Reject** + **comment** (required). **Save** collects **full name** + **email**, then submits.
 
-All header actions in the static mock (**Export PDF**, **Approve**) are **hidden or read-only** on expert/supervisor routes unless a separate product decision adds them later.
+All header actions in the static mock (**Export PDF**, **Approve**) are **hidden or disabled** on expert/supervisor routes unless product adds operator-only workflow later. On **dashboard** modal open, **Approve** / **Export PDF** remain **non-functional placeholders** until a later phase defines APIs — or hide them for parity without implying behaviour.
 
-### 1.3 Component split (suggested)
+### 1.3 Admin shell parity (`frontend/public/admin.html`)
+
+Port the **non-modal** chrome so `/dashboard` matches the mock:
+
+| Mock region | Behaviour |
+|-------------|-----------|
+| `.shell` | CSS grid: sidebar (220px) + main |
+| `.sidebar` | Brand, nav groups (Analytics: Dashboard, Candidates; Configuration: Skills library, Settings — labels may stay placeholder until those routes exist), user chip (from auth/session or config) |
+| `.main` `.topbar` | Title (“Assessment Overview”), **Candidate portal** primary button → `/` |
+| `.page` `.page-head` | Title + subtitle (derive counts from API: completed calls, awaiting review, last call) |
+| `#statsRow` `.stats` | Stat cards — wire real aggregates where API exists; **Awaiting review** card shows report-count metrics when available |
+| `.charts` | Bar chart (calls per day) + donut (call outcomes) — use **real session/report data** when endpoint supports it; otherwise stub with empty state **only if** documented |
+| `.table-card` | Toolbar (filters: All / Complete / Awaiting review / Incomplete), search (name, email, skill), header row, body rows matching `.trow` grid columns |
+| Row click | Opens shared **`AssessmentReviewModal`** (same component as token flows) in **`variant="operator-read-only"`** — hide expert/supervisor edit footers; show `report_status` + **copy** actions for expert/supervisor URLs when tokens exist |
+
+**Data:** Prefer `GET /api/v1/admin/sessions` (or equivalent from Phase 1/6) with filters aligned to mock tabs. Pagination: match PRD/Phase 6 admin API when specified; otherwise client-side slice with a TODO for server pagination.
+
+### 1.4 Shared modal component
+
+Use one **`AssessmentReviewModal`** (contents per §1.2) with props: `variant: "expert" | "supervisor" | "operator-read-only"`.
+
+### 1.5 Component split (suggested)
 
 ```
 packages/web/src/components/
+├── admin-shell/
+│   ├── AdminShellLayout.tsx           ← .shell grid
+│   ├── AdminSidebar.tsx
+│   ├── AdminTopbar.tsx
+│   ├── StatsRow.tsx
+│   ├── CallsBarChart.tsx
+│   ├── OutcomesDonut.tsx
+│   └── AssessmentsTable.tsx           ← opens AssessmentReviewModal on row click
 ├── review-modal/
-│   ├── ReviewModalShell.tsx           ← Overlay + card — matches .modal-overlay / .modal
-│   ├── ModalHeader.tsx                ← Read-only facts
+│   ├── AssessmentReviewModal.tsx      ← Shared modal; variant drives footer controls
+│   ├── ModalHeader.tsx
 │   ├── ScoreStrip.tsx
 │   ├── AiSummaryPanel.tsx
-│   ├── ClaimsRegisterTable.tsx        ← Skill rows; receives slot for role-specific right column
+│   ├── ClaimsRegisterTable.tsx
 │   ├── TranscriptPanel.tsx
-│   ├── ExpertClaimControls.tsx        ← Level endorse/adjust only
-│   ├── SupervisorClaimControls.tsx    ← Verify/reject + comment
-│   └── ReviewerIdentityForm.tsx       ← Name + email — modal step before PUT
-├── dashboard/                         ← Unchanged from operator dashboard plan
+│   ├── ExpertClaimControls.tsx
+│   ├── SupervisorClaimControls.tsx
+│   └── ReviewerIdentityForm.tsx
 └── ui/
 ```
 
-Reuse Tailwind tokens derived from `admin.html` `:root` variables for visual parity.
+Reuse Tailwind tokens derived from `admin.html` `:root` across **shell + modal**.
 
-### 1.4 Admin dashboard (operators)
-
-Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy **both** review URLs when tokens exist. No expert/supervisor chrome here.
-
-### 1.5 Security
+### 1.6 Security
 
 - **Knowledge-based URLs:** Two independent NanoIDs; supervisor cannot guess expert URL without the link.
 - **Capability isolation:** Server rejects cross-role field writes.
 - **HTTPS**, rate limiting, no candidate PII in paths.
 - **Reviewer PII:** Name and email stored on submission for audit trail (GDPR/retention policy out of scope for this doc).
+- **Dashboard:** Requires **operator authentication** per product/Phase 1 (not NanoID); no exposure of expert/supervisor token URLs to unauthenticated users.
 
 ---
 
 ## 2. UI/UX requirements
 
-- **Visual fidelity:** Match modal typography, spacing, card radius, and ladder/confidence patterns from `frontend/public/admin.html`.
-- **Responsive:** Modal scrolls inside viewport; usable from **768px** width (tablet).
-- **Accessibility:** WCAG AA; ladder + decisions not colour-only; labelled controls for expert/supervisor edits.
-- **States:** Loading; 404/expired token; network error with retry; **already submitted** (read-only view of saved decisions + reviewer identity timestamp if API returns it).
+- **Visual fidelity:** Match `admin.html` — **dashboard**: sidebar, stats, charts, table chrome; **modal**: typography, spacing, card radius, ladder/confidence patterns (shared tokens).
+- **Responsive:** Token review modals usable from **768px**+ (tablet). **Dashboard:** **desktop-first** (≥1280px target, matching mock viewport); narrow screens may horizontal-scroll or collapse sidebars only if explicitly designed — default is operator desktop use.
+- **Accessibility:** WCAG AA on dashboard table, filters, modals, and token flows.
+- **States:** Loading; empty table; 404/expired token; network error with retry; **already submitted** on token routes (read-only view when API returns completed state).
 
 ---
 
 ## 3. Build order (within Phase 7)
 
-1. Extract shared modal styles/tokens from `frontend/public/admin.html` into the Next app (Tailwind theme or CSS module).
-2. Implement read-only `ClaimsRegisterTable` + `TranscriptPanel` from API fixture matching Phase 6 shape.
-3. Expert route: level controls + identity capture + `PUT` expert.
-4. Supervisor route: verify/reject + comments + identity + `PUT` supervisor.
-5. Wire dashboard to display dual links and session `report_status` including “awaiting expert”, “awaiting supervisor”, “reviews complete”.
-6. Accessibility and error-state pass.
+1. Extract shared design tokens from `frontend/public/admin.html` into the Next app (Tailwind theme or CSS module).
+2. **Admin shell:** Layout, sidebar, topbar, stats row, charts, assessments table — wired to admin sessions API (or fixture → API).
+3. **Shared `AssessmentReviewModal`:** Read-only core (header, score strip, summary, claims table, transcript); open from table row with `variant="operator-read-only"`.
+4. Expert token route: mount modal only + `variant="expert"` + `PUT` expert flow.
+5. Supervisor token route: `variant="supervisor"` + `PUT` supervisor flow.
+6. Dashboard modal: copy-link UI for both URLs; reflect `report_status` in table badges/chips.
+7. Accessibility pass (dashboard + modals + token pages).
 
 ---
 
 ## 4. Definition of Done
 
-- Expert and supervisor pages show **only** the modal surface (no admin shell).
-- Both flows persist reviewer name/email and role-specific decisions server-side.
+- **`/dashboard`:** Visual and structural parity with **`frontend/public/admin.html`** shell (sidebar, stats, charts, assessments table, topbar link to `/`). Data from real admin API where available.
+- Expert and supervisor token pages show **only** the modal surface (no admin shell).
+- **`AssessmentReviewModal`** reused for operators (read-only) and both token roles.
+- Both expert/supervisor flows persist reviewer name/email and role-specific decisions server-side.
 - Final outcome progression occurs **only** after both saves succeed (verified via API + UI).
-- Types align with updated contract / OpenAPI once Phase 6 extensions land.
+- Types align with updated contract / OpenAPI once Phase 6 revision lands.
 
 ---
 
 ## 5. Acceptance criteria
 
+- [ ] **`GET /dashboard`** (or agreed path under `/dashboard`) renders the **full** admin shell matching `admin.html`: `.shell` grid, sidebar brand + nav groups, topbar with **Candidate portal** → `/`, page title/subtitle, stats row, charts row, assessments table with toolbar filters + search.
+- [ ] Table rows match mock column intent (candidate, email, date, duration, top skills, max level, confidence); data from **`GET /api/v1/admin/sessions`** (or equivalent).
+- [ ] Row click opens **`AssessmentReviewModal`** in operator read-only mode with the same inner content as token flows (header, scores, summary, claims breakdown, transcript).
+- [ ] Operator modal shows **copy** actions (or equivalent) for **expert** and **supervisor** review URLs when tokens exist; shows review progress / `report_status` when API provides it.
 - [ ] `/review/expert/[token]` renders the assessment modal layout consistent with `frontend/public/admin.html` (modal only — **no** sidebar, stats, charts, or main table).
 - [ ] `/review/supervisor/[token]` meets the same visual/structural requirement.
 - [ ] Expert page: all modal content except expert level controls is **read-only**; expert can **endorse** (accept AI level) or **adjust** SFIA level **1–7** per claim row.
@@ -171,8 +213,7 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 - [ ] After expert has saved, supervisor view shows expert-adjusted levels as **read-only**.
 - [ ] `report_status` (or equivalent) advances to **final-outcome-eligible** only when **both** expert and supervisor submissions exist.
 - [ ] Second submit with same role returns handled **already completed** state (`409` or equivalent UX).
-- [ ] Dashboard lists/links **both** URLs for operators when tokens exist.
-- [ ] Keyboard navigation and labels meet WCAG AA on editable controls.
+- [ ] Keyboard navigation and labels meet WCAG AA on dashboard and token flows.
 
 ---
 
@@ -191,7 +232,7 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 | Phase 4 | `transcript_json` shape for transcript panel |
 | Phase 5 | Skill names/descriptions for breakdown rows |
 | Phase 6 | `claims_json`, pipeline-generated summary, dual tokens + extended persistence |
-| `frontend/public/admin.html` | Canonical modal layout reference |
+| `frontend/public/admin.html` | Canonical reference for **full operator page** + **modal** |
 
 ---
 
@@ -200,9 +241,10 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 | Risk | Mitigation |
 |------|------------|
 | Schema drift vs Phase 6 | Lock API schema before UI integration; contract tests |
+| Charts/stats need aggregates API | Time-series + outcome buckets may require dashboard-specific endpoints or Phase 6 revision — define minimal API or documented stubs |
 | Supervisor rejects without SME context | Show expert-adjusted levels read-only on supervisor page |
 | Legal / privacy for reviewer emails | Align retention with HR policy |
-| PDF export expectation from mock | Explicitly out of scope on token URLs unless added later |
+| PDF export / Approve in mock | Placeholder or hidden until backend exists; avoid implying behaviour |
 
 ---
 
@@ -212,4 +254,4 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 |------|--------|
 | 2026-05-01 | Refine pass: `/dashboard` vs `/`, Phase 6 API notes |
 | 2026-05-01 | Dual-role review: expert vs supervisor URLs, modal-only UI from `frontend/public/admin.html`, final outcome when both complete, Phase 4–6 alignment |
-| 2026-05-01 | §0: baseline Phase 6 vs [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) for dual-token APIs |
+| 2026-05-01 | Operator `/dashboard` must mirror **full** `admin.html` shell (sidebar, stats, charts, table); shared `AssessmentReviewModal`; build order + acceptance criteria updated |
