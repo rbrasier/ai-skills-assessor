@@ -558,6 +558,117 @@ class PostgresPersistence(IPersistence):
                 "claims": updated_claims,
             }
 
+    # ─── Phase 7: Enriched admin listing ────────────────────────────
+
+    async def list_admin_session_summaries(
+        self,
+        status: str | None = None,
+        candidate_email: str | None = None,
+        search: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        clauses: list[str] = []
+        args: list[Any] = []
+
+        if status is not None:
+            args.append(status)
+            clauses.append(f'"status" = ${len(args)}')
+        if candidate_email is not None:
+            args.append(candidate_email)
+            clauses.append(f'"candidateId" = ${len(args)}')
+        if search is not None:
+            args.append(f"%{search}%")
+            n = len(args)
+            clauses.append(
+                f'("candidateId" ILIKE ${n} OR "candidate_name" ILIKE ${n})'
+            )
+        if created_after is not None:
+            args.append(_to_naive(created_after))
+            clauses.append(f'"createdAt" >= ${len(args)}')
+        if created_before is not None:
+            args.append(_to_naive(created_before))
+            clauses.append(f'"createdAt" <= ${len(args)}')
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        args.extend([limit, offset])
+        sql = f"""
+            SELECT
+                "id",
+                "candidateId",
+                "phoneNumber",
+                "status",
+                "createdAt",
+                "startedAt",
+                "endedAt",
+                "candidate_name",
+                "report_status",
+                "expert_review_token",
+                "supervisor_review_token",
+                "claims_json",
+                "overall_confidence"
+            FROM assessment_sessions
+            {where}
+            ORDER BY "createdAt" DESC
+            LIMIT ${len(args) - 1} OFFSET ${len(args)}
+        """
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *args)
+
+        summaries = []
+        for row in rows:
+            started = row["startedAt"]
+            ended = row["endedAt"]
+            duration = 0.0
+            if started and ended:
+                duration = (
+                    (ended - started).total_seconds()
+                    if hasattr(ended - started, "total_seconds")
+                    else 0.0
+                )
+            created = row["createdAt"]
+            claims_raw = row["claims_json"]
+            if isinstance(claims_raw, str):
+                claims_raw = json.loads(claims_raw)
+            claims = claims_raw or []
+
+            max_level: int | None = None
+            top_codes: list[str] = []
+            if claims:
+                levels = [c.get("level") for c in claims if c.get("level")]
+                if levels:
+                    max_level = max(levels)
+                seen: dict[str, int] = {}
+                for c in claims:
+                    code = c.get("skill_code") or c.get("skillCode")
+                    if code:
+                        seen[code] = seen.get(code, 0) + 1
+                top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
+
+            summaries.append({
+                "session_id": row["id"],
+                "candidate_email": row["candidateId"],
+                "phone_number": row["phoneNumber"] or "",
+                "status": row["status"],
+                "duration_seconds": duration,
+                "created_at": created.isoformat() if created else "",
+                "started_at": started.isoformat() if started else None,
+                "ended_at": ended.isoformat() if ended else None,
+                "candidate_name": row.get("candidate_name"),
+                "report_status": row.get("report_status"),
+                "expert_review_token": row.get("expert_review_token"),
+                "supervisor_review_token": row.get("supervisor_review_token"),
+                "max_sfia_level": max_level,
+                "overall_confidence": row.get("overall_confidence"),
+                "top_skill_codes": top_codes,
+            })
+
+        return summaries
+
     # ─── Metadata ────────────────────────────────────────────────────
 
     async def merge_session_metadata(
