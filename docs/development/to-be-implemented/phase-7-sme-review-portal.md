@@ -1,302 +1,215 @@
-# Phase 7: SME Review Portal (Next.js Frontend)
+# Phase 7: Expert & Supervisor Review (Next.js Frontend)
 
 ## Status
 To Be Implemented
 
 ## Date
-2026-04-18
+2026-05-01
 
 ## References
-- PRD-001: Voice-AI Skills Assessment Platform
-- Phase 1: Foundation & Monorepo Scaffold (Next.js shell)
-- Phase 6: Claim Extraction Pipeline (produces reports)
+- PRD-001: Voice-AI Skills Assessment Platform (candidate self-service intake; read-only admin monitoring)
+- PRD-002: Assessment Interview Workflow (post-call report shape)
+- ADR-001: Hexagonal Architecture (UI is presentation + API orchestration only)
+- ADR-004: Voice Engine Technology (FastAPI voice engine owns persistence in the current plan)
+- [Assessment Report Contract](../contracts/assessment-report-contract.md): canonical dual-review payloads and claim shapes
+- [Phase 6 revision: dual review tokens](phase-6-revision-dual-review-tokens.md): backend deltas on top of baseline Phase 6 (single-token pipeline)
+- **UI reference (visual + structure):** [`frontend/public/admin.html`](../../../frontend/public/admin.html) — the **assessment detail modal** only (`.modal-overlay` / `.modal` and inner sections). SME and supervisor pages render **that modal pattern full-viewport**; they **must not** expose the admin shell (sidebar, stats, charts, assessment table).
+- Phase 4 ([implemented](../implemented/v0.5/PHASE-4-implementation-assessment-workflow.md)): structured `transcript_json` (turns, timestamps, phases) for the transcript panel
+- Phase 5 ([implemented](../implemented/v0.5/PHASE-5-implementation-rag-knowledge-base.md)): SFIA skill definitions used when enriching claims (skill names/descriptors in breakdown rows)
+- Phase 6: Claim Extraction Pipeline — baseline delivers `claims_json`, transcript column, single `review_token` + `GET /review/{token}`; **dual-token APIs** require [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) (see §0)
+
+**Cross-document note:** PRD-001 §5.2 data flow reflects candidate self-service (no admin-triggered dial).
+
+---
 
 ## Objective
 
-Build the Next.js frontend with two primary interfaces: a read-only Admin Dashboard for monitoring assessment status and history, and an SME Review Portal where subject matter experts can review, approve, adjust, or reject AI-extracted claims. The portal is accessed via unique NanoID-based URLs.
+Build Next.js routes so **two independent reviewers** complete their work through **two unique NanoID URLs**, using the **same modal layout as `frontend/public/admin.html`** (header with candidate facts, score strip, AI summary, SFIA competency breakdown table, transcript section). **Only the controls allowed for that role are editable**; everything else is read-only.
 
-**Note:** Assessment calls are candidate-initiated via the self-service portal (`/`, Phase 2). The admin dashboard is monitoring-only — it does not trigger calls.
+| Reviewer | URL pattern (example) | May edit | Must collect on save |
+|----------|----------------------|----------|----------------------|
+| **SME (subject matter expert)** | `/review/expert/[token]` | Per claim/skill row: **endorse** the AI-suggested SFIA level **or adjust** to a different level (1–7). Optional short note per row if product requires it; default is level-only. | Full name, work email |
+| **Supervisor** | `/review/supervisor/[token]` | Per claim/skill row: **verify** or **reject** the **claims register** entry; **comment** on each row (required for both outcomes). | Full name, work email |
+
+**Final outcome:** The assessment **does not** move to the terminal **final outcome** state until **both** the SME save **and** the supervisor save have succeeded. Order does not matter unless product later defines dependencies.
+
+**Admin dashboard:** Unchanged in scope — authenticated operators use `/dashboard/*` with the full admin chrome. **Experts and supervisors never see that chrome** — only the modal-style review surface.
+
+---
+
+## 0. Prerequisites
+
+**Baseline Phase 6** ([phase-6-claim-extraction-pipeline.md](phase-6-claim-extraction-pipeline.md)) produces `claims_json`, transcript storage, and a single SME review token. The **expert + supervisor** modal URLs require the incremental backend spec [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) (dual NanoIDs, `GET`/`PUT` per role, session audit columns). Implement that revision before shipping Phase 7, or in parallel if both streams share one release.
+
+Payload shapes and enums are **normative** in [Assessment Report Contract](../contracts/assessment-report-contract.md).
+
+**Rule:** Expert token cannot write supervisor fields and vice versa (server-enforced).
 
 ---
 
 ## 1. Deliverables
 
-### 1.1 Application Layout & Navigation
+### 1.1 Application layout
 
-**Tech Stack:**
-- Next.js 14+ with App Router
-- Tailwind CSS for styling
-- Lucide-React for icons
-- Server Components by default, Client Components where interactivity is needed
+**Tech stack:** Next.js 14+ App Router, Tailwind (map CSS variables from `admin.html` modal tokens: `--paper`, `--ink`, `--accent`, `--line`, fonts Inter Tight / Instrument Serif / JetBrains Mono), Lucide icons optional.
 
-**Route Structure:**
+**Route structure:**
 
 ```
-apps/web/src/app/
-├── layout.tsx                          ← Root layout (Tailwind, fonts, metadata)
-├── page.tsx                            ← Candidate self-service portal (Phase 2: intake form + call status)
-├── (dashboard)/
-│   ├── layout.tsx                      ← Dashboard layout (sidebar, header)
-│   ├── page.tsx                        ← Dashboard home (recent assessments — read-only)
-│   ├── assessments/
-│   │   ├── page.tsx                    ← Assessment list (read-only)
-│   │   └── [id]/
-│   │       └── page.tsx               ← Assessment detail (status, transcript, recording)
-│   └── candidates/
-│       ├── page.tsx                    ← Candidate list
-│       └── [id]/
-│           └── page.tsx               ← Candidate profile + assessment history
-├── (review)/
-│   └── [token]/
-│       ├── layout.tsx                  ← Minimal review layout (no sidebar)
-│       └── page.tsx                    ← SME review interface
-└── api/
-    └── assessment/
-        └── status/
-            └── route.ts               ← GET: status proxy to voice engine
+packages/web/src/app/
+├── layout.tsx
+├── page.tsx                                    ← Candidate portal (Phase 2) — unchanged
+├── (dashboard)/                                ← Full admin UI — operators only
+│   └── ...                                     ← §1.4 admin (existing plan)
+├── (review-expert)/
+│   └── review/
+│       └── expert/
+│           └── [token]/
+│               ├── layout.tsx                  ← No sidebar: full-viewport modal host
+│               └── page.tsx
+├── (review-supervisor)/
+│   └── review/
+│       └── supervisor/
+│           └── [token]/
+│               ├── layout.tsx
+│               └── page.tsx
+└── api/                                        ← Proxies as needed
 ```
 
-**Note:** There is no `/assessments/new` route. Calls are triggered by candidates via the self-service portal (`/`). The admin dashboard has no trigger capability.
+**Layout rule:** Pages under `/review/expert/*` and `/review/supervisor/*` render **only** the modal container (equivalent to `#modalOverlay` + `#modal` content). **Do not** mount `.shell`, `.sidebar`, `.main` page chrome from `admin.html`.
 
-### 1.2 Admin Dashboard (Read-Only Monitoring)
+### 1.2 Modal UI parity (`frontend/public/admin.html`)
 
-The admin dashboard provides read-only visibility into all assessment sessions. It does **not** trigger calls — assessment initiation is candidate self-service via the portal at `/` (Phase 2).
+Port the **modal** sections to React components so behaviour matches the mock:
 
-**Routes:**
-- `/` (dashboard home) → Recent sessions overview
-- `/assessments` → Paginated session list with filters
-- `/assessments/[id]` → Session detail (transcript, recording, extracted claims)
-- `/candidates` → Candidate list (keyed by WORK EMAIL)
-- `/candidates/[id]` → Candidate profile + assessment history
+| Mock section | Maps to data (Phase 4–6) |
+|--------------|---------------------------|
+| `.modal-header` — avatar, name, facts | `candidate_name`, session date/time/duration, work email from candidate/session API |
+| Score strip (`.score-strip` / `.score-cell`) | Derived: max SFIA level from claims, avg confidence, skill count, duration, provisional outcome label |
+| `.summary-box` — AI-generated summary | Phase 6 narrative / exec summary field on report (if absent, hide kicker or show placeholder until API provides) |
+| `.skills-table` — `.skill-detail-row` | **One row per claim** in `claims_json`: skill name/code, descriptor (from Phase 5 definition or claim text), evidence quote + transcript time ref, level ladder, confidence bar |
+| `.transcript-section` | `transcript_json` from Phase 4 — speaker labels, timestamps, optional evidence tags |
 
-**Data source:** Admin dashboard calls `GET /api/v1/admin/sessions` with optional filters:
-- Status: `pending`, `dialling`, `in_progress`, `completed`, `failed`, `cancelled`
-- Email: search by candidate WORK EMAIL
-- Date range: `since` / `until`
+**Role-specific controls (bottom of modal body or footer — not in mock):**
 
-#### Assessment List
+- **Expert:** Per row: level control (endorse AI level vs select adjusted 1–7). Primary **Save** opens or precedes a step collecting **full name** + **email** (validate email format), then submits.
+- **Supervisor:** Per row: **Verify** or **Reject** + **comment** (required). **Save** collects **full name** + **email**, then submits.
 
-**Route:** `/assessments`
+All header actions in the static mock (**Export PDF**, **Approve**) are **hidden or read-only** on expert/supervisor routes unless a separate product decision adds them later.
 
-Displays a table of all assessments with:
-- Candidate work email
-- Phone number (masked: +XX*****XXX)
-- Status badge (pending, dialling, in_progress, completed, processed, failed, cancelled)
-- Started date/time
-- Actions (view detail, trigger processing)
-
-#### Assessment Detail
-
-**Route:** `/assessments/[id]`
-
-Shows:
-- Assessment status timeline
-- Full transcript (if available)
-- Call recording player (if available)
-- Extracted claims (if processed)
-- Link to SME review portal
-
-### 1.3 SME Review Portal
-
-**Route:** `/review/[token]`
-
-This is the critical deliverable — the interface SMEs use to review AI-extracted claims.
-
-#### Design Principles
-- **Minimal chrome**: No sidebar, no navigation. Focus entirely on the review task.
-- **One claim at a time**: Option to review claims sequentially or see the full list.
-- **Clear context**: Each claim shows the verbatim quote, AI interpretation, and SFIA mapping.
-- **Action-oriented**: Approve, adjust, or reject with minimal clicks.
-
-#### Review Page Layout
+### 1.3 Component split (suggested)
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  SFIA Skills Assessment Review                       │
-│  Candidate: Jane Smith | Date: 16 Apr 2026           │
-│  Assessment ID: abc-123-def                          │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│  Progress: ████████░░░░ 5 of 12 claims reviewed      │
-│                                                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Claim #6                                      │  │
-│  │                                                │  │
-│  │  VERBATIM QUOTE                                │  │
-│  │  "I managed a cross-functional team of 12      │  │
-│  │   developers and 3 QA engineers across the     │  │
-│  │   Sydney and Melbourne offices for the          │  │
-│  │   platform migration project"                  │  │
-│  │                                                │  │
-│  │  AI INTERPRETATION                             │  │
-│  │  Managed a team of 15 across two locations     │  │
-│  │  for a platform migration project              │  │
-│  │                                                │  │
-│  │  AI MAPPING                                    │  │
-│  │  Skill: ITMG (IT Management) ──── Level: 5     │  │
-│  │  Confidence: ████████░░ 82%                    │  │
-│  │                                                │  │
-│  │  AI REASONING                                  │  │
-│  │  "Cross-functional team leadership across      │  │
-│  │   multiple locations indicates Level 5          │  │
-│  │   influence and autonomy..."                   │  │
-│  │                                                │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐      │  │
-│  │  │ ✓ Approve│ │ ✎ Adjust │ │ ✗ Reject │      │  │
-│  │  └──────────┘ └──────────┘ └──────────┘      │  │
-│  │                                                │  │
-│  │  [If Adjust selected:]                         │  │
-│  │  Adjusted Level: [dropdown 1-7]                │  │
-│  │  Notes: [textarea]                             │  │
-│  └────────────────────────────────────────────────┘  │
-│                                                      │
-│  ◀ Previous Claim    Claim 6 of 12    Next Claim ▶  │
-│                                                      │
-├──────────────────────────────────────────────────────┤
-│  Skill Summary (live-updating)                       │
-│  ┌────────────┬───────┬────────────┬───────────┐    │
-│  │ Skill      │ Level │ Claims     │ Status    │    │
-│  ├────────────┼───────┼────────────┼───────────┤    │
-│  │ ITMG       │ 5     │ 3 claims   │ 2/3 done  │    │
-│  │ PROG       │ 4     │ 4 claims   │ 1/4 done  │    │
-│  │ TEST       │ 3     │ 2 claims   │ 0/2 done  │    │
-│  │ ARCH       │ 5     │ 3 claims   │ 2/3 done  │    │
-│  └────────────┴───────┴────────────┴───────────┘    │
-│                                                      │
-│  [Submit Final Assessment] (enabled when all done)   │
-└──────────────────────────────────────────────────────┘
-```
-
-#### Key Components
-
-```
-apps/web/src/components/
-├── review/
-│   ├── ReviewPage.tsx              ← Main review page (server component)
-│   ├── ClaimReviewCard.tsx         ← Individual claim review widget
-│   ├── ClaimNavigator.tsx          ← Previous/Next navigation
-│   ├── SkillSummaryTable.tsx       ← Aggregated skill overview
-│   ├── ConfidenceBadge.tsx         ← Visual confidence indicator
-│   ├── LevelAdjuster.tsx           ← Level dropdown for adjustments
-│   └── SubmitReviewButton.tsx      ← Final submission
-├── dashboard/
-│   ├── AssessmentTable.tsx         ← Assessment list table
-│   ├── StatusBadge.tsx             ← Status pill component
-│   ├── TriggerAssessmentForm.tsx   ← New assessment form
-│   └── TranscriptViewer.tsx        ← Transcript display
+packages/web/src/components/
+├── review-modal/
+│   ├── ReviewModalShell.tsx           ← Overlay + card — matches .modal-overlay / .modal
+│   ├── ModalHeader.tsx                ← Read-only facts
+│   ├── ScoreStrip.tsx
+│   ├── AiSummaryPanel.tsx
+│   ├── ClaimsRegisterTable.tsx        ← Skill rows; receives slot for role-specific right column
+│   ├── TranscriptPanel.tsx
+│   ├── ExpertClaimControls.tsx        ← Level endorse/adjust only
+│   ├── SupervisorClaimControls.tsx    ← Verify/reject + comment
+│   └── ReviewerIdentityForm.tsx       ← Name + email — modal step before PUT
+├── dashboard/                         ← Unchanged from operator dashboard plan
 └── ui/
-    ├── Button.tsx
-    ├── Card.tsx
-    ├── Input.tsx
-    ├── Badge.tsx
-    ├── Table.tsx
-    ├── Progress.tsx
-    └── Dialog.tsx
 ```
 
-### 1.4 API Integration
+Reuse Tailwind tokens derived from `admin.html` `:root` variables for visual parity.
 
-#### Review API Calls (Client-Side)
+### 1.4 Admin dashboard (operators)
 
-```typescript
-// lib/api-client.ts
+Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy **both** review URLs when tokens exist. No expert/supervisor chrome here.
 
-const VOICE_ENGINE_URL = process.env.NEXT_PUBLIC_VOICE_ENGINE_URL || "http://localhost:8000";
+### 1.5 Security
 
-export async function getReviewByToken(token: string) {
-  const res = await fetch(`${VOICE_ENGINE_URL}/api/v1/review/${token}`);
-  if (!res.ok) throw new Error("Review not found");
-  return res.json();
-}
-
-export async function submitClaimReview(
-  token: string,
-  claimId: string,
-  review: {
-    status: "approved" | "adjusted" | "rejected";
-    adjustedLevel?: number;
-    notes?: string;
-  }
-) {
-  const res = await fetch(`${VOICE_ENGINE_URL}/api/v1/review/${token}/claims/${claimId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(review),
-  });
-  if (!res.ok) throw new Error("Failed to submit review");
-  return res.json();
-}
-
-export async function submitFinalReview(token: string) {
-  const res = await fetch(`${VOICE_ENGINE_URL}/api/v1/review/${token}/submit`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error("Failed to submit final review");
-  return res.json();
-}
-```
-
-### 1.5 Security Considerations
-
-- **No authentication on review links**: Access is via the NanoID token (knowledge-based security). This is intentional for simplicity — SMEs should not need an account.
-- **Token expiry**: Review links expire after 30 days (configurable). Expired tokens return 404.
-- **Rate limiting**: Review endpoints are rate-limited to prevent brute-force token guessing. NanoID with 21 characters from a 62-char alphabet provides ~130 bits of entropy.
-- **No PII in URL**: The token is opaque; no candidate info is in the URL.
-- **HTTPS only**: Review portal is served over TLS.
+- **Knowledge-based URLs:** Two independent NanoIDs; supervisor cannot guess expert URL without the link.
+- **Capability isolation:** Server rejects cross-role field writes.
+- **HTTPS**, rate limiting, no candidate PII in paths.
+- **Reviewer PII:** Name and email stored on submission for audit trail (GDPR/retention policy out of scope for this doc).
 
 ---
 
-## 2. UI/UX Requirements
+## 2. UI/UX requirements
 
-### Design System
-- **Colour palette**: Indigo primary, gray neutrals, green/amber/red for status.
-- **Typography**: Inter or system font stack.
-- **Spacing**: 4px base unit (Tailwind default).
-- **Border radius**: Rounded-md (6px) for cards and inputs.
-- **Shadows**: Subtle shadows for card elevation.
-
-### Responsive Design
-- Dashboard: Desktop-first (table-heavy).
-- Review portal: Must work on tablet (SMEs may review on iPad).
-- Minimum supported width: 768px.
-
-### Accessibility
-- All interactive elements are keyboard-navigable.
-- Colour is not the sole indicator of status (icons + labels + colour).
-- Sufficient colour contrast (WCAG AA).
-- Form inputs have associated labels.
+- **Visual fidelity:** Match modal typography, spacing, card radius, and ladder/confidence patterns from `frontend/public/admin.html`.
+- **Responsive:** Modal scrolls inside viewport; usable from **768px** width (tablet).
+- **Accessibility:** WCAG AA; ladder + decisions not colour-only; labelled controls for expert/supervisor edits.
+- **States:** Loading; 404/expired token; network error with retry; **already submitted** (read-only view of saved decisions + reviewer identity timestamp if API returns it).
 
 ---
 
-## 3. Acceptance Criteria
+## 3. Build order (within Phase 7)
 
-- [ ] Dashboard: `/assessments` shows a paginated list of assessments (read-only, no trigger form).
-- [ ] Dashboard: `/assessments` supports filtering by status, candidate email, and date range.
-- [ ] Dashboard: `/assessments/[id]` shows assessment detail with transcript and recording.
-- [ ] Review: `/review/[token]` loads the correct report for a valid token.
-- [ ] Review: `/review/[token]` shows 404 for invalid/expired tokens.
-- [ ] Review: Claims are displayed with verbatim quote, interpretation, and AI mapping.
-- [ ] Review: SME can approve a claim with one click.
-- [ ] Review: SME can adjust a claim's level and provide notes.
-- [ ] Review: SME can reject a claim with optional notes.
-- [ ] Review: Progress indicator updates as claims are reviewed.
-- [ ] Review: Skill summary table updates in real time as claims are reviewed.
-- [ ] Review: "Submit Final Assessment" is only enabled when all claims are reviewed.
-- [ ] Review: Final submission updates the report status and timestamps.
-- [ ] Responsive: Review portal is usable on 768px+ screens.
-- [ ] Accessibility: All form elements have labels; keyboard navigation works.
+1. Extract shared modal styles/tokens from `frontend/public/admin.html` into the Next app (Tailwind theme or CSS module).
+2. Implement read-only `ClaimsRegisterTable` + `TranscriptPanel` from API fixture matching Phase 6 shape.
+3. Expert route: level controls + identity capture + `PUT` expert.
+4. Supervisor route: verify/reject + comments + identity + `PUT` supervisor.
+5. Wire dashboard to display dual links and session `report_status` including “awaiting expert”, “awaiting supervisor”, “reviews complete”.
+6. Accessibility and error-state pass.
 
-## 4. Dependencies
+---
 
-- **Phase 1**: Next.js shell, shared types.
-- **Phase 4**: Report generation (produces the data displayed in the review portal).
-- **External**: Voice engine API must be running for API calls.
+## 4. Definition of Done
 
-## 5. Risks
+- Expert and supervisor pages show **only** the modal surface (no admin shell).
+- Both flows persist reviewer name/email and role-specific decisions server-side.
+- Final outcome progression occurs **only** after both saves succeed (verified via API + UI).
+- Types align with updated contract / OpenAPI once Phase 6 extensions land.
+
+---
+
+## 5. Acceptance criteria
+
+- [ ] `/review/expert/[token]` renders the assessment modal layout consistent with `frontend/public/admin.html` (modal only — **no** sidebar, stats, charts, or main table).
+- [ ] `/review/supervisor/[token]` meets the same visual/structural requirement.
+- [ ] Expert page: all modal content except expert level controls is **read-only**; expert can **endorse** (accept AI level) or **adjust** SFIA level **1–7** per claim row.
+- [ ] Expert **Save** requires **full name** and **valid email** before `PUT` succeeds.
+- [ ] Supervisor page: all modal content except supervisor verify/reject + comment is **read-only**.
+- [ ] Supervisor **Save** requires **full name** and **valid email**; **every** row has a **non-empty comment** (required for both verify and reject).
+- [ ] Invalid/expired tokens show generic **not found** (no existence leak).
+- [ ] After expert has saved, supervisor view shows expert-adjusted levels as **read-only**.
+- [ ] `report_status` (or equivalent) advances to **final-outcome-eligible** only when **both** expert and supervisor submissions exist.
+- [ ] Second submit with same role returns handled **already completed** state (`409` or equivalent UX).
+- [ ] Dashboard lists/links **both** URLs for operators when tokens exist.
+- [ ] Keyboard navigation and labels meet WCAG AA on editable controls.
+
+---
+
+## 6. Technical constraints
+
+- **ADR-001:** No review business rules only in the browser — validation duplicated server-side.
+- **ADR-004:** Persistence via voice engine (or documented BFF) through existing ports.
+- **Phase 6 `Claim` model + JSONB:** Defined in Phase 6 §1.1 and persisted in `claims_json`; MINOR version bump when extending schema (Phase 6 prerequisites).
+
+---
+
+## 7. Dependencies
+
+| Dependency | Role |
+|------------|------|
+| Phase 4 | `transcript_json` shape for transcript panel |
+| Phase 5 | Skill names/descriptions for breakdown rows |
+| Phase 6 | `claims_json`, pipeline-generated summary, dual tokens + extended persistence |
+| `frontend/public/admin.html` | Canonical modal layout reference |
+
+---
+
+## 8. Risks
 
 | Risk | Mitigation |
 |------|------------|
-| SME experience confusing | User testing with real SFIA practitioners; iterate on layout |
-| Review link sharing (unintended access) | NanoID entropy is sufficient; add optional PIN in v2 |
-| Large number of claims per assessment | Pagination + sequential review mode |
-| Network errors during review submission | Optimistic UI with retry; save review state locally |
+| Schema drift vs Phase 6 | Lock API schema before UI integration; contract tests |
+| Supervisor rejects without SME context | Show expert-adjusted levels read-only on supervisor page |
+| Legal / privacy for reviewer emails | Align retention with HR policy |
+| PDF export expectation from mock | Explicitly out of scope on token URLs unless added later |
+
+---
+
+## Revision History
+
+| Date | Change |
+|------|--------|
+| 2026-05-01 | Refine pass: `/dashboard` vs `/`, Phase 6 API notes |
+| 2026-05-01 | Dual-role review: expert vs supervisor URLs, modal-only UI from `frontend/public/admin.html`, final outcome when both complete, Phase 4–6 alignment |
+| 2026-05-01 | §0: baseline Phase 6 vs [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) for dual-token APIs |
