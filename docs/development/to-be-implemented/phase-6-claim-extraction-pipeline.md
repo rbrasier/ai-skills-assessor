@@ -197,6 +197,7 @@ model AssessmentSession {
   // ... existing fields (id, candidateId, status, recordingUrl, etc.) ...
 
   // Phase 6 additions
+  candidateName       String?   @db.VarChar(255) @map("candidate_name")
   transcriptJson      Json?     @map("transcript_json")
   claimsJson          Json?     @map("claims_json")
   reviewToken         String?   @unique @db.VarChar(21) @map("review_token")
@@ -212,6 +213,7 @@ model AssessmentSession {
 
 | Column | Type | Purpose |
 |--------|------|---------|
+| `candidate_name` | VARCHAR(255) | Denormalised from `Candidate.first_name + last_name` at session creation — avoids a JOIN in the post-call pipeline |
 | `transcript_json` | JSONB | Full call transcript (promoted from `metadata->'transcript_json'`) |
 | `claims_json` | JSONB | Array of serialised `Claim` objects, each with a UUID `id` for Phase 7 updates |
 | `review_token` | VARCHAR(21) UNIQUE | NanoID for secure SME access |
@@ -220,6 +222,8 @@ model AssessmentSession {
 | `report_generated_at` | TIMESTAMPTZ | When post-call pipeline completed |
 | `sme_reviewed_at` | TIMESTAMPTZ | When SME submitted final review |
 | `expires_at` | TIMESTAMPTZ | When review link expires (default: 30 days after generation) |
+
+**`candidate_name` population**: Wherever `AssessmentSession` is created (triggered from the intake form flow), populate `candidate_name` as `f"{candidate.first_name} {candidate.last_name}"`. This is a one-line addition to the existing session creation path — no new port method required.
 
 **Post-migration SQL** (run once after `prisma migrate dev`):
 
@@ -685,7 +689,53 @@ In Phase 6, wire `notification_sender=None` at startup. Phase 7 injects the real
 
 ---
 
-### 1.9 FastAPI Endpoints
+### 1.9 Automatic Pipeline Trigger — `handle_end_call()`
+
+The post-call pipeline fires automatically when a call ends, immediately after the transcript is finalised. The trigger point is the existing `handle_end_call()` handler in `SFIAFlowController` (Phase 4).
+
+**Why a background task**: Claim extraction takes 1–5 minutes (multiple LLM calls per claim). The call teardown must not block on this. Use `asyncio.create_task()` to fire and forget, with error handling that logs failures and leaves the session in a recoverable state.
+
+**Updated `handle_end_call()` in `SFIAFlowController`:**
+
+```python
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def handle_end_call(self, args: dict, flow_manager) -> tuple[None, None]:
+    """Call is complete — finalise transcript then kick off post-call pipeline."""
+    # Step 1: persist transcript (fast — DB write only)
+    await self._recorder.finalize()
+
+    # Step 2: fire post-call pipeline as background task (slow — multiple LLM calls)
+    asyncio.create_task(
+        self._run_pipeline_safe(self._session_id),
+        name=f"post-call-pipeline-{self._session_id}",
+    )
+
+    await self._on_call_ended()
+    return None, None
+
+async def _run_pipeline_safe(self, session_id: str) -> None:
+    """Run PostCallPipeline, logging errors without crashing the call teardown."""
+    try:
+        await self._post_call_pipeline.process(session_id)
+    except Exception:
+        logger.exception(
+            "PostCallPipeline failed for session %s — "
+            "manual re-trigger via POST /api/v1/assessment/%s/process",
+            session_id, session_id,
+        )
+```
+
+**`SFIAFlowController` constructor addition**: inject `post_call_pipeline: PostCallPipeline` and `session_id: str` alongside the existing `recorder`, `on_call_ended`, `system_prompt`, and `knowledge_base` arguments. Wire at startup in `SFIACallBot._build()`.
+
+**Manual re-trigger**: The `POST /api/v1/assessment/{session_id}/process` endpoint (section 1.10) remains available as a recovery path if the background task fails.
+
+---
+
+### 1.10 FastAPI Endpoints
 
 **File:** `apps/voice-engine/src/api/routes.py` (additions)
 
@@ -772,7 +822,8 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 - [ ] `persistence.get_transcript(session_id)` returns the stored dict.
 
 ### Schema & ports
-- [ ] All eight new/updated `assessment_sessions` columns exist: `transcript_json`, `claims_json`, `review_token`, `report_status`, `overall_confidence`, `report_generated_at`, `sme_reviewed_at`, `expires_at`.
+- [ ] All nine new `assessment_sessions` columns exist: `candidate_name`, `transcript_json`, `claims_json`, `review_token`, `report_status`, `overall_confidence`, `report_generated_at`, `sme_reviewed_at`, `expires_at`.
+- [ ] `candidate_name` is populated at session creation time as `"{first_name} {last_name}"` from the `Candidate` record.
 - [ ] `review_token` column has a UNIQUE index.
 - [ ] `IPersistence` extended with `save_transcript`, `get_transcript`, `save_report`, `get_report`, `get_report_by_token`.
 - [ ] Both `InMemoryPersistence` and `PostgresPersistence` implement all five new methods.
@@ -797,8 +848,13 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 - [ ] `PostCallPipeline.process()` updates session status to `"processed"` after report generation.
 - [ ] `PostCallPipeline.process()` runs end-to-end with a real sample transcript.
 
+### Automatic trigger
+- [ ] `handle_end_call()` calls `transcript_recorder.finalize()` then fires `PostCallPipeline.process()` as an `asyncio.create_task()` background task.
+- [ ] If the background task raises an exception, it is logged with the session ID and manual re-trigger path; the exception does not propagate to the call teardown.
+- [ ] `SFIAFlowController` accepts `post_call_pipeline: PostCallPipeline` and `session_id: str` as constructor arguments.
+
 ### API
-- [ ] `POST /api/v1/assessment/{session_id}/process` triggers pipeline and returns `review_url`, `total_claims`, `overall_confidence`, `status`.
+- [ ] `POST /api/v1/assessment/{session_id}/process` triggers pipeline and returns `review_url`, `total_claims`, `overall_confidence`, `status` (manual re-trigger / recovery path).
 - [ ] `GET /api/v1/assessment/{session_id}/report` returns 200 with report data or 404.
 - [ ] `GET /api/v1/review/{review_token}` returns 200 for a valid token or 404 for invalid/missing.
 
@@ -841,17 +897,19 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 ## 6. Implementation Sequence
 
 1. **Version bump** — Run `/bump-version` → MINOR → `v0.6.0`. Create Prisma migration `v0_6_0_add_transcript_and_report_columns`. Run post-migration SQL.
-2. **Domain models** — Implement `claim.py` (Pydantic models) and `notification_sender.py` (stub port).
-3. **ILLMProvider port** — Define `llm_provider.py`.
-4. **IPersistence extensions** — Add five new methods to port; implement in `InMemoryPersistence` first, then `PostgresPersistence`.
-5. **TranscriptRecorder update** — Change `finalize()` to call `persistence.save_transcript()` instead of `persistence.merge_session_metadata()`.
-6. **ClaimExtractor** — Implement service with `_format_transcript()` and pipeline logic.
-7. **AnthropicLLMProvider** — Implement adapter; wire `model=settings.anthropic_post_call_model` at startup.
-8. **ReportGenerator** — Implement service; verify NanoID length and expiry.
-9. **PostCallPipeline** — Wire all services together; test with `InMemoryPersistence`.
-10. **FastAPI endpoints** — Add three endpoints to `routes.py`.
-11. **Tests** — Unit tests for each service; integration test for full pipeline.
-12. **CHANGELOG** — Document Phase 6 additions.
+2. **Session creation update** — Add `candidate_name` population (one line) to the existing session creation path.
+3. **Domain models** — Implement `claim.py` (Pydantic models) and `notification_sender.py` (stub port).
+4. **ILLMProvider port** — Define `llm_provider.py`.
+5. **IPersistence extensions** — Add five new methods to port; implement in `InMemoryPersistence` first, then `PostgresPersistence`.
+6. **TranscriptRecorder update** — Change `finalize()` to call `persistence.save_transcript()` instead of `persistence.merge_session_metadata()`.
+7. **ClaimExtractor** — Implement service with `_format_transcript()` and pipeline logic.
+8. **AnthropicLLMProvider** — Implement adapter; wire `model=settings.anthropic_post_call_model` at startup.
+9. **ReportGenerator** — Implement service; verify NanoID length and expiry.
+10. **PostCallPipeline** — Wire all services together; test with `InMemoryPersistence`.
+11. **Automatic trigger** — Inject `PostCallPipeline` and `session_id` into `SFIAFlowController`; update `handle_end_call()` to fire background task.
+12. **FastAPI endpoints** — Add three endpoints to `routes.py`.
+13. **Tests** — Unit tests for each service; integration test for full pipeline including automatic trigger.
+14. **CHANGELOG** — Document Phase 6 additions.
 
 ---
 
@@ -867,6 +925,7 @@ Phase 6 is complete when:
   - [ ] `review_token` written (21 chars, URL-safe), `expires_at` = 30 days from now.
   - [ ] Session status updated to `"processed"`.
 - [ ] `GET /api/v1/review/{review_token}` returns full report data for the generated token.
+- [ ] `handle_end_call()` automatically fires the pipeline; verified in integration test (pipeline completes and `report_status = "generated"` on session row).
 - [ ] All unit and integration tests pass.
 - [ ] Version bumped to `v0.6.0`; Prisma migration applied.
 - [ ] CHANGELOG.md updated with Phase 6 summary.
@@ -878,5 +937,6 @@ Phase 6 is complete when:
 
 | Date | Author | Change |
 |------|--------|--------|
+| 2026-05-01 | Doc Refiner | Clarifications pass. Added: candidate_name denormalised onto assessment_sessions at session creation (avoids JOIN in pipeline); automatic pipeline trigger via asyncio.create_task() in handle_end_call() immediately after transcript finalisation; _run_pipeline_safe() error handler logs failures with manual re-trigger path; SFIAFlowController constructor updated to accept post_call_pipeline and session_id; manual POST /process endpoint retained as recovery path. |
 | 2026-05-01 | Doc Refiner | Full rewrite via /doc-refiner. Fixed: broken section numbering (duplicate 1.4/1.5/1.6); conflicting dual Claim model definitions (dataclass vs Pydantic); wrong SkillDefinition import (domain.models.skill → domain.ports.knowledge_base per Phase 5); hardcoded model ID replaced with settings.anthropic_post_call_model; IPersistence method name inconsistencies (save_report/get_report/get_report_by_token unified throughout); wrong dependency reference (Phase 3 → Phase 5 for RAG KB); missing version bump prerequisite. Added: AssessmentTranscript storage (promoted from Phase 4 metadata JSONB to assessment_sessions.transcript_json column, per Phase 5 section 0.7 deferral); claims_json and report metadata as JSONB columns on assessment_sessions (not separate tables); evidence_segments (JSON array of start_time/end_time pairs) on all claims; framework_type on all claims; sfia_skill_name on all claims; INotificationSender stub port; long transcript chunking strategy; Phase 7 JSONB concurrency note. |
 | 2026-04-18 | AI Skills Assessor Team | Initial draft |
