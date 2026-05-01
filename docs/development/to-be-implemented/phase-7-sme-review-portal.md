@@ -95,15 +95,15 @@ Port the **modal** sections to React components so behaviour matches the mock:
 | Mock section | Maps to data (Phase 4–6) |
 |--------------|---------------------------|
 | `.modal-header` — avatar, name, facts | `candidate_name`, session date/time/duration, work email from candidate/session API |
-| Score strip (`.score-strip` / `.score-cell`) | Derived: max SFIA level from claims, avg confidence, skill count, duration, provisional outcome label |
-| `.summary-box` — AI-generated summary | Phase 6 narrative / exec summary field on report (if absent, hide kicker or show placeholder until API provides) |
-| `.skills-table` — `.skill-detail-row` | **One row per claim** in `claims_json`: skill name/code, descriptor (from Phase 5 definition or claim text), evidence quote + transcript time ref, level ladder, confidence bar |
+| Score strip (`.score-strip` / `.score-cell`) | Derived: **original** max SFIA level from AI extraction, **current** max level after all reviews (supervisor rejections reduce this), avg confidence, skill count, duration, provisional outcome label. Shows both for transparency. |
+| `.summary-box` — AI-generated summary | Phase 6 narrative / exec summary field on report. If absent, show greyed-out placeholder box: "Summary will appear here once AI processing completes" |
+| `.skills-table` — `.skill-detail-row` | **One row per claim** in `claims_json`: skill name/code, descriptor (from Phase 5 definition or claim text), evidence quote + transcript time ref (mm:ss format), level ladder, confidence bar |
 | `.transcript-section` | `transcript_json` from Phase 4 — speaker labels, timestamps, optional evidence tags |
 
-**Role-specific controls (bottom of modal body or footer — not in mock):**
+**Role-specific controls (sticky footer):**
 
-- **Expert:** Per row: level control (endorse AI level vs select adjusted 1–7). Primary **Save** opens or precedes a step collecting **full name** + **email** (validate email format), then submits.
-- **Supervisor:** Per row: **Verify** or **Reject** + **comment** (required). **Save** collects **full name** + **email**, then submits.
+- **Expert:** Per row: level control (endorse AI level vs select adjusted 1–7). Primary **Save** button (sticky footer) opens or precedes a step collecting **full name** + **email** (validate email format), then submits. Button disabled after first successful submission.
+- **Supervisor:** Per row: **Verify** or **Reject** + **optional comment**. **Save** button (sticky footer) collects **full name** + **email**, then submits. Comments are optional for both verify and reject decisions. Button disabled after first successful submission.
 
 All header actions in the static mock (**Export PDF**, **Approve**) are **hidden or disabled** on expert/supervisor routes unless product adds operator-only workflow later. On **dashboard** modal open, **Approve** / **Export PDF** remain **non-functional placeholders** until a later phase defines APIs — or hide them for parity without implying behaviour.
 
@@ -117,16 +117,31 @@ Port the **non-modal** chrome so `/dashboard` matches the mock:
 | `.sidebar` | Brand, nav groups (Analytics: Dashboard, Candidates; Configuration: Skills library, Settings — labels may stay placeholder until those routes exist), user chip (from auth/session or config) |
 | `.main` `.topbar` | Title (“Assessment Overview”), **Candidate portal** primary button → `/` |
 | `.page` `.page-head` | Title + subtitle (derive counts from API: completed calls, awaiting review, last call) |
-| `#statsRow` `.stats` | Stat cards — wire real aggregates where API exists; **Awaiting review** card shows report-count metrics when available |
-| `.charts` | Bar chart (calls per day) + donut (call outcomes) — use **real session/report data** when endpoint supports it; otherwise stub with empty state **only if** documented |
+| `#statsRow` `.stats` | Stat cards — wire real aggregates from Phase 7 endpoints; **Awaiting review** card shows report-count metrics |
+| `.charts` | Bar chart (calls per day) + donut (call outcomes) — powered by Phase 7 chart/stats endpoints |
 | `.table-card` | Toolbar (filters: All / Complete / Awaiting review / Incomplete), search (name, email, skill), header row, body rows matching `.trow` grid columns |
-| Row click | Opens shared **`AssessmentReviewModal`** (same component as token flows) in **`variant="operator-read-only"`** — hide expert/supervisor edit footers; show `report_status` + **copy** actions for expert/supervisor URLs when tokens exist |
+| Row click | Opens shared **`AssessmentReviewModal`** (same component as token flows) in **`variant=”operator-read-only”`** — hide expert/supervisor edit footers; show `report_status` + **copy** actions for expert/supervisor URLs when tokens exist |
 
-**Data:** Prefer `GET /api/v1/admin/sessions` (or equivalent from Phase 1/6) with filters aligned to mock tabs. Pagination: match PRD/Phase 6 admin API when specified; otherwise client-side slice with a TODO for server pagination.
+**Data & APIs:** Phase 7 creates `GET /api/v1/admin/sessions` (or equivalent) with filters (All / Complete / Awaiting review / Incomplete), search (name, email, skill), and returns session + report metadata. Phase 7 also creates endpoints for chart aggregates (calls per day, outcome buckets, stats). Pagination: server-side with limit/offset parameters.
 
 ### 1.4 Shared modal component
 
 Use one **`AssessmentReviewModal`** (contents per §1.2) with props: `variant: "expert" | "supervisor" | "operator-read-only"`.
+
+**Variant contract (TypeScript interface in component file):**
+```typescript
+interface AssessmentReviewModalProps {
+  variant: "expert" | "supervisor" | "operator-read-only";
+  reportId: string;
+  // Underlying data shapes (expert/supervisor payloads) must conform to 
+  // Assessment Report Contract §6 (ExpertReviewSubmitPayload, SupervisorReviewSubmitPayload)
+}
+```
+
+Each variant renders the same read-only core (header, score strip, summary, claims table, transcript) but disables/enables controls:
+- **expert**: SFIA level control per row; Save button enabled
+- **supervisor**: Verify/Reject + comment per row; Save button enabled
+- **operator-read-only**: No controls; all rows read-only; Save button hidden
 
 ### 1.5 Component split (suggested)
 
@@ -168,83 +183,150 @@ Reuse Tailwind tokens derived from `admin.html` `:root` across **shell + modal**
 ## 2. UI/UX requirements
 
 - **Visual fidelity:** Match `admin.html` — **dashboard**: sidebar, stats, charts, table chrome; **modal**: typography, spacing, card radius, ladder/confidence patterns (shared tokens).
-- **Responsive:** Token review modals usable from **768px**+ (tablet). **Dashboard:** **desktop-first** (≥1280px target, matching mock viewport); narrow screens may horizontal-scroll or collapse sidebars only if explicitly designed — default is operator desktop use.
-- **Accessibility:** WCAG AA on dashboard table, filters, modals, and token flows.
-- **States:** Loading; empty table; 404/expired token; network error with retry; **already submitted** on token routes (read-only view when API returns completed state).
+- **Responsive:** Full responsive design from **≥375px (mobile)** through desktop. 
+  - Token review modals (expert/supervisor): Responsive layout on tablet (≥768px) and mobile.
+  - Dashboard: Full responsive with collapsible sidebar on tablet/mobile (≥768px), hamburger menu on mobile.
+- **Accessibility:** WCAG AA compliance is a **Phase 8+** item (not included in Phase 7 scope). Phase 7 ships without formal accessibility audit; Phase 8 will address dashboard, filters, modals, and token flows.
+- **States:** Loading; empty table; 404/expired token; network error with retry; **already submitted** on token routes (read-only view, Save button disabled).
 
 ---
 
 ## 3. Build order (within Phase 7)
 
+**Blocking prerequisites (must complete in sequence):**
+
 1. Extract shared design tokens from `frontend/public/admin.html` into the Next app (Tailwind theme or CSS module).
-2. **Admin shell:** Layout, sidebar, topbar, stats row, charts, assessments table — wired to admin sessions API (or fixture → API).
-3. **Shared `AssessmentReviewModal`:** Read-only core (header, score strip, summary, claims table, transcript); open from table row with `variant="operator-read-only"`.
-4. Expert token route: mount modal only + `variant="expert"` + `PUT` expert flow.
-5. Supervisor token route: `variant="supervisor"` + `PUT` supervisor flow.
-6. Dashboard modal: copy-link UI for both URLs; reflect `report_status` in table badges/chips.
-7. Accessibility pass (dashboard + modals + token pages).
+2. Define admin sessions API contract and endpoints (`GET /api/v1/admin/sessions`, filters, chart aggregates endpoints).
+3. **Shared `AssessmentReviewModal`:** Read-only core (header, score strip, summary, claims table, transcript); variant interface locked (§1.4).
+4. **Admin shell layout:** Sidebar, topbar, stats row, charts, assessments table — wired to admin sessions API + chart endpoints.
+
+**Can parallelize (steps 4–6 once above is complete):**
+
+5. Expert token route: mount modal only + `variant="expert"` + `PUT` expert flow.
+6. Supervisor token route: `variant="supervisor"` + `PUT` supervisor flow + sticky footer with comment field.
+7. Dashboard row click: opens shared modal in `variant="operator-read-only"`; show copy-link UI for expert/supervisor URLs.
+8. Operator login: Simple auth with env-var token (hardcoded login form, token from `ADMIN_TOKEN` env var).
+9. Error states (404/expired token, already submitted, network errors) on all routes.
+
+**Note:** Accessibility audit (WCAG AA) is Phase 8+; not included in Phase 7 scope.
 
 ---
 
 ## 4. Definition of Done
 
-- **`/dashboard`:** Visual and structural parity with **`frontend/public/admin.html`** shell (sidebar, stats, charts, assessments table, topbar link to `/`). Data from real admin API where available.
-- Expert and supervisor token pages show **only** the modal surface (no admin shell).
-- **`AssessmentReviewModal`** reused for operators (read-only) and both token roles.
+- **`/dashboard`:** Visual and structural parity with **`frontend/public/admin.html`** shell (sidebar, stats, charts, assessments table, topbar link to `/`). Data from Phase 7 admin sessions API + chart endpoints.
+- **Operator authentication:** Simple login with env-var token (`ADMIN_TOKEN`); session persists until logout.
+- Expert and supervisor token pages show **only** the modal surface (no admin shell, sidebar, stats, or main table).
+- **`AssessmentReviewModal`** reused for operators (read-only) and both token roles; variant contract enforces capability isolation.
 - Both expert/supervisor flows persist reviewer name/email and role-specific decisions server-side.
-- Final outcome progression occurs **only** after both saves succeed (verified via API + UI).
-- Types align with updated contract / OpenAPI once Phase 6 revision lands.
+- Save button disabled immediately after first successful submission; second attempt shows "already submitted" message with no database change.
+- Final outcome progression (`report_status`) occurs **only** after both expert and supervisor saves succeed.
+- All validation rules (email format, SFIA level 1–7, comment length, name non-empty) enforced on both client and server.
+- Types and payloads align with Assessment Report Contract §6 (ExpertReviewSubmitPayload, SupervisorReviewSubmitPayload).
 
 ---
 
 ## 5. Acceptance criteria
 
-- [ ] **`GET /dashboard`** (or agreed path under `/dashboard`) renders the **full** admin shell matching `admin.html`: `.shell` grid, sidebar brand + nav groups, topbar with **Candidate portal** → `/`, page title/subtitle, stats row, charts row, assessments table with toolbar filters + search.
-- [ ] Table rows match mock column intent (candidate, email, date, duration, top skills, max level, confidence); data from **`GET /api/v1/admin/sessions`** (or equivalent).
-- [ ] Row click opens **`AssessmentReviewModal`** in operator read-only mode with the same inner content as token flows (header, scores, summary, claims breakdown, transcript).
-- [ ] Operator modal shows **copy** actions (or equivalent) for **expert** and **supervisor** review URLs when tokens exist; shows review progress / `report_status` when API provides it.
-- [ ] `/review/expert/[token]` renders the assessment modal layout consistent with `frontend/public/admin.html` (modal only — **no** sidebar, stats, charts, or main table).
-- [ ] `/review/supervisor/[token]` meets the same visual/structural requirement.
-- [ ] Expert page: all modal content except expert level controls is **read-only**; expert can **endorse** (accept AI level) or **adjust** SFIA level **1–7** per claim row.
-- [ ] Expert **Save** requires **full name** and **valid email** before `PUT` succeeds.
-- [ ] Supervisor page: all modal content except supervisor verify/reject + comment is **read-only**.
-- [ ] Supervisor **Save** requires **full name** and **valid email**; **every** row has a **non-empty comment** (required for both verify and reject).
-- [ ] Invalid/expired tokens show generic **not found** (no existence leak).
-- [ ] After expert has saved, supervisor view shows expert-adjusted levels as **read-only**.
-- [ ] `report_status` (or equivalent) advances to **final-outcome-eligible** only when **both** expert and supervisor submissions exist.
-- [ ] Second submit with same role returns handled **already completed** state (`409` or equivalent UX).
-- [ ] Keyboard navigation and labels meet WCAG AA on dashboard and token flows.
+### Admin Dashboard
+
+- [ ] **`GET /dashboard`** renders the **full** admin shell matching `admin.html`: `.shell` grid, sidebar brand + nav groups, topbar with **Candidate portal** → `/`, page title/subtitle, stats row, charts row, assessments table with toolbar filters + search. **Verified by:** Visual comparison with mock; manual testing on desktop/tablet/mobile.
+- [ ] Table rows display (candidate name, email, date, duration, top skills, max level, confidence) from **`GET /api/v1/admin/sessions`** endpoint. **Verified by:** E2E test loading sessions and rendering rows.
+- [ ] Toolbar filters (All / Complete / Awaiting review / Incomplete) and search (name, email, skill) update table in real-time. **Verified by:** E2E test filtering and searching.
+- [ ] Row click opens **`AssessmentReviewModal`** in `variant="operator-read-only"` with header, score strip (both original and current max levels), summary, claims table, transcript. **Verified by:** E2E test row click → modal appearance.
+- [ ] Operator modal shows **copy** buttons for **expert** and **supervisor** review URLs when both tokens exist. **Verified by:** Manual testing; verify button clicks copy URLs to clipboard.
+- [ ] Operator authentication: Login page accepts token from `ADMIN_TOKEN` env var. Session persists until logout. **Verified by:** Manual test login/logout flow.
+
+### Expert Token Route (`/review/expert/[token]`)
+
+- [ ] Route renders **modal only** — no sidebar, stats, charts, main table, or topbar (full viewport modal host). **Verified by:** Visual inspection; DOM tree should not contain `.shell` or `.sidebar`.
+- [ ] Modal shows candidate summary, score strip (original and current max levels), AI summary (or greyed-out placeholder), claims table, transcript (read-only). **Verified by:** Visual comparison with mock; manual content verification.
+- [ ] Expert can **endorse** (accept AI-extracted level) or **adjust** to SFIA level **1–7** per claim row. **Verified by:** E2E test selecting different levels per row.
+- [ ] **Save** button (sticky footer) disabled until expert enters **full name** and **valid email**. **Verified by:** E2E test form validation; attempt save with missing/invalid fields should fail.
+- [ ] On successful save, button is immediately disabled; second attempt shows message "You have already submitted your review. No changes were made." **Verified by:** E2E test duplicate submission.
+- [ ] Invalid/expired tokens show generic 404 page. **Verified by:** E2E test invalid token.
+
+### Supervisor Token Route (`/review/supervisor/[token]`)
+
+- [ ] Route renders **modal only** — same layout as expert (full viewport modal host, no admin shell). **Verified by:** Visual inspection; DOM structure matches expert route.
+- [ ] Modal shows all expert-adjusted levels (from previous expert save) as **read-only** context. **Verified by:** Manual test after expert submits; supervisor view shows updated levels.
+- [ ] Supervisor can **Verify** or **Reject** per claim row with **optional comment** (comment field optional for both actions). **Verified by:** E2E test toggling verify/reject and optional comment submission.
+- [ ] **Save** button requires **full name** and **valid email**. **Verified by:** E2E test form validation.
+- [ ] On successful save, button disabled; second attempt shows "You have already submitted your review." **Verified by:** E2E test duplicate submission.
+- [ ] Invalid/expired tokens show generic 404. **Verified by:** E2E test invalid token.
+
+### Shared Modal (`AssessmentReviewModal`)
+
+- [ ] Score strip displays **original max SFIA level** (from AI extraction) and **current max level** (after all reviews). **Verified by:** E2E test renders both values correctly when expert adjusts or supervisor rejects.
+- [ ] AI summary box: if summary present, shows narrative text; if absent, shows greyed-out placeholder: "Summary will appear here once AI processing completes". **Verified by:** E2E test rendering with/without summary data.
+- [ ] Claims table rows show skill name/code, descriptor, evidence quote + transcript time (mm:ss format), level ladder (expert) or verify/reject + comment (supervisor), confidence bar. **Verified by:** Visual comparison; E2E test data rendering.
+- [ ] Transcript section shows speaker labels, timestamps, optional evidence tags. **Verified by:** Visual inspection.
+
+### Final Outcome State
+
+- [ ] `report_status` field advances to **awaiting_supervisor** only after expert saves. **Verified by:** API test; query session after expert submission.
+- [ ] `report_status` advances to **reviews_complete** (or final-outcome-eligible) only after **both** expert and supervisor save successfully. **Verified by:** API test querying session after both submissions.
+
+### Validation Rules (Client & Server)
+
+- [ ] **Email format:** Valid RFC 5322 email; reject on both client (real-time) and server (on `PUT`). **Verified by:** E2E test invalid emails bounce; server returns 400 Bad Request.
+- [ ] **Full name:** Non-empty string (trim whitespace); required on both client and server. **Verified by:** E2E test empty name blocked.
+- [ ] **Expert SFIA level:** Integer 1–7; reject out-of-range values. **Verified by:** E2E test submitting invalid levels.
+- [ ] **Supervisor decision:** Enum (verify | reject); server rejects invalid values with 400. **Verified by:** API test direct `PUT` with invalid enum.
+- [ ] **Supervisor comment:** Optional, but if provided, must be non-empty after trim. **Verified by:** E2E test submitting whitespace-only comment.
+- [ ] **Already-submitted check:** Second submission by same role returns 409 Conflict (or equivalent); no duplicate database entry. **Verified by:** E2E test double-submit.
+
+### Testing approach
+
+- **E2E tests** (Playwright/Cypress): Admin dashboard filters/search, row click → modal, expert/supervisor form submission, duplicate submission, invalid tokens, final outcome state progression.
+- **Manual testing checklist:** Visual fidelity (design token parity with `admin.html`), responsive layouts (mobile/tablet/desktop), error messages (404, already submitted, validation), copy-link functionality, greyed-out summary placeholder.
 
 ---
 
 ## 6. Technical constraints
 
-- **ADR-001:** No review business rules only in the browser — validation duplicated server-side.
-- **ADR-004:** Persistence via voice engine (or documented BFF) through existing ports.
-- **Phase 6 `Claim` model + JSONB:** Defined in Phase 6 §1.1 and persisted in `claims_json`; MINOR version bump when extending schema (Phase 6 prerequisites).
+- **ADR-001 (Hexagonal Architecture):** No review business rules only in the browser — all validation rules enforced on both client-side (UX feedback) and server-side (data integrity). Specific validations required server-side:
+  - Email format (RFC 5322)
+  - Full name non-empty
+  - SFIA level 1–7 (expert route)
+  - Supervisor decision enum (verify | reject)
+  - Comment non-empty if provided (both routes)
+  - Token validity (must resolve to existing session)
+  - Already-submitted check (expert/supervisor cannot save twice)
+
+- **ADR-004 (Voice Engine):** Persistence through FastAPI endpoints defined in Phase 6 revision. Phase 7 defines new admin dashboard endpoints (`GET /api/v1/admin/sessions`, chart aggregates) in the voice engine or documented BFF.
+
+- **Phase 6 `Claim` model + JSONB:** `claims_json` structure defined in Phase 6; do not extend in Phase 7. Phase 7 reads `claims_json` only.
+
+- **Version bump:** Phase 7 adds new API endpoints and response shapes. **Run `/bump-version` to increment MINOR version before implementation begins** (e.g., v0.6.0 → v0.7.0). Create Prisma migration with new version in name if database schema changes (e.g., `prisma migrate dev --name v0_7_0_admin_dashboard_tables`).
 
 ---
 
 ## 7. Dependencies
 
-| Dependency | Role |
-|------------|------|
-| Phase 4 | `transcript_json` shape for transcript panel |
-| Phase 5 | Skill names/descriptions for breakdown rows |
-| Phase 6 | `claims_json`, pipeline-generated summary, dual tokens + extended persistence |
-| `frontend/public/admin.html` | Canonical reference for **full operator page** + **modal** |
+| Dependency | Role | Status |
+|------------|------|--------|
+| Phase 4 ([implemented](../implemented/v0.5/PHASE-4-implementation-assessment-workflow.md)) | `transcript_json` shape (speaker labels, timestamps) for transcript panel | ✅ Ready |
+| Phase 5 ([implemented](../implemented/v0.5/PHASE-5-implementation-rag-knowledge-base.md)) | SFIA skill names/descriptions for claims table breakdown rows | ✅ Ready |
+| Phase 6 ([TBD](phase-6-claim-extraction-pipeline.md)) | `claims_json` structure, AI-generated summary, dual review tokens (`expert_review_token`, `supervisor_review_token`) | 🔵 In progress |
+| Phase 6 Revision ([phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md)) | Dual-token API routes (`GET/PUT /api/v1/review/expert/{token}`, `GET/PUT /api/v1/review/supervisor/{token}`), extended `IPersistence` port with role-specific save methods | 🔴 **Blocking** — Phase 7 assumes these APIs exist; integration tests will fail if not implemented |
+| `frontend/public/admin.html` | Canonical design reference for admin shell (sidebar, stats, charts, table) and review modal layout | ✅ External reference |
+
+**Critical path:** Phase 6 baseline and Phase 6 revision must be completed and deployed before Phase 7 development can proceed to integration testing.
 
 ---
 
-## 8. Risks
+## 8. Risks & Mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| Schema drift vs Phase 6 | Lock API schema before UI integration; contract tests |
-| Charts/stats need aggregates API | Time-series + outcome buckets may require dashboard-specific endpoints or Phase 6 revision — define minimal API or documented stubs |
-| Supervisor rejects without SME context | Show expert-adjusted levels read-only on supervisor page |
-| Legal / privacy for reviewer emails | Align retention with HR policy |
-| PDF export / Approve in mock | Placeholder or hidden until backend exists; avoid implying behaviour |
+| Risk | Impact | Mitigation |
+|------|--------|-----------|
+| Phase 6 dual-token APIs not ready on time | Phase 7 blocked; cannot integrate expert/supervisor flows | Lock API schema early; run Phase 6 + Phase 7 in parallel if on same release; Phase 7 integration tests will fail fast if APIs missing |
+| Admin sessions API contract unclear | Dashboard implementation stalled | Phase 7 defines the API contract (§1.3); include minimal spec in phase document with filters, pagination, response shape |
+| Chart/stats aggregates API missing | Charts show empty state | Phase 7 owns creating these endpoints (calls per day, outcome donut); defined in Phase 6 or Phase 7 depending on dependencies |
+| Supervisor rejects without SME context | Review quality suffers | Show expert-adjusted levels read-only on supervisor page; include expert narrative in modal header for context |
+| Operator login auth not defined | Dashboard inaccessible during dev | Phase 7 uses simple env-var token auth (`ADMIN_TOKEN`); sufficient for development; Phase 1 auth can replace later |
+| PDF export / Approve in mock | UI implies functionality not implemented | Disable or hide buttons until backend APIs exist; document as Phase 8+ feature |
+| WCAG compliance | Accessibility debt | Defer WCAG AA to Phase 8; document as known gap; Phase 7 ships without formal audit |
 
 ---
 
@@ -252,6 +334,6 @@ Reuse Tailwind tokens derived from `admin.html` `:root` across **shell + modal**
 
 | Date | Change |
 |------|--------|
-| 2026-05-01 | Refine pass: `/dashboard` vs `/`, Phase 6 API notes |
+| 2026-05-01 | `/doc-refiner` refinement pass: Clarified score strip (original + current max levels), sticky footer controls, optional supervisor comments, Phase 7 owns admin API + chart endpoints, explicit build dependencies, comprehensive acceptance criteria with E2E test guidance, validation checklist, version bump requirement, env-var operator auth, full responsive design (≥375px), deferred WCAG AA to Phase 8, risk table with ownership/mitigation |
 | 2026-05-01 | Dual-role review: expert vs supervisor URLs, modal-only UI from `frontend/public/admin.html`, final outcome when both complete, Phase 4–6 alignment |
-| 2026-05-01 | Operator `/dashboard` must mirror **full** `admin.html` shell (sidebar, stats, charts, table); shared `AssessmentReviewModal`; build order + acceptance criteria updated |
+| 2026-05-01 | Operator `/dashboard` must mirror **full** `admin.html` shell (sidebar, stats, charts, table); shared `AssessmentReviewModal`; build order + acceptance criteria |
