@@ -13,6 +13,7 @@ To Be Implemented
 - Phase 2: Basic Voice Engine (produces call sessions)
 - Phase 4: Assessment Workflow (produces transcripts, stored in session metadata JSONB)
 - Phase 5: RAG Knowledge Base (implements IKnowledgeBase, ingests SFIA data, defines SkillDefinition)
+- **Optional extension (Phase 7 dual URLs):** [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) — apply after baseline Phase 6 or alongside Phase 7; baseline Phase 6 remains **single** `review_token`.
 
 ---
 
@@ -47,7 +48,7 @@ Phase 6 resolves this:
 
 ### No separate Claim or AssessmentReport tables
 
-Claims and report metadata are stored as JSONB columns on `assessment_sessions` (not as separate rows in separate tables). Individual claim objects each carry a UUID `id` field so Phase 7 (expert + supervisor review) can address them for per-row updates using PostgreSQL `jsonb_set()` (see Phase 7 plan).
+Claims and report metadata are stored as JSONB columns on `assessment_sessions` (not as separate rows in separate tables). Individual claim objects each carry a UUID `id` field so Phase 7 (SME review portal) can address them for approve/adjust/reject updates using PostgreSQL `jsonb_set()`.
 
 ### Config field
 
@@ -61,7 +62,7 @@ Phase 5 deleted `domain/models/skill.py` and moved `SkillDefinition` to `domain/
 
 ## Objective
 
-Build the post-call processing pipeline that takes a completed assessment transcript, uses Claude (model configured via `anthropic_post_call_model`) to extract discrete verifiable claims with evidence timestamps, maps each claim to SFIA skill codes and responsibility levels via RAG, assigns confidence scores, and writes a structured report back onto the `assessment_sessions` row. Generates **two** NanoID-based review tokens (`expert_review_token`, `supervisor_review_token`) for Phase 7 — separate URLs with capability isolation (see [Phase 7](phase-7-sme-review-portal.md)).
+Build the post-call processing pipeline that takes a completed assessment transcript, uses Claude (model configured via `anthropic_post_call_model`) to extract discrete verifiable claims with evidence timestamps, maps each claim to SFIA skill codes and responsibility levels via RAG, assigns confidence scores, and writes a structured report back onto the `assessment_sessions` row. Generates a NanoID-based review token for secure SME access.
 
 ---
 
@@ -98,10 +99,9 @@ class Claim(BaseModel):
     reasoning: str
     framework_type: str = "sfia-9"
     evidence_segments: list[EvidenceSegment] = Field(default_factory=list)
-    # Phase 7 expert / supervisor review (initially unset after extraction)
-    expert_level: int | None = Field(default=None, ge=1, le=7)  # SME-endorsed or adjusted SFIA level
-    supervisor_decision: str = "pending"   # pending | verified | rejected
-    supervisor_comment: str | None = None   # required on supervisor submit for every row (Phase 7)
+    sme_status: str = "pending"         # pending | approved | adjusted | rejected
+    sme_adjusted_level: int | None = None
+    sme_notes: str | None = None
 
 
 class ClaimExtractionResult(BaseModel):
@@ -114,16 +114,14 @@ class ClaimExtractionResult(BaseModel):
 class AssessmentReport(BaseModel):
     """In-memory representation of the full report — not a separate DB table."""
     session_id: str
-    expert_review_token: str         # NanoID, 21 chars — SME/expert modal URL
-    supervisor_review_token: str    # NanoID, 21 chars — supervisor modal URL
-    expert_review_url: str
-    supervisor_review_url: str
+    review_token: str           # NanoID, 21 chars
+    review_url: str
     candidate_name: str
     claims: list[Claim]
     total_claims: int
     overall_confidence: float
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    report_status: str = "generated"   # see §1.3 column reference (extended enum)
+    status: str = "generated"   # generated | sent | in_review | completed
     expires_at: datetime
 
 
@@ -138,8 +136,6 @@ class SkillSummary(BaseModel):
 ```
 
 **Note:** `SkillSummary` is computed at read time (e.g., in the FastAPI response layer) by grouping `claims` from the stored `claims_json`. It is never persisted.
-
-**Legacy field migration:** If earlier drafts stored `sme_status`, `sme_adjusted_level`, or `sme_notes` on claims, map them on read into `expert_level` / supervisor fields as appropriate, or drop after one-off data migration — Phase 7 canonical shape is `expert_level` + `supervisor_decision` + `supervisor_comment`.
 
 ---
 
@@ -201,23 +197,16 @@ Add the following columns to the existing `AssessmentSession` model:
 model AssessmentSession {
   // ... existing fields (id, candidateId, status, recordingUrl, etc.) ...
 
-  // Phase 6 additions (Phase 7 extends tokens + report_status workflow)
-  candidateName           String?   @db.VarChar(255) @map("candidate_name")
-  transcriptJson          Json?     @map("transcript_json")
-  claimsJson              Json?     @map("claims_json")
-  expertReviewToken       String?   @unique @db.VarChar(21) @map("expert_review_token")
-  supervisorReviewToken   String?   @unique @db.VarChar(21) @map("supervisor_review_token")
-  reportStatus            String?   @db.VarChar(28) @map("report_status")
-  overallConfidence       Float?    @map("overall_confidence")
-  reportGeneratedAt       DateTime? @map("report_generated_at")
-  expertSubmittedAt       DateTime? @map("expert_submitted_at")
-  expertReviewerName      String?   @db.VarChar(255) @map("expert_reviewer_name")
-  expertReviewerEmail     String?   @db.VarChar(255) @map("expert_reviewer_email")
-  supervisorSubmittedAt   DateTime? @map("supervisor_submitted_at")
-  supervisorReviewerName  String?   @db.VarChar(255) @map("supervisor_reviewer_name")
-  supervisorReviewerEmail String?   @db.VarChar(255) @map("supervisor_reviewer_email")
-  reviewsCompletedAt      DateTime? @map("reviews_completed_at")
-  expiresAt               DateTime? @map("expires_at")
+  // Phase 6 additions
+  candidateName       String?   @db.VarChar(255) @map("candidate_name")
+  transcriptJson      Json?     @map("transcript_json")
+  claimsJson          Json?     @map("claims_json")
+  reviewToken         String?   @unique @db.VarChar(21) @map("review_token")
+  reportStatus        String?   @db.VarChar(20) @map("report_status")
+  overallConfidence   Float?    @map("overall_confidence")
+  reportGeneratedAt   DateTime? @map("report_generated_at")
+  smeReviewedAt       DateTime? @map("sme_reviewed_at")
+  expiresAt           DateTime? @map("expires_at")
 }
 ```
 
@@ -227,20 +216,13 @@ model AssessmentSession {
 |--------|------|---------|
 | `candidate_name` | VARCHAR(255) | Denormalised from `Candidate.first_name + last_name` at session creation — avoids a JOIN in the post-call pipeline |
 | `transcript_json` | JSONB | Full call transcript (promoted from `metadata->'transcript_json'`) |
-| `claims_json` | JSONB | Array of serialised `Claim` objects with UUID `id`; carries Phase 7 expert/supervisor fields per row |
-| `expert_review_token` | VARCHAR(21) UNIQUE | NanoID for SME/expert modal (`/review/expert/{token}`) |
-| `supervisor_review_token` | VARCHAR(21) UNIQUE | NanoID for supervisor modal (`/review/supervisor/{token}`) |
-| `report_status` | VARCHAR(28) | Workflow: `generated` → `awaiting_expert` → `awaiting_supervisor` → `reviews_complete` (exact strings implementable); operator may set `sent` when notifications dispatch |
+| `claims_json` | JSONB | Array of serialised `Claim` objects, each with a UUID `id` for Phase 7 updates |
+| `review_token` | VARCHAR(21) UNIQUE | NanoID for secure SME access |
+| `report_status` | VARCHAR(20) | `generated` / `sent` / `in_review` / `completed` — dedicated column for efficient filtering |
 | `overall_confidence` | FLOAT | Pre-computed mean confidence across all claims |
 | `report_generated_at` | TIMESTAMPTZ | When post-call pipeline completed |
-| `expert_submitted_at` | TIMESTAMPTZ | When expert PUT succeeded |
-| `expert_reviewer_name` / `expert_reviewer_email` | VARCHAR | Declared identity at expert save (audit) |
-| `supervisor_submitted_at` | TIMESTAMPTZ | When supervisor PUT succeeded |
-| `supervisor_reviewer_name` / `supervisor_reviewer_email` | VARCHAR | Declared identity at supervisor save (audit) |
-| `reviews_completed_at` | TIMESTAMPTZ | When **both** reviews recorded — eligibility for final HR/export outcome (Phase 7+) |
-| `expires_at` | TIMESTAMPTZ | When review links expire (default: 30 days after generation) |
-
-**Deprecated:** Single `review_token` / `sme_reviewed_at` — replaced by dual tokens and timestamps above. New migrations should add the new columns; if `review_token` exists from an earlier migration, migrate values or drop in the same MINOR bump as Phase 6 delivery.
+| `sme_reviewed_at` | TIMESTAMPTZ | When SME submitted final review |
+| `expires_at` | TIMESTAMPTZ | When review link expires (default: 30 days after generation) |
 
 **`candidate_name` population**: Wherever `AssessmentSession` is created (triggered from the intake form flow), populate `candidate_name` as `f"{candidate.first_name} {candidate.last_name}"`. This is a one-line addition to the existing session creation path — no new port method required.
 
@@ -253,14 +235,10 @@ SET transcript_json = (metadata->>'transcript_json')::jsonb
 WHERE metadata ? 'transcript_json'
   AND transcript_json IS NULL;
 
--- Efficient lookup by review tokens
-CREATE INDEX IF NOT EXISTS idx_assessment_sessions_expert_review_token
-    ON assessment_sessions (expert_review_token)
-    WHERE expert_review_token IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_assessment_sessions_supervisor_review_token
-    ON assessment_sessions (supervisor_review_token)
-    WHERE supervisor_review_token IS NOT NULL;
+-- Efficient lookup by review token
+CREATE INDEX IF NOT EXISTS idx_assessment_sessions_review_token
+    ON assessment_sessions (review_token)
+    WHERE review_token IS NOT NULL;
 
 -- Efficient report status filtering
 CREATE INDEX IF NOT EXISTS idx_assessment_sessions_report_status
@@ -308,18 +286,15 @@ async def save_report(
     self,
     session_id: str,
     claims: list[dict],
-    expert_review_token: str,
-    supervisor_review_token: str,
+    review_token: str,
     overall_confidence: float,
     expires_at: datetime,
 ) -> None:
     """
     Write claims_json and report metadata columns to assessment_sessions.
 
-    Sets: claims_json, expert_review_token, supervisor_review_token,
-    overall_confidence, report_status='generated' (or 'awaiting_expert' per product),
+    Sets: claims_json, review_token, overall_confidence, report_status='generated',
     report_generated_at=now(), expires_at.
-    Clears expert/supervisor submission columns until Phase 7 PUTs run.
     """
     ...
 
@@ -331,68 +306,26 @@ async def get_report(
     """
     Read report metadata and claims_json for a session.
 
-    Returns a dict with keys: session_id, claims_json, expert_review_token,
-    supervisor_review_token, report_status, overall_confidence,
-    report_generated_at, expires_at, expert_submitted_at, expert_reviewer_*,
-    supervisor_submitted_at, supervisor_reviewer_*, reviews_completed_at.
+    Returns a dict with keys: session_id, claims_json, review_token, report_status,
+    overall_confidence, report_generated_at, sme_reviewed_at, expires_at.
     Returns None if no report exists yet.
     """
     ...
 
 @abstractmethod
-async def get_report_by_expert_token(
+async def get_report_by_token(
     self,
-    expert_review_token: str,
+    review_token: str,
 ) -> dict | None:
-    """Public expert review GET — returns None if token invalid or expired."""
-
-    ...
-
-@abstractmethod
-async def get_report_by_supervisor_token(
-    self,
-    supervisor_review_token: str,
-) -> dict | None:
-    """Public supervisor review GET — returns None if token invalid or expired."""
-
-    ...
-
-@abstractmethod
-async def save_expert_review(
-    self,
-    expert_review_token: str,
-    reviewer_full_name: str,
-    reviewer_email: str,
-    claims_patch: list[dict],
-) -> dict:
     """
-    Atomically merge claims_patch into claims_json by claim id; set expert_level per row;
-    set expert_submitted_at, expert_reviewer_name, expert_reviewer_email;
-    advance report_status (e.g. to awaiting_supervisor). Returns updated report dict.
-    Raises if token invalid, expired, or supervisor already completed (policy).
-    """
+    Read session and report data by NanoID review token.
 
-    ...
-
-@abstractmethod
-async def save_supervisor_review(
-    self,
-    supervisor_review_token: str,
-    reviewer_full_name: str,
-    reviewer_email: str,
-    claims_patch: list[dict],
-) -> dict:
+    Used by the public SME review endpoint. Returns None if token not found or expired.
     """
-    Merge supervisor_decision + supervisor_comment per claim id; set supervisor_* audit columns;
-    set reviews_completed_at when expert submission already exists; report_status → reviews_complete.
-    """
-
     ...
 ```
 
-**Both `InMemoryPersistence` (tests) and `PostgresPersistence` (production) must implement all methods** (including token lookups and both save paths).
-
-**Note:** If an interim implementation keeps `get_report_by_token(review_token)` for backwards compatibility, delegate to expert or supervisor lookup by trying both columns until legacy tokens are removed.
+**Both `InMemoryPersistence` (tests) and `PostgresPersistence` (production) must implement all five methods.**
 
 ---
 
@@ -639,10 +572,8 @@ class ReportGenerator:
         extraction_result: ClaimExtractionResult,
         candidate_name: str,
     ) -> AssessmentReport:
-        expert_token = nanoid(self.NANOID_ALPHABET, self.NANOID_LENGTH)
-        supervisor_token = nanoid(self.NANOID_ALPHABET, self.NANOID_LENGTH)
-        expert_review_url = f"{self.base_url}/review/expert/{expert_token}"
-        supervisor_review_url = f"{self.base_url}/review/supervisor/{supervisor_token}"
+        review_token = nanoid(self.NANOID_ALPHABET, self.NANOID_LENGTH)
+        review_url = f"{self.base_url}/review/{review_token}"
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(days=self.LINK_EXPIRY_DAYS)
 
@@ -653,10 +584,8 @@ class ReportGenerator:
 
         report = AssessmentReport(
             session_id=session_id,
-            expert_review_token=expert_token,
-            supervisor_review_token=supervisor_token,
-            expert_review_url=expert_review_url,
-            supervisor_review_url=supervisor_review_url,
+            review_token=review_token,
+            review_url=review_url,
             candidate_name=candidate_name,
             claims=extraction_result.claims,
             total_claims=extraction_result.total_claims,
@@ -668,8 +597,7 @@ class ReportGenerator:
         await self.persistence.save_report(
             session_id=session_id,
             claims=[c.model_dump() for c in extraction_result.claims],
-            expert_review_token=expert_token,
-            supervisor_review_token=supervisor_token,
+            review_token=review_token,
             overall_confidence=overall_confidence,
             expires_at=expires_at,
         )
@@ -733,11 +661,9 @@ class PostCallPipeline:
         await self.persistence.update_session_status(session_id, "processed")
 
         if self.notification_sender and getattr(session, "sme_email", None):
-            await self.notification_sender.send_review_links(
+            await self.notification_sender.send_review_link(
                 sme_email=session.sme_email,
-                supervisor_email=getattr(session, "supervisor_email", "") or "",
-                expert_review_url=report.expert_review_url,
-                supervisor_review_url=report.supervisor_review_url,
+                review_url=report.review_url,
                 candidate_name=session.candidate_name,
             )
 
@@ -752,12 +678,10 @@ from abc import ABC, abstractmethod
 
 class INotificationSender(ABC):
     @abstractmethod
-    async def send_review_links(
+    async def send_review_link(
         self,
         sme_email: str,
-        supervisor_email: str,
-        expert_review_url: str,
-        supervisor_review_url: str,
+        review_url: str,
         candidate_name: str,
     ) -> None: ...
 ```
@@ -823,8 +747,7 @@ async def process_assessment(session_id: str):
     report = await post_call_pipeline.process(session_id)
     return {
         "session_id": session_id,
-        "expert_review_url": report.expert_review_url,
-        "supervisor_review_url": report.supervisor_review_url,
+        "review_url": report.review_url,
         "total_claims": report.total_claims,
         "overall_confidence": report.overall_confidence,
         "status": "processed",
@@ -840,45 +763,14 @@ async def get_assessment_report(session_id: str):
     return report_data
 
 
-@router.get("/review/expert/{token}")
-async def get_expert_review(token: str):
-    """Expert/SME review surface — read-only report + transcript context."""
-    report_data = await persistence.get_report_by_expert_token(token)
+@router.get("/review/{review_token}")
+async def get_review_by_token(review_token: str):
+    """Public SME review endpoint — accessed via NanoID token link."""
+    report_data = await persistence.get_report_by_token(review_token)
     if not report_data:
         raise HTTPException(status_code=404, detail="Review not found or expired")
     return report_data
-
-
-@router.put("/review/expert/{token}")
-async def put_expert_review(token: str, body: ExpertReviewPayload):
-    """Persist expert levels + reviewer identity — see Phase 7 contract."""
-    return await persistence.save_expert_review(
-        expert_review_token=token,
-        reviewer_full_name=body.reviewer_full_name,
-        reviewer_email=body.reviewer_email,
-        claims_patch=body.claims,
-    )
-
-
-@router.get("/review/supervisor/{token}")
-async def get_supervisor_review(token: str):
-    report_data = await persistence.get_report_by_supervisor_token(token)
-    if not report_data:
-        raise HTTPException(status_code=404, detail="Review not found or expired")
-    return report_data
-
-
-@router.put("/review/supervisor/{token}")
-async def put_supervisor_review(token: str, body: SupervisorReviewPayload):
-    return await persistence.save_supervisor_review(
-        supervisor_review_token=token,
-        reviewer_full_name=body.reviewer_full_name,
-        reviewer_email=body.reviewer_email,
-        claims_patch=body.claims,
-    )
 ```
-
-**Payload types** (`ExpertReviewPayload` / `SupervisorReviewPayload`) must match [Assessment Report Contract](../contracts/assessment-report-contract.md) §6.
 
 ---
 
@@ -931,11 +823,11 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 - [ ] `persistence.get_transcript(session_id)` returns the stored dict.
 
 ### Schema & ports
-- [ ] All Phase 6 `assessment_sessions` columns exist per §1.3 (including `expert_review_token`, `supervisor_review_token`, dual reviewer audit columns, `reviews_completed_at`).
+- [ ] All nine new `assessment_sessions` columns exist: `candidate_name`, `transcript_json`, `claims_json`, `review_token`, `report_status`, `overall_confidence`, `report_generated_at`, `sme_reviewed_at`, `expires_at`.
 - [ ] `candidate_name` is populated at session creation time as `"{first_name} {last_name}"` from the `Candidate` record.
-- [ ] Both token columns have UNIQUE partial indexes.
-- [ ] `IPersistence` extended with transcript/report methods per §1.4 (including `get_report_by_expert_token`, `get_report_by_supervisor_token`, `save_expert_review`, `save_supervisor_review`).
-- [ ] Both `InMemoryPersistence` and `PostgresPersistence` implement all methods.
+- [ ] `review_token` column has a UNIQUE index.
+- [ ] `IPersistence` extended with `save_transcript`, `get_transcript`, `save_report`, `get_report`, `get_report_by_token`.
+- [ ] Both `InMemoryPersistence` and `PostgresPersistence` implement all five new methods.
 
 ### Claim extraction
 - [ ] `ClaimExtractor.process_transcript()` produces structured claims from a sample transcript JSON.
@@ -945,11 +837,11 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 - [ ] `AnthropicLLMProvider` reads model from injected `model` argument (not hardcoded).
 
 ### Report generation
-- [ ] `ReportGenerator.generate()` creates an `AssessmentReport` with two valid 21-char NanoIDs (`expert_review_token`, `supervisor_review_token`).
-- [ ] Review URL formats: `{base_url}/review/expert/{token}`, `{base_url}/review/supervisor/{token}`.
+- [ ] `ReportGenerator.generate()` creates an `AssessmentReport` with a valid 21-char NanoID `review_token`.
+- [ ] Review URL format: `{base_url}/review/{review_token}`.
 - [ ] `expires_at` is exactly 30 days after `report_generated_at`.
 - [ ] `overall_confidence` equals the mean of all claim confidence scores.
-- [ ] `claims_json` column contains serialised claim array with claim `id` fields intact and Phase 7 fields defaulted (`supervisor_decision` = `pending`, `expert_level` null until expert save).
+- [ ] `claims_json` column contains serialised claim array with claim `id` fields intact.
 - [ ] `report_status` is set to `"generated"` after `save_report()`.
 
 ### Pipeline
@@ -963,10 +855,9 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 - [ ] `SFIAFlowController` accepts `post_call_pipeline: PostCallPipeline` and `session_id: str` as constructor arguments.
 
 ### API
-- [ ] `POST /api/v1/assessment/{session_id}/process` triggers pipeline and returns `expert_review_url`, `supervisor_review_url`, `total_claims`, `overall_confidence`, `status` (manual re-trigger / recovery path).
+- [ ] `POST /api/v1/assessment/{session_id}/process` triggers pipeline and returns `review_url`, `total_claims`, `overall_confidence`, `status` (manual re-trigger / recovery path).
 - [ ] `GET /api/v1/assessment/{session_id}/report` returns 200 with report data or 404.
-- [ ] `GET /api/v1/review/expert/{token}` and `GET /api/v1/review/supervisor/{token}` return 200 for a valid token or 404 for invalid/expired.
-- [ ] `PUT /api/v1/review/expert/{token}` and `PUT /api/v1/review/supervisor/{token}` persist reviewer identity + claim patches per [Assessment Report Contract](../contracts/assessment-report-contract.md); duplicate submit returns **409**.
+- [ ] `GET /api/v1/review/{review_token}` returns 200 for a valid token or 404 for invalid/missing.
 
 ### Testing
 - [ ] Unit tests for `ClaimExtractor` with mocked `ILLMProvider` and `IKnowledgeBase`.
@@ -1017,7 +908,7 @@ If the formatted transcript exceeds 60,000 characters (~15,000 tokens), split it
 9. **ReportGenerator** — Implement service; verify NanoID length and expiry.
 10. **PostCallPipeline** — Wire all services together; test with `InMemoryPersistence`.
 11. **Automatic trigger** — Inject `PostCallPipeline` and `session_id` into `SFIAFlowController`; update `handle_end_call()` to fire background task.
-12. **FastAPI endpoints** — Add routes per §1.10 (`GET`/`PUT` expert + supervisor).
+12. **FastAPI endpoints** — Add three endpoints to `routes.py`.
 13. **Tests** — Unit tests for each service; integration test for full pipeline including automatic trigger.
 14. **CHANGELOG** — Document Phase 6 additions.
 
@@ -1032,9 +923,9 @@ Phase 6 is complete when:
 - [ ] A full pipeline run with a real 20-minute transcript JSON produces:
   - [ ] ≥ 5 extracted claims, each with `sfia_skill_code`, `sfia_level`, `confidence`, and ≥ 1 `evidence_segment`.
   - [ ] `claims_json` written to `assessment_sessions` with all claim `id` fields present.
-  - [ ] `expert_review_token` and `supervisor_review_token` written (21 chars, URL-safe), `expires_at` = 30 days from now.
+  - [ ] `review_token` written (21 chars, URL-safe), `expires_at` = 30 days from now.
   - [ ] Session status updated to `"processed"`.
-- [ ] `GET /api/v1/review/expert/{token}` and `GET /api/v1/review/supervisor/{token}` return full report context for generated tokens.
+- [ ] `GET /api/v1/review/{review_token}` returns full report data for the generated token.
 - [ ] `handle_end_call()` automatically fires the pipeline; verified in integration test (pipeline completes and `report_status = "generated"` on session row).
 - [ ] All unit and integration tests pass.
 - [ ] Version bumped to `v0.6.0`; Prisma migration applied.
@@ -1047,6 +938,6 @@ Phase 6 is complete when:
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-05-01 | Doc | Phase 7 alignment: dual review tokens (`expert_review_token`, `supervisor_review_token`), session-level reviewer audit columns, `Claim` fields `expert_level` / `supervisor_decision` / `supervisor_comment`, extended `report_status` workflow, `IPersistence` + FastAPI `GET`/`PUT` for `/review/expert` and `/review/supervisor`. Deprecated single `review_token` in favour of dual URLs. |
+| 2026-05-01 | Doc Refiner | Clarifications pass. Added: candidate_name denormalised onto assessment_sessions at session creation (avoids JOIN in pipeline); automatic pipeline trigger via asyncio.create_task() in handle_end_call() immediately after transcript finalisation; _run_pipeline_safe() error handler logs failures with manual re-trigger path; SFIAFlowController constructor updated to accept post_call_pipeline and session_id; manual POST /process endpoint retained as recovery path. |
 | 2026-05-01 | Doc Refiner | Full rewrite via /doc-refiner. Fixed: broken section numbering (duplicate 1.4/1.5/1.6); conflicting dual Claim model definitions (dataclass vs Pydantic); wrong SkillDefinition import (domain.models.skill → domain.ports.knowledge_base per Phase 5); hardcoded model ID replaced with settings.anthropic_post_call_model; IPersistence method name inconsistencies (save_report/get_report/get_report_by_token unified throughout); wrong dependency reference (Phase 3 → Phase 5 for RAG KB); missing version bump prerequisite. Added: AssessmentTranscript storage (promoted from Phase 4 metadata JSONB to assessment_sessions.transcript_json column, per Phase 5 section 0.7 deferral); claims_json and report metadata as JSONB columns on assessment_sessions (not separate tables); evidence_segments (JSON array of start_time/end_time pairs) on all claims; framework_type on all claims; sfia_skill_name on all claims; INotificationSender stub port; long transcript chunking strategy; Phase 7 JSONB concurrency note. |
 | 2026-04-18 | AI Skills Assessor Team | Initial draft |

@@ -11,11 +11,12 @@ To Be Implemented
 - PRD-002: Assessment Interview Workflow (post-call report shape)
 - ADR-001: Hexagonal Architecture (UI is presentation + API orchestration only)
 - ADR-004: Voice Engine Technology (FastAPI voice engine owns persistence in the current plan)
-- [Assessment Report Contract](../contracts/assessment-report-contract.md): canonical dual-review payloads and claim shapes (aligned with Phase 6 §1.3)
+- [Assessment Report Contract](../contracts/assessment-report-contract.md): canonical dual-review payloads and claim shapes
+- [Phase 6 revision: dual review tokens](phase-6-revision-dual-review-tokens.md): backend deltas on top of baseline Phase 6 (single-token pipeline)
 - **UI reference (visual + structure):** [`frontend/public/admin.html`](../../../frontend/public/admin.html) — the **assessment detail modal** only (`.modal-overlay` / `.modal` and inner sections). SME and supervisor pages render **that modal pattern full-viewport**; they **must not** expose the admin shell (sidebar, stats, charts, assessment table).
 - Phase 4 ([implemented](../implemented/v0.5/PHASE-4-implementation-assessment-workflow.md)): structured `transcript_json` (turns, timestamps, phases) for the transcript panel
 - Phase 5 ([implemented](../implemented/v0.5/PHASE-5-implementation-rag-knowledge-base.md)): SFIA skill definitions used when enriching claims (skill names/descriptors in breakdown rows)
-- Phase 6: Claim Extraction Pipeline — `claims_json`, transcript column, **dual** review tokens and persistence methods per Phase 6 §1.3–1.10 (see §0 below)
+- Phase 6: Claim Extraction Pipeline — baseline delivers `claims_json`, transcript column, single `review_token` + `GET /review/{token}`; **dual-token APIs** require [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) (see §0)
 
 **Cross-document note:** PRD-001 §5.2 data flow reflects candidate self-service (no admin-triggered dial).
 
@@ -36,13 +37,13 @@ Build Next.js routes so **two independent reviewers** complete their work throug
 
 ---
 
-## 0. Prerequisites (Phase 6 + contract)
+## 0. Prerequisites
 
-Phase 6 persists `claims_json`, transcript storage, **dual** review tokens (`expert_review_token`, `supervisor_review_token`), session-level reviewer audit columns, and FastAPI `GET`/`PUT` for `/review/expert/{token}` and `/review/supervisor/{token}` — see Phase 6 §1.3–1.10.
+**Baseline Phase 6** ([phase-6-claim-extraction-pipeline.md](phase-6-claim-extraction-pipeline.md)) produces `claims_json`, transcript storage, and a single SME review token. The **expert + supervisor** modal URLs require the incremental backend spec [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) (dual NanoIDs, `GET`/`PUT` per role, session audit columns). Implement that revision before shipping Phase 7, or in parallel if both streams share one release.
 
-Payload shapes, claim fields (`expert_level`, `supervisor_decision`, `supervisor_comment`), and `report_status` workflow values are **normative** in [Assessment Report Contract](../contracts/assessment-report-contract.md).
+Payload shapes and enums are **normative** in [Assessment Report Contract](../contracts/assessment-report-contract.md).
 
-**Rule:** Expert token cannot write supervisor fields and vice versa (server-enforced). Phase 7 UI ships against those APIs.
+**Rule:** Expert token cannot write supervisor fields and vice versa (server-enforced).
 
 ---
 
@@ -211,4 +212,4 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 |------|--------|
 | 2026-05-01 | Refine pass: `/dashboard` vs `/`, Phase 6 API notes |
 | 2026-05-01 | Dual-role review: expert vs supervisor URLs, modal-only UI from `frontend/public/admin.html`, final outcome when both complete, Phase 4–6 alignment |
-| 2026-05-01 | Point §0 to Phase 6 + Assessment Report Contract (dual tokens and PUT payloads fully specified upstream) |
+| 2026-05-01 | §0: baseline Phase 6 vs [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) for dual-token APIs |
