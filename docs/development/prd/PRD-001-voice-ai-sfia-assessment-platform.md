@@ -4,7 +4,7 @@
 Approved
 
 ## Date
-2026-04-20 (Last Updated)
+2026-05-01 (Last Updated)
 
 ## Document Owner
 AI Skills Assessor Team
@@ -98,20 +98,30 @@ _For detailed interview flow, see PRD-002: Assessment Interview Workflow._
 2. Transcript is processed with **timestamps (mm:ss format) and speaker labels** for each transcribed line, enabling precise evidence referencing.
 3. Each claim is mapped to a framework skill and responsibility level with a confidence score.
 4. Claims are grouped into a structured report, ready for SME review.
-5. A unique review link (NanoID-based) is generated for secure SME access.
+5. **Two** unique review links (NanoID-based) are generated for Phase 7: one for the **SME / subject matter expert** and one for the **supervisor** — separate URLs with isolated capabilities (see Phase 7).
 
 _For detailed extraction pipeline, see PRD-002: Assessment Interview Workflow._
 
-### 4.4 SME Review (SME Reviewer)
-1. SME receives a unique, secure link.
-2. Link opens a review portal showing:
-   - Candidate profile summary
-   - Extracted claims with verbatim transcript excerpts
-   - AI-suggested SFIA skill code and level for each claim
-   - Confidence indicators
-3. SME can approve, adjust, or reject each claim.
-4. SME submits final assessment.
-5. Final report is generated and stored.
+### 4.4 Expert & Supervisor Review (Human reviewers)
+
+Human review is split into **two roles**. Each receives their **own** NanoID URL (no shared token). The UI is the **assessment modal** pattern only (same structure as `frontend/public/admin.html` modal); reviewers do **not** see the operator admin dashboard chrome.
+
+**Expert (SME):**
+
+1. Expert receives a unique, secure link (`/review/expert/{token}`).
+2. Link opens the modal showing candidate summary, AI narrative summary, SFIA competency breakdown (claims register), and transcript — **read-only** except SFIA level endorsement/adjustment per row.
+3. Expert sets the endorsed or adjusted SFIA level (1–7) per claim row.
+4. On **Save**, the expert enters **full name** and **work email**; the system stores these with the submission for audit.
+
+**Supervisor:**
+
+1. Supervisor receives a **different** unique, secure link (`/review/supervisor/{token}`).
+2. Same modal layout; content is **read-only** except **verify** or **reject** per claims-register row and a **comment on every row** (including verified rows).
+3. On **Save**, the supervisor enters **full name** and **work email**; the system stores these for audit.
+
+**Final outcome:**
+
+The assessment proceeds to the **final outcome** state (HR/export-eligible) only after **both** the expert submission **and** the supervisor submission have completed successfully. Completion order is not prescribed unless a future phase adds dependencies.
 
 ## 5. System Architecture Overview
 
@@ -122,8 +132,9 @@ ai-skills-assessor/
 ├── apps/
 │   ├── web/                          ← Next.js frontend (Tailwind, Lucide-React)
 │   │   ├── app/                      ← App Router
-│   │   │   ├── (dashboard)/          ← Admin dashboard routes
-│   │   │   ├── (review)/             ← SME review routes
+│   │   │   ├── (dashboard)/          ← Admin dashboard routes (operators)
+│   │   │   ├── (review-expert)/      ← SME/expert modal-only routes
+│   │   │   ├── (review-supervisor)/  ← Supervisor modal-only routes
 │   │   │   └── api/                  ← Next.js API routes
 │   │   ├── components/
 │   │   └── lib/
@@ -171,29 +182,35 @@ ai-skills-assessor/
 ### 5.2 Data Flow
 
 ```
-Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
-       │                    │                       │                   │
-       ├─ Trigger Call ────>│                       │                   │
-       │                    ├─ Interview ──────────>│                   │
-       │                    │  (transcript +         │                   │
-       │                    │   claims extracted)    │                   │
-       │                    │                       ├─ Report Ready ──>│
-       │<─ Call Status ─────┤                       │                   │
-       │                    │                       │         Approve   │
-       │                    │                       │<── Adjust/Reject─┤
-       │                    │                       │                   │
-       │                    │                       │<─ Final Report ───┤
+Candidate Portal       Voice Engine           Claim Extraction      Expert Modal      Supervisor Modal
+       │                    │                       │                   │                   │
+       ├─ Intake / dial ───>│                       │                   │                   │
+       │                    ├─ Interview ──────────>│                   │                   │
+       │                    │  (transcript +        │                   │                   │
+       │                    │   claims extracted)   │                   │                   │
+       │<─ Call Status ─────┤                       │                   │                   │
+       │                    │                       ├─ Report Ready ────┼──────────────────>│
+       │                    │                       │                   │                   │
+       │                    │                       │         Expert: level endorse/adjust   │
+       │                    │                       │<──────────────────┤                   │
+       │                    │                       │                   │   Supervisor:     │
+       │                    │                       │                   │   verify/reject   │
+       │                    │                       │<──────────────────────────────────────┤
+       │                    │                       │ Final outcome after BOTH complete      │
 ```
+
+Administrators **monitor** sessions via a read-only dashboard; they **do not** trigger outbound calls (candidate self-service only — §4.1).
 
 **Voice engine details and architecture are in PRD-002.**
 
 ## 6. Key Platform Decisions
 
-### 6.1 SME Review Links: NanoID
-- Each assessment report gets a NanoID-based URL (e.g., `/review/V1StGXR8_Z5jdHi6B-myT`).
+### 6.1 Review Links: Dual NanoIDs (Expert + Supervisor)
+- Each assessment report receives **two** NanoID-based URLs — **expert** (`/review/expert/{token}`) and **supervisor** (`/review/supervisor/{token}`).
+- Tokens are **not interchangeable**: each URL exposes only the actions allowed for that role (capability isolation enforced server-side).
 - NanoID provides URL-safe, collision-resistant, non-sequential identifiers.
 - Links expire after 30 days by default (configurable).
-- No PII in URLs; links are access-controlled via database.
+- No PII in URLs; access is knowledge-of-token; reviewers **declare** full name + email **at submit** for audit trail.
 
 ### 6.2 Framework-Agnostic Data Model (Extensibility for v2+)
 - **SFIA 9 in v1**: v1 focuses on SFIA 9 only.
@@ -213,7 +230,7 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
   - Verbatim quote from transcript
   - Interpreted claim text
   - Framework skill code and responsibility level
-  - Confidence score (0.0–1.0); SME reviews, approves, adjusts, or rejects
+  - Confidence score (0.0–1.0); **Expert** endorses/adjusts SFIA levels; **Supervisor** verifies/rejects the claims register with comments (Phase 7)
   - Evidence segments (timestamp ranges in transcript supporting the claim)
 - Claims are verified against the framework definition via pgvector RAG (relevant skill context injected into extraction prompt).
 
@@ -242,7 +259,7 @@ Admin Dashboard         Voice Engine          Claim Extraction      SME Portal
 | **Candidate** | Person being assessed | `email` (unique identifier), `first_name`, `last_name`, `metadata` (JSON: {`employee_id`, ...}), `created_at` |
 | **AssessmentSession** | Single assessment call | `id`, `candidate_email` (FK), `phone_number`, `status` (pending/dialling/in_progress/completed/failed/cancelled), `metadata` (JSON: {`failureReason`, `cancelledAt`, ...}), `recording_url` (Daily cloud), `transcript_url` (structured transcript with speaker labels & timestamps), `started_at`, `ended_at`, `created_at` |
 | **AssessmentTranscript** | Full call transcript with metadata | `id`, `session_id` (FK), `raw_transcript` (JSON array of timestamped, speaker-labeled lines), `generated_at` |
-| **AssessmentReport** | Output of assessment + SME review | `id`, `session_id`, `review_token` (NanoID), `status` (generated/in-review/completed), `generated_at`, `sme_reviewed_at` |
+| **AssessmentReport** | Output of assessment + dual human review | `session_id`, `expert_review_token`, `supervisor_review_token`, `report_status` (workflow includes awaiting expert/supervisor and reviews complete), `report_generated_at`, expert/supervisor reviewer identity + submitted timestamps, `reviews_completed_at` when both are done |
 
 ### Transcript Structure
 
@@ -297,9 +314,9 @@ All transcripts include **speaker labels** and **timestamps (mm:ss format)** for
 
 | System | Integration | Purpose |
 |--------|-------------|---------|
-| **Email / Notification System** | Send review links to SME | SME invitations, reminders |
+| **Email / Notification System** | Send review links | Expert **and** supervisor invitations (two URLs); reminders |
 | **PostgreSQL** | Persistent data store | Candidates, sessions, reports |
-| **NanoID** | Access control for SME portal | Generate non-sequential, collision-resistant review tokens; links expire in 30 days |
+| **NanoID** | Access control for review modals | Two independent tokens per report; links expire in 30 days (configurable) |
 
 **Voice engine integrations (Daily, STT/TTS, Claude, pgvector) are detailed in PRD-002.**
 
@@ -360,7 +377,7 @@ All transcripts include **speaker labels** and **timestamps (mm:ss format)** for
 | **SFIA 9 licensing** | Legal / Product | Before Phase 5 start | **Blocks Phase 5 RAG knowledge base if restrictions apply** | Must resolve before ingesting SFIA definitions into pgvector. If SFIA content is restricted, implement framework lookup API instead of embedding. |
 | **Data retention policy (call recordings)** | Legal / Compliance | Before Phase 3 end | Affects deletion/archival process | Phase 2–4 store indefinitely in Daily cloud. Phase 5+ can implement retention policy if required. Does not block v1 release. |
 | **SME notification channel** | Product | Before Phase 7 | Phase 7 SME portal design | Default: email only in v1. Slack/Teams integrations deferred to v2. Does not block Phase 7 release. |
-| **Authentication for SME portal** | Tech Lead | Before Phase 7 start | Phase 7 SME review portal security | **Decision: Unauthenticated NanoID-based links** (no login required). Review links are long, random, non-sequential tokens that expire in 30 days. Optional: IP whitelisting for additional security. |
+| **Authentication for SME portal** | Tech Lead | Before Phase 7 start | Phase 7 expert/supervisor modal security | **Decision: Unauthenticated NanoID-based links** (no login required). **Two** independent tokens per report (expert vs supervisor). Links expire in 30 days (configurable). Reviewers declare full name + email at submit for audit. Optional: IP whitelisting for additional security. |
 
 ---
 
@@ -368,6 +385,7 @@ All transcripts include **speaker labels** and **timestamps (mm:ss format)** for
 
 | Date | Change | Author |
 |------|--------|--------|
+| 2026-05-01 | **Dual human review**: Replaced single SME review flow with **expert** + **supervisor** NanoID URLs, modal-only UI (aligned with Phase 7), final outcome after **both** submissions; updated §5.2 data flow (removed admin trigger path), §6.1 dual tokens, data model `AssessmentReport` row, §9 integration table, Open Questions authentication row. | AI Skills Assessor Team |
 | 2026-04-20 | **Refinement via /doc-refiner**: Align with Phase 2 as source of truth. (1) Clarified **candidate self-service intake form is primary flow** (not admin-triggered). (2) Fixed intake form fields: FIRST NAME, LAST NAME, WORK EMAIL, EMPLOYEE ID, PHONE NUMBER (all mandatory; employee ID stored in metadata). (3) Specified call state labels from Phase 2 design: Dialling, Call In Progress, Interview Complete, Failed, Cancelled. (4) Clarified call recording storage: **indefinite retention in Daily cloud** (not 12 months). (5) Updated data model: Candidate keyed by email, metadata JSON for employee_id, AssessmentSession with phone_number and metadata JSON fields. (6) Expanded "Framework-Agnostic" section to clarify: SFIA 9 only in v1; future frameworks via `framework_type` metadata tag + pgvector + no schema migrations. (7) Converted Open Questions to structured table with owner, deadline, impact, mitigation. (8) Added explicit decision: **SME portal uses unauthenticated NanoID links** (no login required). (9) Added authentication clarification: not needed for v1. (10) Clarified phase sequencing: SFIA licensing question must be resolved before Phase 5 RAG start (blocks framework definition ingestion). | AI Skills Assessor Team |
 | 2026-04-18 | Refactored PRD-001 to focus on platform/SME review; moved interview details to PRD-002 | AI Skills Assessor Team |
 | 2026-04-16 | Initial draft | AI Skills Assessor Team |

@@ -11,13 +11,13 @@ To Be Implemented
 - PRD-002: Assessment Interview Workflow (post-call report shape)
 - ADR-001: Hexagonal Architecture (UI is presentation + API orchestration only)
 - ADR-004: Voice Engine Technology (FastAPI voice engine owns persistence in the current plan)
-- [Assessment Report Contract](../contracts/assessment-report-contract.md): evolve with Phase 7 fields below
+- [Assessment Report Contract](../contracts/assessment-report-contract.md): canonical dual-review payloads and claim shapes (aligned with Phase 6 §1.3)
 - **UI reference (visual + structure):** [`frontend/public/admin.html`](../../../frontend/public/admin.html) — the **assessment detail modal** only (`.modal-overlay` / `.modal` and inner sections). SME and supervisor pages render **that modal pattern full-viewport**; they **must not** expose the admin shell (sidebar, stats, charts, assessment table).
 - Phase 4 ([implemented](../implemented/v0.5/PHASE-4-implementation-assessment-workflow.md)): structured `transcript_json` (turns, timestamps, phases) for the transcript panel
 - Phase 5 ([implemented](../implemented/v0.5/PHASE-5-implementation-rag-knowledge-base.md)): SFIA skill definitions used when enriching claims (skill names/descriptors in breakdown rows)
-- Phase 6: Claim Extraction Pipeline — `claims_json`, transcript column, `review_token` pattern; **extend** with dual tokens and split reviewer payloads (see §0)
+- Phase 6: Claim Extraction Pipeline — `claims_json`, transcript column, **dual** review tokens and persistence methods per Phase 6 §1.3–1.10 (see §0 below)
 
-**Cross-document note:** PRD-001 §5.2 Data Flow may still show an admin “Trigger Call” arrow; **candidate self-service at `/` is the sole initiation path** per PRD-001 §4.1.
+**Cross-document note:** PRD-001 §5.2 data flow reflects candidate self-service (no admin-triggered dial).
 
 ---
 
@@ -36,55 +36,13 @@ Build Next.js routes so **two independent reviewers** complete their work throug
 
 ---
 
-## 0. Prerequisites (Phase 6 extensions)
+## 0. Prerequisites (Phase 6 + contract)
 
-Phase 6 introduces `claims_json`, transcript storage, and a single `review_token`. Phase 7 requires:
+Phase 6 persists `claims_json`, transcript storage, **dual** review tokens (`expert_review_token`, `supervisor_review_token`), session-level reviewer audit columns, and FastAPI `GET`/`PUT` for `/review/expert/{token}` and `/review/supervisor/{token}` — see Phase 6 §1.3–1.10.
 
-### 0.1 Two opaque tokens
+Payload shapes, claim fields (`expert_level`, `supervisor_decision`, `supervisor_comment`), and `report_status` workflow values are **normative** in [Assessment Report Contract](../contracts/assessment-report-contract.md).
 
-Store **two unique** NanoIDs on `assessment_sessions` (names illustrative):
-
-| Column | Purpose |
-|--------|---------|
-| `expert_review_token` | URL for SME/expert modal |
-| `supervisor_review_token` | URL for supervisor modal |
-
-Same entropy and expiry policy as the existing review token (e.g. 30 days configurable). **Either token invalid/expired → 404** with generic message.
-
-### 0.2 Claim / report payload shape (conceptual)
-
-Extend persisted claim objects (and API responses) so each claim row can carry:
-
-**Expert fields (written only via expert token):**
-
-- `expert_level`: integer 1–7 — endorsed or adjusted level (required before expert submission)
-- `expert_submitted_at`, `expert_full_name`, `expert_email` — captured when expert clicks **Save**
-
-**Supervisor fields (written only via supervisor token):**
-
-- `supervisor_decision`: `verified` \| `rejected` per claim
-- `supervisor_comment`: string (**required** for every row — verify and reject)
-- `supervisor_submitted_at`, `supervisor_full_name`, `supervisor_email` — captured when supervisor clicks **Save**
-
-**Aggregated report status** (session-level), e.g. extend `report_status`:
-
-- After Phase 6 pipeline: `generated` / `sent` / … as today
-- During reviews: e.g. `awaiting_expert`, `awaiting_supervisor`, `reviews_complete` — exact enum TBD in implementation but **must** include a state meaning “both reviewers have submitted” before HR/export outcomes run
-
-Idempotency: saving again with the same token after success returns **409** or a clear “already submitted” payload.
-
-### 0.3 API surface (voice engine or BFF)
-
-Illustrative paths (prefix `/api/v1`):
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/review/expert/{token}` | Load report + transcript + claims for SME surface |
-| `PUT` | `/review/expert/{token}` | Expert save: body includes `reviewer_full_name`, `reviewer_email`, and per-claim `expert_level` (and optional notes) |
-| `GET` | `/review/supervisor/{token}` | Load same read-only context + show expert-adjusted levels as read-only |
-| `PUT` | `/review/supervisor/{token}` | Supervisor save: body includes `reviewer_full_name`, `reviewer_email`, per-claim `supervisor_decision`, `supervisor_comment` |
-
-**Rule:** Implement persistence + validation server-side (honest capability separation — expert token cannot set supervisor fields and vice versa). Phase 7 frontend work is blocked until these endpoints exist.
+**Rule:** Expert token cannot write supervisor fields and vice versa (server-enforced). Phase 7 UI ships against those APIs.
 
 ---
 
@@ -221,7 +179,7 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 
 - **ADR-001:** No review business rules only in the browser — validation duplicated server-side.
 - **ADR-004:** Persistence via voice engine (or documented BFF) through existing ports.
-- **Phase 6 `Claim` model:** Extend in code + migration when adding expert/supervisor columns / JSON fields — coordinate MINOR version bump per repo versioning rules when schema changes.
+- **Phase 6 `Claim` model + JSONB:** Defined in Phase 6 §1.1 and persisted in `claims_json`; MINOR version bump when extending schema (Phase 6 prerequisites).
 
 ---
 
@@ -253,3 +211,4 @@ Scope unchanged: `/dashboard/*` full layout with table, filters, links to copy *
 |------|--------|
 | 2026-05-01 | Refine pass: `/dashboard` vs `/`, Phase 6 API notes |
 | 2026-05-01 | Dual-role review: expert vs supervisor URLs, modal-only UI from `frontend/public/admin.html`, final outcome when both complete, Phase 4–6 alignment |
+| 2026-05-01 | Point §0 to Phase 6 + Assessment Report Contract (dual tokens and PUT payloads fully specified upstream) |
