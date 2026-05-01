@@ -14,7 +14,7 @@ The user has specified: $ARGUMENTS
 
 ## Step 2: Check for existing implementation and revisions
 
-Before proceeding, check `docs/developement/implementated/` to see if:
+Before proceeding, check `docs/developement/implemented/` to see if:
 - An implementation document already exists for this phase (e.g., `PHASE-X-implementation-*.md`)
 - Any revision documents exist (e.g., `PHASE-X-Revision-Y-*.md`)
 
@@ -276,7 +276,7 @@ Using all the information gathered, create an implementation document with this 
 - ADRs: [Link each ADR in scope]
 ```
 
-Save this file to: `docs/development/implementated/v{MAJOR}.{MINOR}/PHASE-X-implementation-[kebab-case-title].md`
+Save this file to: `docs/development/implemented/v{MAJOR}.{MINOR}/PHASE-X-implementation-[kebab-case-title].md`
 
 Where:
 - X = phase number

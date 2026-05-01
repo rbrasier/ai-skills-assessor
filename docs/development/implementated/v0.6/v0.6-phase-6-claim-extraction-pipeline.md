@@ -13,6 +13,7 @@ To Be Implemented
 - Phase 2: Basic Voice Engine (produces call sessions)
 - Phase 4: Assessment Workflow (produces transcripts, stored in session metadata JSONB)
 - Phase 5: RAG Knowledge Base (implements IKnowledgeBase, ingests SFIA data, defines SkillDefinition)
+- **Optional extension (Phase 7 dual URLs):** [phase-6-revision-dual-review-tokens.md](phase-6-revision-dual-review-tokens.md) — apply after baseline Phase 6 or alongside Phase 7; baseline Phase 6 remains **single** `review_token`.
 
 ---
 

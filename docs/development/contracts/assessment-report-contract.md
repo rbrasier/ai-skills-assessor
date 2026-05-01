@@ -4,16 +4,18 @@
 Draft
 
 ## Date
-2026-04-16
+2026-05-01
 
 ## References
 - PRD-001: Voice-AI SFIA Skills Assessment Platform
-- Phase 4: Claim Extraction Pipeline
-- Phase 5: SME Review Portal
+- Phase 6: Claim Extraction Pipeline (report generation, dual review tokens)
+- Phase 7: Expert & Supervisor Review (Next.js modal surfaces)
 
 ## Purpose
 
 This document defines the shared data contracts between the Voice Engine (Python), the Next.js frontend (TypeScript), and the PostgreSQL database. These types are the single source of truth — both the TypeScript types in `packages/shared-types` and the Pydantic models in `apps/voice-engine` must conform to these schemas.
+
+**Human review model:** Two independent NanoID URLs — **expert** (endorse/adjust SFIA levels per claim) and **supervisor** (verify/reject claims register + comment per row). Final HR/export outcome is allowed only after **both** submissions succeed (see PRD-001 §4.4).
 
 ---
 
@@ -239,20 +241,36 @@ This document defines the shared data contracts between the Voice Engine (Python
       "type": "string",
       "description": "AI's reasoning for the mapping"
     },
+    "expert_level": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 7,
+      "description": "Expert-endorsed or adjusted SFIA level (null until expert saves)"
+    },
+    "supervisor_decision": {
+      "type": "string",
+      "enum": ["pending", "verified", "rejected"],
+      "default": "pending",
+      "description": "Supervisor disposition for this claims-register row"
+    },
+    "supervisor_comment": {
+      "type": ["string", "null"],
+      "description": "Supervisor comment — required for every row when supervisor submits (including verified)"
+    },
     "sme_status": {
       "type": "string",
       "enum": ["pending", "approved", "adjusted", "rejected"],
-      "default": "pending"
+      "description": "Deprecated — use expert_level + supervisor_decision. Retained for backward compatibility during migration."
     },
     "sme_adjusted_level": {
       "type": "integer",
       "minimum": 1,
       "maximum": 7,
-      "description": "SME-adjusted level (only if status is 'adjusted')"
+      "description": "Deprecated — use expert_level"
     },
     "sme_notes": {
       "type": "string",
-      "description": "SME reviewer notes"
+      "description": "Deprecated — use supervisor_comment where applicable"
     }
   }
 }
@@ -267,7 +285,7 @@ This document defines the shared data contracts between the Voice Engine (Python
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "AssessmentReport",
   "type": "object",
-  "required": ["id", "session_id", "review_token", "candidate_name", "skill_summaries", "total_claims", "overall_confidence", "generated_at", "status"],
+  "required": ["id", "session_id", "expert_review_token", "supervisor_review_token", "candidate_name", "skill_summaries", "total_claims", "overall_confidence", "generated_at", "status"],
   "properties": {
     "id": {
       "type": "string",
@@ -277,16 +295,38 @@ This document defines the shared data contracts between the Voice Engine (Python
       "type": "string",
       "format": "uuid"
     },
+    "expert_review_token": {
+      "type": "string",
+      "minLength": 21,
+      "maxLength": 21,
+      "description": "NanoID for expert/SME modal URL"
+    },
+    "supervisor_review_token": {
+      "type": "string",
+      "minLength": 21,
+      "maxLength": 21,
+      "description": "NanoID for supervisor modal URL"
+    },
+    "expert_review_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Full URL for expert review"
+    },
+    "supervisor_review_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Full URL for supervisor review"
+    },
     "review_token": {
       "type": "string",
       "minLength": 21,
       "maxLength": 21,
-      "description": "NanoID token for secure review access"
+      "description": "Deprecated — use expert_review_token + supervisor_review_token"
     },
     "review_url": {
       "type": "string",
       "format": "uri",
-      "description": "Full URL for SME review"
+      "description": "Deprecated"
     },
     "candidate_name": {
       "type": "string"
@@ -310,13 +350,52 @@ This document defines the shared data contracts between the Voice Engine (Python
       "type": "string",
       "format": "date-time"
     },
-    "sme_reviewed_at": {
+    "expert_submitted_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When expert PUT succeeded"
+    },
+    "expert_reviewer_full_name": {
+      "type": "string",
+      "description": "Declared at expert save"
+    },
+    "expert_reviewer_email": {
+      "type": "string",
+      "format": "email"
+    },
+    "supervisor_submitted_at": {
       "type": "string",
       "format": "date-time"
     },
+    "supervisor_reviewer_full_name": {
+      "type": "string"
+    },
+    "supervisor_reviewer_email": {
+      "type": "string",
+      "format": "email"
+    },
+    "reviews_completed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When both expert and supervisor submissions exist"
+    },
+    "sme_reviewed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Deprecated — use reviews_completed_at or role-specific timestamps"
+    },
     "status": {
       "type": "string",
-      "enum": ["generated", "sent", "in_review", "completed"]
+      "enum": [
+        "generated",
+        "sent",
+        "awaiting_expert",
+        "awaiting_supervisor",
+        "reviews_complete",
+        "in_review",
+        "completed"
+      ],
+      "description": "Workflow status — prefer awaiting_* / reviews_complete for Phase 7; in_review/completed retained for compatibility"
     },
     "expires_at": {
       "type": "string",
@@ -365,68 +444,128 @@ This document defines the shared data contracts between the Voice Engine (Python
 
 ---
 
-## 6. SME Review Actions
+## 6. Expert & Supervisor Review Actions
 
-### Claim Review Request
-
-```json
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ClaimReviewRequest",
-  "type": "object",
-  "required": ["status"],
-  "properties": {
-    "status": {
-      "type": "string",
-      "enum": ["approved", "adjusted", "rejected"]
-    },
-    "adjusted_level": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 7,
-      "description": "Required when status is 'adjusted'"
-    },
-    "notes": {
-      "type": "string",
-      "description": "Optional reviewer notes"
-    }
-  }
-}
-```
-
-### Final Review Submission Response
+### Expert review submission (`PUT /api/v1/review/expert/{token}`)
 
 ```json
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "FinalReviewResponse",
+  "title": "ExpertReviewSubmitPayload",
   "type": "object",
-  "required": ["session_id", "status", "reviewed_at"],
+  "required": ["reviewer_full_name", "reviewer_email", "claims"],
   "properties": {
-    "session_id": {
+    "reviewer_full_name": {
       "type": "string",
-      "format": "uuid"
+      "minLength": 1,
+      "description": "Expert declare-at-submit identity"
     },
-    "status": {
+    "reviewer_email": {
       "type": "string",
-      "enum": ["completed"]
+      "format": "email"
     },
-    "reviewed_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "summary": {
-      "type": "object",
-      "properties": {
-        "total_claims": {"type": "integer"},
-        "approved": {"type": "integer"},
-        "adjusted": {"type": "integer"},
-        "rejected": {"type": "integer"}
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "expert_level"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Claim id from claims_json"
+          },
+          "expert_level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7,
+            "description": "Endorsed or adjusted SFIA level for this row"
+          }
+        }
       }
     }
   }
 }
 ```
+
+### Supervisor review submission (`PUT /api/v1/review/supervisor/{token}`)
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SupervisorReviewSubmitPayload",
+  "type": "object",
+  "required": ["reviewer_full_name", "reviewer_email", "claims"],
+  "properties": {
+    "reviewer_full_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reviewer_email": {
+      "type": "string",
+      "format": "email"
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "supervisor_decision", "supervisor_comment"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "supervisor_decision": {
+            "type": "string",
+            "enum": ["verified", "rejected"]
+          },
+          "supervisor_comment": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Required for every row (verified and rejected)"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Review save response (either role)
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReviewSaveResponse",
+  "type": "object",
+  "required": ["session_id", "report_status"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "report_status": {
+      "type": "string",
+      "description": "Updated workflow status e.g. awaiting_supervisor | reviews_complete"
+    },
+    "reviews_completed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Populated when both roles have submitted"
+    },
+    "claims": {
+      "type": "array",
+      "description": "Optional echo of updated claims_json rows"
+    }
+  }
+}
+```
+
+### Deprecated: single-role claim PATCH
+
+The previous `ClaimReviewRequest` + `PATCH /review/{token}/claims/{id}` model is **deprecated** in favour of the expert/supervisor `PUT` payloads above.
 
 ---
 
@@ -458,7 +597,19 @@ export type SessionStatus =
 
 export type ClaimSMEStatus = "pending" | "approved" | "adjusted" | "rejected";
 
-export type ReportStatus = "generated" | "sent" | "in_review" | "completed";
+/** @deprecated Prefer expert_level + supervisor_decision */
+export type ClaimSMEStatusLegacy = ClaimSMEStatus;
+
+export type SupervisorDecisionRow = "pending" | "verified" | "rejected";
+
+export type ReportStatus =
+  | "generated"
+  | "sent"
+  | "awaiting_expert"
+  | "awaiting_supervisor"
+  | "reviews_complete"
+  | "in_review"
+  | "completed";
 
 export interface TranscriptSegment {
   speaker: "candidate" | "bot";
@@ -485,8 +636,14 @@ export interface Claim {
   sfia_level: number;
   confidence: number;
   reasoning: string;
-  sme_status: ClaimSMEStatus;
+  expert_level?: number | null;
+  supervisor_decision: SupervisorDecisionRow;
+  supervisor_comment?: string | null;
+  /** @deprecated */
+  sme_status?: ClaimSMEStatus;
+  /** @deprecated */
   sme_adjusted_level?: number;
+  /** @deprecated */
   sme_notes?: string;
 }
 
@@ -502,34 +659,53 @@ export interface SkillSummary {
 export interface AssessmentReport {
   id: string;
   session_id: string;
-  review_token: string;
-  review_url: string;
+  expert_review_token: string;
+  supervisor_review_token: string;
+  expert_review_url: string;
+  supervisor_review_url: string;
+  /** @deprecated */
+  review_token?: string;
+  /** @deprecated */
+  review_url?: string;
   candidate_name: string;
   skill_summaries: SkillSummary[];
   total_claims: number;
   overall_confidence: number;
   generated_at: string;
+  expert_submitted_at?: string;
+  expert_reviewer_full_name?: string;
+  expert_reviewer_email?: string;
+  supervisor_submitted_at?: string;
+  supervisor_reviewer_full_name?: string;
+  supervisor_reviewer_email?: string;
+  reviews_completed_at?: string;
+  /** @deprecated */
   sme_reviewed_at?: string;
   status: ReportStatus;
   expires_at: string;
 }
 
-export interface ClaimReviewRequest {
-  status: "approved" | "adjusted" | "rejected";
-  adjusted_level?: number;
-  notes?: string;
+export interface ExpertReviewSubmitPayload {
+  reviewer_full_name: string;
+  reviewer_email: string;
+  claims: Array<{ id: string; expert_level: number }>;
 }
 
-export interface FinalReviewResponse {
+export interface SupervisorReviewSubmitPayload {
+  reviewer_full_name: string;
+  reviewer_email: string;
+  claims: Array<{
+    id: string;
+    supervisor_decision: "verified" | "rejected";
+    supervisor_comment: string;
+  }>;
+}
+
+export interface ReviewSaveResponse {
   session_id: string;
-  status: "completed";
-  reviewed_at: string;
-  summary: {
-    total_claims: number;
-    approved: number;
-    adjusted: number;
-    rejected: number;
-  };
+  report_status: ReportStatus;
+  reviews_completed_at?: string;
+  claims?: Claim[];
 }
 ```
 
@@ -541,11 +717,14 @@ export interface FinalReviewResponse {
 |--------|------|---------|----------|------|
 | `POST` | `/api/v1/assessment/trigger` | `AssessmentTriggerRequest` | `AssessmentTriggerResponse` | API Key |
 | `GET` | `/api/v1/assessment/{session_id}/status` | — | `AssessmentSession` | API Key |
-| `POST` | `/api/v1/assessment/{session_id}/process` | — | `{ review_url, total_claims, ... }` | API Key |
+| `POST` | `/api/v1/assessment/{session_id}/process` | — | `{ expert_review_url, supervisor_review_url, total_claims, ... }` | API Key |
 | `GET` | `/api/v1/assessment/{session_id}/report` | — | `AssessmentReport` | API Key |
-| `GET` | `/api/v1/review/{token}` | — | `AssessmentReport` | Token (public) |
-| `PATCH` | `/api/v1/review/{token}/claims/{claim_id}` | `ClaimReviewRequest` | `Claim` (updated) | Token (public) |
-| `POST` | `/api/v1/review/{token}/submit` | — | `FinalReviewResponse` | Token (public) |
+| `GET` | `/api/v1/review/expert/{token}` | — | `AssessmentReport` (+ transcript fields per implementation) | Token (public) |
+| `PUT` | `/api/v1/review/expert/{token}` | `ExpertReviewSubmitPayload` | `ReviewSaveResponse` | Token (public) |
+| `GET` | `/api/v1/review/supervisor/{token}` | — | `AssessmentReport` (+ transcript) | Token (public) |
+| `PUT` | `/api/v1/review/supervisor/{token}` | `SupervisorReviewSubmitPayload` | `ReviewSaveResponse` | Token (public) |
+
+Duplicate submit for the same role → **409 Conflict** (recommended).
 
 ---
 
