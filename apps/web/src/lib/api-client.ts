@@ -1,9 +1,15 @@
 import type {
+  AdminSessionSummary,
+  AdminStats,
+  AssessmentReport,
   AssessmentTriggerRequest,
   AssessmentTriggerResponse,
   CallStatusResponse,
   CandidateResponse,
+  ExpertReviewPayload,
+  ReviewSaveResponse,
   SessionSummary,
+  SupervisorReviewPayload,
   TriggerCallResponse,
 } from "@ai-skills-assessor/shared-types";
 
@@ -85,6 +91,65 @@ export async function listSessions(query: ListSessionsQuery = {}): Promise<Sessi
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`Admin list failed (${response.status})`);
   return (await response.json()) as SessionSummary[];
+}
+
+// ─── Phase 7: Review portal ──────────────────────────────────────────
+
+export async function fetchExpertReport(token: string): Promise<AssessmentReport> {
+  const res = await fetch(`/api/review/expert/${token}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Expert report fetch failed (${res.status})`);
+  return (await res.json()) as AssessmentReport;
+}
+
+export async function submitExpertReview(
+  token: string,
+  payload: ExpertReviewPayload,
+): Promise<ReviewSaveResponse> {
+  const res = await fetch(`/api/review/expert/${token}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Expert submit failed (${res.status})`);
+  return (await res.json()) as ReviewSaveResponse;
+}
+
+export async function fetchSupervisorReport(token: string): Promise<AssessmentReport> {
+  const res = await fetch(`/api/review/supervisor/${token}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Supervisor report fetch failed (${res.status})`);
+  return (await res.json()) as AssessmentReport;
+}
+
+export async function submitSupervisorReview(
+  token: string,
+  payload: SupervisorReviewPayload,
+): Promise<ReviewSaveResponse> {
+  const res = await fetch(`/api/review/supervisor/${token}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Supervisor submit failed (${res.status})`);
+  return (await res.json()) as ReviewSaveResponse;
+}
+
+export async function listEnrichedSessions(
+  query: { search?: string; limit?: number; offset?: number } = {},
+): Promise<AdminSessionSummary[]> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== null && v !== "") params.set(k, String(v));
+  }
+  const url = `/api/admin/sessions/enriched${params.size ? `?${params}` : ""}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Enriched sessions failed (${res.status})`);
+  return (await res.json()) as AdminSessionSummary[];
+}
+
+export async function fetchAdminStats(): Promise<AdminStats> {
+  const res = await fetch("/api/admin/stats", { cache: "no-store" });
+  if (!res.ok) throw new Error(`Stats failed (${res.status})`);
+  return (await res.json()) as AdminStats;
 }
 
 /**

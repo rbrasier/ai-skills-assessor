@@ -322,6 +322,81 @@ class InMemoryPersistence(IPersistence):
                 "claims": updated_claims,
             }
 
+    # ─── Phase 7: Enriched admin listing ────────────────────────────
+
+    async def list_admin_session_summaries(
+        self,
+        status: str | None = None,
+        candidate_email: str | None = None,
+        search: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            sessions = list(self._sessions.values())
+
+        if status is not None:
+            sessions = [s for s in sessions if (
+                s.status.value if isinstance(s.status, AssessmentStatus) else s.status
+            ) == status]
+        if candidate_email is not None:
+            sessions = [s for s in sessions if s.candidate_id == candidate_email]
+        if search is not None:
+            q = search.lower()
+            sessions = [s for s in sessions if (
+                q in s.candidate_id.lower()
+                or (s.candidate_name and q in s.candidate_name.lower())
+            )]
+        if created_after is not None:
+            sessions = [s for s in sessions if s.created_at and s.created_at >= created_after]
+        if created_before is not None:
+            sessions = [s for s in sessions if s.created_at and s.created_at <= created_before]
+
+        sessions = sorted(sessions, key=lambda s: s.created_at or datetime.min, reverse=True)
+        page = sessions[offset: offset + limit]
+
+        summaries = []
+        for s in page:
+            report = self._reports.get(s.id, {})
+            claims = report.get("claims_json") or []
+            max_level: int | None = None
+            top_codes: list[str] = []
+            if claims:
+                levels = [c.get("level") for c in claims if c.get("level")]
+                if levels:
+                    max_level = max(levels)
+                seen: dict[str, int] = {}
+                for c in claims:
+                    code = c.get("skill_code") or c.get("skillCode")
+                    if code:
+                        seen[code] = seen.get(code, 0) + 1
+                top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
+
+            duration = 0.0
+            if s.started_at and s.ended_at:
+                duration = (s.ended_at - s.started_at).total_seconds()
+
+            summaries.append({
+                "session_id": s.id,
+                "candidate_email": s.candidate_id,
+                "phone_number": s.phone_number or "",
+                "status": s.status.value if isinstance(s.status, AssessmentStatus) else s.status,
+                "duration_seconds": duration,
+                "created_at": s.created_at.isoformat() if s.created_at else "",
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+                "candidate_name": s.candidate_name,
+                "report_status": report.get("report_status"),
+                "expert_review_token": report.get("expert_review_token"),
+                "supervisor_review_token": report.get("supervisor_review_token"),
+                "max_sfia_level": max_level,
+                "overall_confidence": report.get("overall_confidence"),
+                "top_skill_codes": top_codes,
+            })
+        return summaries
+
     # ─── Metadata ────────────────────────────────────────────────────
 
     async def merge_session_metadata(

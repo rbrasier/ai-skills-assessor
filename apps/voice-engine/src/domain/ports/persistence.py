@@ -194,6 +194,28 @@ class IPersistence(ABC):
         """
         ...
 
+    # ─── Phase 7: Enriched admin listing ────────────────────────────
+
+    @abstractmethod
+    async def list_admin_session_summaries(
+        self,
+        status: str | None = None,
+        candidate_email: str | None = None,
+        search: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Return enriched session summaries for the admin dashboard.
+
+        Each dict includes basic session fields plus report-level fields
+        derived from claims_json (max_sfia_level, overall_confidence,
+        top_skill_codes) and session columns (candidate_name, report_status,
+        expert_review_token, supervisor_review_token).
+        """
+        ...
+
     # ─── Metadata ────────────────────────────────────────────────────
 
     @abstractmethod

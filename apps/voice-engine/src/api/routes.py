@@ -33,7 +33,7 @@ from src.domain.services.call_manager import (
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
 
-_VOICE_ENGINE_VERSION = "0.6.0"
+_VOICE_ENGINE_VERSION = "0.7.0"
 
 router = APIRouter()
 
@@ -286,6 +286,150 @@ async def list_admin_sessions(
         offset=offset,
     )
     return [SessionSummaryPayload(**s) for s in summaries]
+
+
+class EnrichedSessionSummaryPayload(BaseModel):
+    session_id: str
+    candidate_email: str
+    phone_number: str
+    status: str
+    duration_seconds: float
+    created_at: str
+    started_at: str | None = None
+    ended_at: str | None = None
+    candidate_name: str | None = None
+    report_status: str | None = None
+    expert_review_token: str | None = None
+    supervisor_review_token: str | None = None
+    max_sfia_level: int | None = None
+    overall_confidence: float | None = None
+    top_skill_codes: list[str] = []
+
+
+class AdminStatsPayload(BaseModel):
+    total_calls: int
+    avg_duration_minutes: float
+    completion_rate_pct: float
+    awaiting_review_count: int
+    avg_sfia_level: float
+    calls_per_day: list[dict[str, Any]] = []
+    outcome_buckets: list[dict[str, Any]] = []
+
+
+@router.get(
+    "/api/v1/admin/sessions/enriched",
+    response_model=list[EnrichedSessionSummaryPayload],
+    tags=["admin"],
+)
+async def list_admin_sessions_enriched(
+    request: Request,
+    status_: str | None = Query(default=None, alias="status"),
+    email: str | None = None,
+    search: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[EnrichedSessionSummaryPayload]:
+    """Enriched admin session list including report status, SFIA level, skill codes."""
+    persistence = _persistence(request)
+
+    def _parse(ts: str | None) -> datetime | None:
+        if ts is None or not ts.strip():
+            return None
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="`since`/`until` must be ISO-8601 timestamps",
+            ) from exc
+
+    summaries = await persistence.list_admin_session_summaries(
+        status=status_,
+        candidate_email=email,
+        search=search,
+        created_after=_parse(since),
+        created_before=_parse(until),
+        limit=limit,
+        offset=offset,
+    )
+    return [EnrichedSessionSummaryPayload(**s) for s in summaries]
+
+
+@router.get(
+    "/api/v1/admin/stats",
+    response_model=AdminStatsPayload,
+    tags=["admin"],
+)
+async def get_admin_stats(request: Request) -> AdminStatsPayload:
+    """Aggregate stats for the admin dashboard: counts, charts, averages."""
+    import collections
+    from datetime import timedelta
+
+    persistence = _persistence(request)
+    summaries = await persistence.list_admin_session_summaries(limit=200, offset=0)
+
+    total = len(summaries)
+    completed = [s for s in summaries if s["status"] in ("completed", "processed")]
+    completion_rate = round(len(completed) / total * 100, 1) if total else 0.0
+
+    durations = [s["duration_seconds"] for s in summaries if s["duration_seconds"] > 0]
+    avg_dur = round(sum(durations) / len(durations) / 60, 1) if durations else 0.0
+
+    awaiting = [
+        s for s in summaries
+        if s.get("report_status") in ("awaiting_expert", "awaiting_supervisor", "in_review")
+    ]
+
+    levels = [s["max_sfia_level"] for s in summaries if s.get("max_sfia_level")]
+    avg_level = round(sum(levels) / len(levels), 1) if levels else 0.0
+
+    # Calls per day (last 30 days)
+    day_counts: dict[str, int] = collections.defaultdict(int)
+    today = datetime.now(tz=None).date()
+    for s in summaries:
+        if s["created_at"]:
+            try:
+                d = datetime.fromisoformat(s["created_at"].replace("Z", "")).date()
+                if d >= today - timedelta(days=30):
+                    day_counts[d.isoformat()] += 1
+            except ValueError:
+                pass
+    calls_per_day = [
+        {"date": k, "count": v}
+        for k, v in sorted(day_counts.items())
+    ]
+
+    # Outcome buckets
+    status_counts: dict[str, int] = collections.defaultdict(int)
+    for s in summaries:
+        rs = s.get("report_status") or s["status"]
+        status_counts[rs] += 1
+
+    outcome_map = {
+        "reviews_complete": ("Reviews complete", "var(--ok)"),
+        "completed": ("Completed", "var(--ok)"),
+        "awaiting_expert": ("Awaiting expert", "var(--warn)"),
+        "awaiting_supervisor": ("Awaiting supervisor", "var(--warn)"),
+        "in_review": ("In review", "var(--accent)"),
+        "failed": ("Failed / incomplete", "var(--danger)"),
+        "cancelled": ("Cancelled", "var(--ink-4)"),
+    }
+    outcome_buckets = []
+    for key, (label, color) in outcome_map.items():
+        if status_counts.get(key, 0) > 0:
+            outcome_buckets.append({"label": label, "count": status_counts[key], "color": color})
+
+    return AdminStatsPayload(
+        total_calls=total,
+        avg_duration_minutes=avg_dur,
+        completion_rate_pct=completion_rate,
+        awaiting_review_count=len(awaiting),
+        avg_sfia_level=avg_level,
+        calls_per_day=calls_per_day,
+        outcome_buckets=outcome_buckets,
+    )
 
 
 # ─── Phase 6: Post-call pipeline & report retrieval ─────────────
