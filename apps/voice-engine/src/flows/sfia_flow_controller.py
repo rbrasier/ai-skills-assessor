@@ -342,7 +342,11 @@ class SfiaFlowController:
                         "these challenges as the candidate demonstrates higher-level "
                         "thinking (architecture, strategy, cross-team influence). "
                         "When sufficient evidence is gathered across all skill areas, "
-                        "call evidence_complete."
+                        "call evidence_complete.\n\n"
+                        "If the interview cannot continue — for example, the candidate "
+                        "is clearly fabricating and has been confronted, is uncooperative, "
+                        "or the conversation has broken down irreparably — call "
+                        "call_ended immediately to end the session."
                     ),
                 }
             ],
@@ -356,6 +360,18 @@ class SfiaFlowController:
                     properties={},
                     required=[],
                     handler=self.handle_evidence_complete,
+                ),
+                FlowsFunctionSchema(
+                    name="call_ended",
+                    description=(
+                        "Emergency exit: the interview cannot continue. Use when the "
+                        "candidate is clearly fabricating and has been confronted, is "
+                        "uncooperative, abusive, or the conversation has broken down "
+                        "irreparably. End the session immediately."
+                    ),
+                    properties={},
+                    required=[],
+                    handler=self.handle_end_call,
                 ),
             ],
         }
@@ -396,17 +412,23 @@ class SfiaFlowController:
                 {
                     "role": "user",
                     "content": (
-                        "Thank the candidate warmly and say goodbye professionally. "
-                        "Mention that the next step is SME review and they will receive "
-                        "feedback within a few business days. "
-                        "Once you have said goodbye, call call_ended to end the session."
+                        "Deliver a single warm goodbye to the candidate. Mention that "
+                        "the next step is SME review and they will receive feedback "
+                        "within a few business days. "
+                        "Immediately after your goodbye message — on that same turn or "
+                        "the very next one — call call_ended. "
+                        "Do NOT continue the conversation. If the candidate says anything "
+                        "further, call call_ended without responding to them."
                     ),
                 }
             ],
             "functions": [
                 FlowsFunctionSchema(
                     name="call_ended",
-                    description="Goodbye has been said. End the call session now.",
+                    description=(
+                        "End the call session now. Call this immediately after delivering "
+                        "the goodbye — do not wait for the candidate to respond."
+                    ),
                     properties={},
                     required=[],
                     handler=self.handle_end_call,
