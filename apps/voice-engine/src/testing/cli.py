@@ -37,6 +37,14 @@ _HONESTY_DESCRIPTIONS = [
     ("9–10", "Accurate    — fully honest and specific"),
 ]
 
+_ARTICULATION_DESCRIPTIONS = [
+    ("1–2",  "Very poor   — lots of um/uh, rambling, sentences trail off"),
+    ("3–4",  "Below avg   — frequent fillers, loosely organised"),
+    ("5–6",  "Average     — occasional fillers, gets to the point eventually"),
+    ("7–8",  "Good        — clear and structured, rare fillers"),
+    ("9–10", "Polished    — articulate, precise, well-structured"),
+]
+
 # Grouped by category for the skills prompt
 _SKILL_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Development & Implementation", [
@@ -172,7 +180,7 @@ def _model_label(model_id: str) -> str:
     return model_id
 
 
-def _collect_inputs() -> tuple[str, int, int, str, list[str]]:
+def _collect_inputs() -> tuple[str, int, int, int, str, list[str]]:
     print(f"\n{_hr('═')}")
     print("  AI Mock Interview Test")
     print(_hr("═"))
@@ -200,17 +208,25 @@ def _collect_inputs() -> tuple[str, int, int, str, list[str]]:
         hi=10,
     )
 
+    articulation = _prompt_int(
+        "Articulation  (how fluently the candidate speaks — 1=very inarticulate, 10=polished)",
+        dict(_ARTICULATION_DESCRIPTIONS),
+        lo=1,
+        hi=10,
+    )
+
     model = _prompt_model()
 
     target_skills = _prompt_skills()
 
-    return role, sfia_level, honesty, model, target_skills
+    return role, sfia_level, honesty, articulation, model, target_skills
 
 
 async def _run(
     role: str,
     sfia_level: int,
     honesty: int,
+    articulation: int,
     model: str,
     target_skills: list[str],
     output_dir: str,
@@ -228,6 +244,7 @@ async def _run(
         role=role,
         sfia_level=sfia_level,
         honesty=honesty,
+        articulation=articulation,
         target_skills=target_skills,
         model=model,
     )
@@ -243,6 +260,7 @@ async def _run(
     print(f"  Role           : {persona.role}")
     print(f"  SFIA level     : {persona.sfia_level}  —  {level_label}")
     print(f"  Honesty        : {persona.honesty}/10")
+    print(f"  Articulation   : {persona.articulation}/10")
     print(f"  Intelligence   : {_model_label(model)} ({model})")
     print(f"  Target skills  : {skills_display}")
     print(_hr())
@@ -292,7 +310,7 @@ async def _run(
     print(f"  Mean confidence  : {score_result.mean_confidence:.2f}")
 
     if score_result.per_skill:
-        print(f"\n  Per-skill breakdown:")
+        print(f"\n  Per-skill breakdown  (from claims):")
         for s in score_result.per_skill:
             tag = " ✓" if s.skill_code in target_skills else ""
             print(
@@ -302,6 +320,19 @@ async def _run(
                 f"conf={s.mean_confidence:.2f}  "
                 f"({s.claim_count} claim{'s' if s.claim_count != 1 else ''}){tag}"
             )
+        print("         ✓ = targeted skill")
+
+    if score_result.holistic_profiles:
+        print(f"\n  Holistic skill profile  (full-transcript view, top {len(score_result.holistic_profiles)}):")
+        for h in score_result.holistic_profiles:
+            tag = " ✓" if h.skill_code in target_skills else ""
+            bar = "█" * round(h.prominence * 10)
+            print(
+                f"    {h.skill_code:6}  {h.skill_name[:28]:28}  "
+                f"level={h.estimated_level}  "
+                f"prominence={h.prominence:.2f} {bar}{tag}"
+            )
+            print(f"           {h.evidence_summary[:80]}")
         print("         ✓ = targeted skill")
 
     print(f"\n  Output: {out_path}")
@@ -319,7 +350,7 @@ def main() -> None:
     _setup_logging(verbose)
 
     try:
-        role, sfia_level, honesty, model, target_skills = _collect_inputs()
+        role, sfia_level, honesty, articulation, model, target_skills = _collect_inputs()
     except (KeyboardInterrupt, EOFError):
         print("\n\nCancelled.")
         sys.exit(0)
@@ -335,7 +366,7 @@ def main() -> None:
         print("Cancelled.")
         sys.exit(0)
 
-    asyncio.run(_run(role, sfia_level, honesty, model, target_skills, output_dir))
+    asyncio.run(_run(role, sfia_level, honesty, articulation, model, target_skills, output_dir))
 
 
 if __name__ == "__main__":

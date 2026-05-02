@@ -21,9 +21,11 @@ class ClaimExtractor:
         self,
         llm_provider: IClaimLLMProvider,
         knowledge_base: IKnowledgeBase,
+        max_holistic_skills: int = 6,
     ) -> None:
         self.llm = llm_provider
         self.kb = knowledge_base
+        self.max_holistic_skills = max_holistic_skills
 
     async def process_transcript(
         self,
@@ -58,15 +60,29 @@ class ClaimExtractor:
                     session_id,
                 )
 
+        holistic = []
+        try:
+            holistic = await self.llm.analyse_transcript_holistically(
+                transcript_text,
+                max_skills=self.max_holistic_skills,
+            )
+        except Exception:
+            logger.exception(
+                "ClaimExtractor: holistic analysis failed for session %s — skipping",
+                session_id,
+            )
+
         logger.info(
-            "ClaimExtractor: extracted %d claims for session %s",
+            "ClaimExtractor: extracted %d claims, %d holistic profiles for session %s",
             len(enriched),
+            len(holistic),
             session_id,
         )
         return ClaimExtractionResult(
             session_id=session_id,
             claims=enriched,
             total_claims=len(enriched),
+            holistic_assessment=holistic,
         )
 
     def _format_transcript(self, transcript_json: dict) -> str:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from src.domain.models.claim import Claim
+from src.domain.models.claim import Claim, HolisticSkillProfile
 from src.domain.ports.knowledge_base import SkillDefinition
 
 
@@ -43,6 +43,27 @@ class IClaimLLMProvider(ABC):
         Returns:
             Enriched Claim with sfia_skill_code, sfia_skill_name, sfia_level,
             confidence, and reasoning filled in.
+        """
+        ...
+
+    @abstractmethod
+    async def analyse_transcript_holistically(
+        self,
+        transcript_text: str,
+        max_skills: int = 6,
+    ) -> list[HolisticSkillProfile]:
+        """Identify the most prominent skills in the transcript as a whole.
+
+        Looks beyond individual claims to synthesise the overall skill profile —
+        which areas dominated the conversation, at what apparent level, and with
+        what depth of evidence.
+
+        Args:
+            transcript_text: Transcript formatted as "[MM:SS] SPEAKER: text" lines.
+            max_skills: Maximum number of skill profiles to return (default 6).
+
+        Returns:
+            Up to max_skills HolisticSkillProfile objects, ordered by prominence.
         """
         ...
 
