@@ -55,7 +55,7 @@ class CandidatePersona:
     role: str
     sfia_level: int
     honesty: int
-    model: str = "claude-haiku-4-5-20251001"
+    model: str = "claude-haiku-4-5-20251001"  # latest Haiku; not user-configurable
 
     def __post_init__(self) -> None:
         if not 1 <= self.sfia_level <= 7:

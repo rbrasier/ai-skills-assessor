@@ -2,13 +2,15 @@
 # Run an AI mock SFIA skills assessment interview.
 #
 # Usage:
-#   ./scripts/mock-interview.sh --role "Senior Software Engineer" --sfia-level 5
-#   ./scripts/mock-interview.sh --role "Junior dev" --sfia-level 2 --honesty 2 --model claude-haiku-4-5-20251001
+#   ./scripts/mock-interview.sh
+#
+# You will be prompted for:
+#   - Candidate role / context
+#   - SFIA level (1–7)
+#   - Honesty scale (1–10)
 #
 # Required environment variable:
 #   ANTHROPIC_API_KEY
-#
-# All other arguments are passed through to src.testing.cli.
 
 set -euo pipefail
 

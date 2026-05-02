@@ -273,21 +273,22 @@ class ScoreResult:
 
 **File:** `apps/voice-engine/src/testing/cli.py`
 
-**Goal:** Argparse-based entry point that reads CLI flags, runs the mock interview, and writes results to a JSON file.
+**Goal:** Interactive prompt-based entry point. The user is guided through three labelled prompts with descriptions and options displayed. No command-line flags required for the main inputs.
 
-**Arguments:**
+**Models are not user-configurable** — the CLI uses the latest available models automatically:
+- Candidate bot: `claude-haiku-4-5-20251001` (fast, many turns)
+- Noa (interviewer): `claude-sonnet-4-6`
+- Post-call claim extraction: `claude-sonnet-4-6`
 
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--role` | str | required | Candidate's job title/context |
-| `--sfia-level` | int 1–7 | required | Candidate's genuine SFIA level |
-| `--honesty` | int 1–10 | `8` | Honesty scale |
-| `--model` | str | `claude-haiku-4-5-20251001` | Candidate bot model |
-| `--noa-model` | str | same as `--model` | Interviewer model (Noa) |
-| `--post-call-model` | str | `claude-sonnet-4-6` | Claim extraction model |
-| `--max-turns` | int | `40` | Safety cap on conversation turns |
-| `--output-dir` | path | `./mock-results` | Directory for output JSON |
-| `--seed` | int | none | Optional random seed for reproducibility |
+**Interactive prompts:**
+
+1. **Candidate role** — free-text description with example shown
+2. **SFIA Responsibility Level** — numbered list (1–7) with one-line description for each level
+3. **Honesty** — banded display (1–2 / 3–5 / 6–8 / 9–10) with behaviour description for each band
+
+**Optional flags** (for scripting only):
+- `--output-dir` — directory for output JSON (default: `./mock-results`)
+- `--verbose` — enable debug logging
 
 **Output file** (`mock-interview-{timestamp}.json`):
 ```json
@@ -339,20 +340,39 @@ source .venv/bin/activate 2>/dev/null || true
 python -m src.testing.cli "$@"
 ```
 
-**Example usage:**
-```bash
-./scripts/mock-interview.sh \
-  --role "Senior Software Engineer, 8 years experience in fintech" \
-  --sfia-level 5 \
-  --honesty 8 \
-  --model claude-haiku-4-5-20251001
+**Example session:**
+```
+$ ./scripts/mock-interview.sh
 
-./scripts/mock-interview.sh \
-  --role "Junior developer, 1 year experience" \
-  --sfia-level 2 \
-  --honesty 2 \
-  --model claude-haiku-4-5-20251001 \
-  --noa-model claude-sonnet-4-6
+══════════════════════════════════════════════════════════
+  AI Mock Interview Test
+══════════════════════════════════════════════════════════
+  Simulates a full SFIA skills assessment interview.
+  ...
+
+Candidate role
+  Describe the candidate's job title and context.
+  e.g. "Senior Software Engineer at a fintech startup, 8 years experience"
+> Senior cloud engineer, infrastructure team lead
+
+SFIA Responsibility Level  (candidate's genuine capability)
+  1  Follow            — performs routine tasks under close supervision
+  2  Assist            — supports others, works under direction
+  ...
+  5  Ensure/Advise     — accountable for outcomes, advises teams, sets standards
+  ...
+
+  Enter 1–7: 5
+
+Honesty  (how truthfully the candidate represents their level)
+  1–2  Fabricate   — invents projects/outcomes, claims 2–3 levels above reality
+  3–5  Exaggerate  — claims others' work, overstates impact
+  6–8  Truthful    — mostly honest with minor embellishment
+  9–10 Accurate    — fully honest and specific
+
+  Enter 1–10: 8
+
+  Ready to run with the above settings? (y/n) y
 ```
 
 ---
