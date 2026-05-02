@@ -20,7 +20,7 @@ from src.domain.services.claim_extractor import ClaimExtractor
 from src.domain.services.post_call_pipeline import PostCallPipeline
 from src.domain.services.report_generator import ReportGenerator
 from src.domain.services.transcript_recorder import TranscriptRecorder
-from src.flows.sfia_flow_controller import SfiaFlowController, _FALLBACK_SYSTEM_PROMPT
+from src.flows.sfia_flow_controller import _FALLBACK_SYSTEM_PROMPT, SfiaFlowController
 from src.testing.candidate_bot import CandidateBot, CandidatePersona
 from src.testing.mock_flow_driver import MockFlowDriver, StubKnowledgeBase
 

@@ -114,9 +114,9 @@ def _prompt_model() -> str:
     from src.testing.candidate_bot import CANDIDATE_MODELS
 
     print("\nCandidate intelligence  (affects how articulate and convincing the candidate is)")
-    print(f"  1  Haiku   — straightforward, concise answers")
-    print(f"  2  Sonnet  — articulate, well-structured responses")
-    print(f"  3  Opus    — sophisticated, nuanced, highly convincing")
+    print("  1  Haiku   — straightforward, concise answers")
+    print("  2  Sonnet  — articulate, well-structured responses")
+    print("  3  Opus    — sophisticated, nuanced, highly convincing")
     while True:
         raw = input("\n  Enter 1–3: ").strip()
         if raw == "1":
@@ -310,7 +310,7 @@ async def _run(
     print(f"  Mean confidence  : {score_result.mean_confidence:.2f}")
 
     if score_result.per_skill:
-        print(f"\n  Per-skill breakdown  (from claims):")
+        print("\n  Per-skill breakdown  (from claims):")
         for s in score_result.per_skill:
             tag = " ✓" if s.skill_code in target_skills else ""
             print(
@@ -355,7 +355,7 @@ def main() -> None:
         print("\n\nCancelled.")
         sys.exit(0)
 
-    print(f"\n  Ready to run? (y/n) ", end="")
+    print("\n  Ready to run? (y/n) ", end="")
     try:
         confirm = input().strip().lower()
     except (KeyboardInterrupt, EOFError):
