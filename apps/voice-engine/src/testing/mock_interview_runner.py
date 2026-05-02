@@ -43,6 +43,7 @@ async def run_mock_interview(
     noa_model: str | None = None,
     post_call_model: str = "claude-sonnet-4-6",
     max_turns: int = 40,
+    print_dialog: bool = False,
 ) -> MockInterviewResult:
     """Run a complete mock interview and return the result.
 
@@ -88,6 +89,7 @@ async def run_mock_interview(
         candidate_bot=candidate_bot,
         api_key=api_key,
         max_turns=max_turns,
+        print_dialog=print_dialog,
     )
 
     start = time.monotonic()

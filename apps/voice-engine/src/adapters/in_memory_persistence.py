@@ -179,12 +179,14 @@ class InMemoryPersistence(IPersistence):
         supervisor_review_token: str,
         overall_confidence: float,
         expires_at: datetime,
+        holistic_assessment: list[dict[str, Any]] | None = None,
     ) -> None:
         async with self._lock:
             now = datetime.now(UTC)
             report = {
                 "session_id": session_id,
                 "claims_json": claims,
+                "holistic_assessment_json": holistic_assessment or [],
                 "expert_review_token": expert_review_token,
                 "supervisor_review_token": supervisor_review_token,
                 # Deprecated compat field

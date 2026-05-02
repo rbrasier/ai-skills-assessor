@@ -124,12 +124,13 @@ class IPersistence(ABC):
         supervisor_review_token: str,
         overall_confidence: float,
         expires_at: datetime,
+        holistic_assessment: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Write claims_json and dual review tokens to assessment_sessions.
+        """Write claims_json, holistic_assessment_json, and dual review tokens.
 
-        Sets: claims_json, expert_review_token, supervisor_review_token,
-        overall_confidence, report_status='awaiting_expert',
-        report_generated_at=now(), expires_at.
+        Sets: claims_json, holistic_assessment_json, expert_review_token,
+        supervisor_review_token, overall_confidence,
+        report_status='awaiting_expert', report_generated_at=now(), expires_at.
         Also dual-writes review_token=expert_review_token for compat.
         """
         ...

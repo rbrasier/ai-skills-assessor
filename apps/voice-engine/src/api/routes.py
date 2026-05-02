@@ -452,6 +452,7 @@ class AssessmentReportPayload(BaseModel):
     overall_confidence: float | None = None
     report_status: str | None = None
     claims_json: list[Any] = []
+    holistic_assessment_json: list[Any] = []
     report_generated_at: str | None = None
     expires_at: str | None = None
     expert_submitted_at: str | None = None

@@ -62,7 +62,8 @@ model AssessmentSession {
   // Phase 6: claim extraction pipeline columns
   candidateName      String?   @db.VarChar(255) @map("candidate_name")
   transcriptJson     Json?     @map("transcript_json")
-  claimsJson         Json?     @map("claims_json")
+  claimsJson              Json?     @map("claims_json")
+  holisticAssessmentJson  Json?     @map("holistic_assessment_json")
   // Dual review tokens (phase-6-revision-dual-review-tokens)
   expertReviewToken       String?   @unique @db.VarChar(21) @map("expert_review_token")
   supervisorReviewToken   String?   @unique @db.VarChar(21) @map("supervisor_review_token")

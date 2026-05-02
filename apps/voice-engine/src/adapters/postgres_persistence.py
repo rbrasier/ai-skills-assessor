@@ -328,7 +328,7 @@ class PostgresPersistence(IPersistence):
     # ─── Report ──────────────────────────────────────────────────────
 
     _REPORT_COLS = """
-        "id", "candidate_name", "claims_json",
+        "id", "candidate_name", "claims_json", "holistic_assessment_json",
         "expert_review_token", "supervisor_review_token", "review_token",
         "report_status", "overall_confidence",
         "report_generated_at", "sme_reviewed_at", "expires_at",
@@ -345,6 +345,7 @@ class PostgresPersistence(IPersistence):
         supervisor_review_token: str,
         overall_confidence: float,
         expires_at: datetime,
+        holistic_assessment: list[dict[str, Any]] | None = None,
     ) -> None:
         pool = await self._get_pool()
         async with pool.acquire() as conn:
@@ -352,18 +353,20 @@ class PostgresPersistence(IPersistence):
                 """
                 UPDATE assessment_sessions
                 SET
-                    "claims_json"              = $2::jsonb,
-                    "expert_review_token"      = $3,
-                    "supervisor_review_token"  = $4,
-                    "review_token"             = $3,
-                    "overall_confidence"       = $5,
-                    "report_status"            = 'awaiting_expert',
-                    "report_generated_at"      = $6,
-                    "expires_at"               = $7
+                    "claims_json"                  = $2::jsonb,
+                    "holistic_assessment_json"     = $3::jsonb,
+                    "expert_review_token"          = $4,
+                    "supervisor_review_token"      = $5,
+                    "review_token"                 = $4,
+                    "overall_confidence"           = $6,
+                    "report_status"                = 'awaiting_expert',
+                    "report_generated_at"          = $7,
+                    "expires_at"                   = $8
                 WHERE "id" = $1
                 """,
                 session_id,
                 json.dumps(claims),
+                json.dumps(holistic_assessment or []),
                 expert_review_token,
                 supervisor_review_token,
                 overall_confidence,
@@ -693,6 +696,10 @@ def _report_row_to_dict(row: Any) -> dict[str, Any]:
     if isinstance(claims_json, str):
         claims_json = json.loads(claims_json)
 
+    holistic_json = row.get("holistic_assessment_json")
+    if isinstance(holistic_json, str):
+        holistic_json = json.loads(holistic_json)
+
     def _iso(val: Any) -> str | None:
         if val is None:
             return None
@@ -704,6 +711,7 @@ def _report_row_to_dict(row: Any) -> dict[str, Any]:
         "session_id": row["id"],
         "candidate_name": row.get("candidate_name"),
         "claims_json": claims_json or [],
+        "holistic_assessment_json": holistic_json or [],
         "expert_review_token": row.get("expert_review_token"),
         "supervisor_review_token": row.get("supervisor_review_token"),
         "review_token": row.get("review_token"),

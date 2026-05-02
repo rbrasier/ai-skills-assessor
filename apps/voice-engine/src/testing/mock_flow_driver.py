@@ -43,6 +43,16 @@ from src.domain.services.transcript_recorder import TranscriptRecorder
 logger = logging.getLogger(__name__)
 
 
+def _short_model_label(model_id: str) -> str:
+    if "haiku" in model_id:
+        return "haiku"
+    if "sonnet" in model_id:
+        return "sonnet"
+    if "opus" in model_id:
+        return "opus"
+    return model_id
+
+
 class MockInterviewTimeoutError(RuntimeError):
     """Raised when max_turns is reached without the interview completing."""
 
@@ -172,11 +182,13 @@ class MockFlowDriver:
         candidate_bot: Any,
         api_key: str,
         max_turns: int = 40,
+        print_dialog: bool = False,
     ) -> None:
         self._noa_model = noa_model
         self._candidate_bot = candidate_bot
         self._api_key = api_key
         self._max_turns = max_turns
+        self._print_dialog = print_dialog
         self._noa_client: Any = None
 
     def _get_noa_client(self) -> Any:
@@ -224,6 +236,8 @@ class MockFlowDriver:
             noa_text = " ".join(b.text.strip() for b in text_blocks if b.text.strip())
             if noa_text:
                 recorder.record_turn(speaker="bot", text=noa_text)
+                if self._print_dialog:
+                    print(f"  Noa ({_short_model_label(self._noa_model)}): {noa_text}")
 
             if tool_uses:
                 # Add full assistant response (text + tool_use blocks)
@@ -284,6 +298,9 @@ class MockFlowDriver:
                 messages.append({"role": "assistant", "content": noa_text})
                 candidate_text = await self._candidate_bot.respond(noa_text)
                 recorder.record_turn(speaker="candidate", text=candidate_text)
+                if self._print_dialog:
+                    candidate_label = _short_model_label(self._candidate_bot._persona.model)
+                    print(f"  Candidate ({candidate_label}): {candidate_text}")
                 messages.append({"role": "user", "content": candidate_text})
 
         logger.info("MockFlowDriver: interview complete in %d turns", turn)

@@ -71,6 +71,7 @@ class ReportGenerator:
             supervisor_review_token=supervisor_token,
             overall_confidence=overall_confidence,
             expires_at=expires_at,
+            holistic_assessment=[h.model_dump() for h in extraction_result.holistic_assessment],
         )
 
         logger.info(

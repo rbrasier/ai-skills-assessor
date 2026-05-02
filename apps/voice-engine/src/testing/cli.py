@@ -230,6 +230,7 @@ async def _run(
     model: str,
     target_skills: list[str],
     output_dir: str,
+    print_dialog: bool = True,
 ) -> None:
     from src.testing.candidate_bot import SFIA_SKILL_NAMES, CandidatePersona
     from src.testing.mock_interview_runner import run_mock_interview
@@ -271,6 +272,7 @@ async def _run(
         api_key=api_key,
         noa_model=_NOA_MODEL,
         post_call_model=_POST_CALL_MODEL,
+        print_dialog=print_dialog,
     )
 
     score_result = score(persona, result.report)
@@ -307,20 +309,7 @@ async def _run(
     print(f"  Mean assessed    : {score_result.mean_assessed_level}")
     print(f"  Mean delta       : {score_result.mean_level_delta}")
     print(f"  Accuracy         : {score_result.mean_accuracy_pct:.1f}%")
-    print(f"  Mean confidence  : {score_result.mean_confidence:.2f}")
-
-    if score_result.per_skill:
-        print("\n  Per-skill breakdown  (from claims):")
-        for s in score_result.per_skill:
-            tag = " ✓" if s.skill_code in target_skills else ""
-            print(
-                f"    {s.skill_code:6}  {s.skill_name[:28]:28}  "
-                f"assessed={s.mean_assessed_level:.1f}  "
-                f"acc={s.mean_accuracy_pct:.0f}%  "
-                f"conf={s.mean_confidence:.2f}  "
-                f"({s.claim_count} claim{'s' if s.claim_count != 1 else ''}){tag}"
-            )
-        print("         ✓ = targeted skill")
+    print(f"  Mean prominence  : {score_result.mean_prominence:.2f}")
 
     if score_result.holistic_profiles:
         print(f"\n  Holistic skill profile  (full-transcript view, top {len(score_result.holistic_profiles)}):")
@@ -366,7 +355,7 @@ def main() -> None:
         print("Cancelled.")
         sys.exit(0)
 
-    asyncio.run(_run(role, sfia_level, honesty, articulation, model, target_skills, output_dir))
+    asyncio.run(_run(role, sfia_level, honesty, articulation, model, target_skills, output_dir, print_dialog=not verbose))
 
 
 if __name__ == "__main__":
