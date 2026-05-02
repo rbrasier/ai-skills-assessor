@@ -54,6 +54,7 @@ class ClaimExtractionResult(BaseModel):
     session_id: str
     claims: list[Claim]
     total_claims: int
+    holistic_assessment: list[HolisticSkillProfile] = Field(default_factory=list)
     extracted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -80,6 +81,7 @@ class AssessmentReport(BaseModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: str = "awaiting_expert"
     expires_at: datetime
+    holistic_assessment: list[HolisticSkillProfile] = Field(default_factory=list)
     # Expert review audit (set on PUT /review/expert/{token})
     expert_submitted_at: datetime | None = None
     expert_reviewer_full_name: str | None = None
@@ -102,10 +104,21 @@ class SkillSummary(BaseModel):
     claims: list[Claim]
 
 
+class HolisticSkillProfile(BaseModel):
+    """One skill as assessed holistically from the full transcript."""
+
+    skill_code: str
+    skill_name: str
+    estimated_level: int = Field(ge=1, le=7)
+    prominence: float = Field(ge=0.0, le=1.0)
+    evidence_summary: str
+
+
 __all__ = [
     "AssessmentReport",
     "Claim",
     "ClaimExtractionResult",
     "EvidenceSegment",
+    "HolisticSkillProfile",
     "SkillSummary",
 ]

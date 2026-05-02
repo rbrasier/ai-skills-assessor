@@ -12,7 +12,7 @@ import json
 import logging
 from typing import Any
 
-from src.domain.models.claim import Claim, EvidenceSegment
+from src.domain.models.claim import Claim, EvidenceSegment, HolisticSkillProfile
 from src.domain.ports.claim_llm_provider import IClaimLLMProvider
 from src.domain.ports.knowledge_base import SkillDefinition
 
@@ -142,6 +142,73 @@ Return ONLY a JSON object, no other text:
   "confidence": 0.85,
   "reasoning": "Brief explanation of why this skill and level were chosen"
 }}"""
+
+    async def analyse_transcript_holistically(
+        self,
+        transcript_text: str,
+        max_skills: int = 6,
+    ) -> list[HolisticSkillProfile]:
+        client = self._get_client()
+        response = await client.messages.create(
+            model=self._model,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": self._holistic_prompt(transcript_text, max_skills)}],
+        )
+        raw_text = response.content[0].text
+        return self._parse_holistic(raw_text)
+
+    def _holistic_prompt(self, transcript_text: str, max_skills: int) -> str:
+        return f"""Analyse the following skills assessment transcript holistically — \
+not claim by claim, but as a whole picture of the candidate's demonstrated capability.
+
+Identify up to {max_skills} IT skill areas that featured most prominently throughout the \
+conversation. For each skill area, assess:
+- Which SFIA 9 skill it maps to (use standard codes: PROG, ARCH, CLOP, DENG, SCTY, \
+ITMG, PRMG, BUAN, TEST, DBAD, NTAS, HSIN, SINT, DESN, DLMG, or similar)
+- The SFIA responsibility level (1–7) the candidate's overall depth of evidence suggests
+- How prominent this skill was in the conversation (0.0–1.0, where 1.0 = dominated discussion)
+- A 1–2 sentence summary of the evidence that informed this assessment
+
+Return ONLY a JSON array ordered by prominence (highest first), no other text:
+[
+  {{
+    "skill_code": "ARCH",
+    "skill_name": "Solution Architecture",
+    "estimated_level": 5,
+    "prominence": 0.85,
+    "evidence_summary": "Candidate described leading cross-functional architecture decisions..."
+  }}
+]
+
+TRANSCRIPT:
+---
+{transcript_text}
+---"""
+
+    def _parse_holistic(self, text: str) -> list[HolisticSkillProfile]:
+        try:
+            raw = text.strip()
+            if raw.startswith("```"):
+                raw = raw.removeprefix("```json").removeprefix("```")
+                raw = raw.removesuffix("```").strip()
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.exception("AnthropicClaimLLMProvider: failed to parse holistic JSON")
+            return []
+
+        profiles: list[HolisticSkillProfile] = []
+        for item in data:
+            try:
+                profiles.append(HolisticSkillProfile(
+                    skill_code=item["skill_code"],
+                    skill_name=item["skill_name"],
+                    estimated_level=int(item["estimated_level"]),
+                    prominence=float(item["prominence"]),
+                    evidence_summary=item["evidence_summary"],
+                ))
+            except (KeyError, ValueError):
+                logger.warning("AnthropicClaimLLMProvider: skipping malformed holistic item: %s", item)
+        return profiles
 
     def _parse_extraction(self, text: str) -> list[Claim]:
         try:

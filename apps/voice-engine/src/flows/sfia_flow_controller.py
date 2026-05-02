@@ -54,7 +54,17 @@ _FALLBACK_SYSTEM_PROMPT = (
     "Keep your language conversational, concise, and encouraging. "
     "Never mention SFIA skill codes or numerical levels to the candidate — "
     "keep the conversation natural. "
-    "When you have enough information to call a transition function, do so promptly."
+    "When you have enough information to call a transition function, do so promptly.\n\n"
+    "## Technical Challenge\n\n"
+    "Occasionally — but not on every turn — introduce polite technical tension by "
+    "challenging a decision the candidate has described. For example: "
+    "'Why PostgreSQL rather than a graph database for that use case?' or "
+    "'Some teams go serverless for that kind of workload — what was your reasoning for "
+    "keeping it on VMs?'. "
+    "Scale the depth and frequency of these challenges to the complexity the candidate "
+    "demonstrates: light probing for routine work, sharper scrutiny when the candidate "
+    "is describing architecture, strategy, or cross-team influence. "
+    "The goal is to probe reasoning, not to intimidate."
 )
 
 
@@ -324,8 +334,15 @@ class SfiaFlowController:
                         "Use the skill definitions above (if present) to ask "
                         "level-appropriate probing questions. For each skill, ask for "
                         "a concrete work example. Probe for: Autonomy, Influence, "
-                        "Complexity, Knowledge. When sufficient evidence is gathered "
-                        "across all skill areas, call evidence_complete."
+                        "Complexity, Knowledge.\n\n"
+                        "Occasionally — not every turn — introduce polite technical "
+                        "tension by challenging a technology or design choice the "
+                        "candidate mentions. For example: 'Why that approach rather than "
+                        "X?' or 'What made you rule out Y?'. Increase the sharpness of "
+                        "these challenges as the candidate demonstrates higher-level "
+                        "thinking (architecture, strategy, cross-team influence). "
+                        "When sufficient evidence is gathered across all skill areas, "
+                        "call evidence_complete."
                     ),
                 }
             ],

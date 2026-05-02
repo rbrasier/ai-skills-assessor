@@ -24,6 +24,31 @@ _LEVEL_DESCRIPTORS = {
     7: "Set Strategy — sets organisational strategy and direction at the highest level",
 }
 
+_ARTICULATION_INSTRUCTIONS: list[tuple[range, str]] = [
+    (range(1, 3), (
+        "You speak very poorly. Use lots of filler words (um, uh, like, you know, sort of), "
+        "trail off mid-sentence, repeat yourself, and ramble before getting to the point. "
+        "Answers feel disorganised and hard to follow."
+    )),
+    (range(3, 5), (
+        "You speak below average. Use frequent filler words (um, uh, like), occasionally "
+        "lose your train of thought, and sometimes circle back to earlier points. Answers "
+        "are loosely organised."
+    )),
+    (range(5, 7), (
+        "You speak averagely. Occasional filler words (um, you know) and minor rambling, "
+        "but generally get to the point within 2–3 sentences."
+    )),
+    (range(7, 9), (
+        "You speak well. Clear and mostly concise, with only rare filler words. Answers "
+        "are structured and easy to follow."
+    )),
+    (range(9, 11), (
+        "You speak very polishedly. No filler words, perfectly structured answers, "
+        "precise vocabulary. Responses feel almost rehearsed in their clarity."
+    )),
+]
+
 _HONESTY_INSTRUCTIONS = {
     (9, 10): (
         "Answer honestly and accurately. Your examples genuinely reflect work at "
@@ -79,6 +104,13 @@ def _honesty_instruction(honesty: int) -> str:
     return _HONESTY_INSTRUCTIONS[(9, 10)]
 
 
+def _articulation_instruction(articulation: int) -> str:
+    for r, text in _ARTICULATION_INSTRUCTIONS:
+        if articulation in r:
+            return text
+    return _ARTICULATION_INSTRUCTIONS[-1][1]
+
+
 @dataclass
 class CandidatePersona:
     role: str
@@ -86,16 +118,20 @@ class CandidatePersona:
     honesty: int
     target_skills: list[str] = field(default_factory=list)
     model: str = CANDIDATE_MODELS["haiku"]
+    articulation: int = 10
 
     def __post_init__(self) -> None:
         if not 1 <= self.sfia_level <= 7:
             raise ValueError(f"sfia_level must be 1–7, got {self.sfia_level}")
         if not 1 <= self.honesty <= 10:
             raise ValueError(f"honesty must be 1–10, got {self.honesty}")
+        if not 1 <= self.articulation <= 10:
+            raise ValueError(f"articulation must be 1–10, got {self.articulation}")
 
     def system_prompt(self) -> str:
         level_desc = _LEVEL_DESCRIPTORS[self.sfia_level]
         honesty_inst = _honesty_instruction(self.honesty)
+        articulation_inst = _articulation_instruction(self.articulation)
 
         skills_block = ""
         if self.target_skills:
@@ -116,7 +152,7 @@ class CandidatePersona:
             f"Your genuine SFIA responsibility level: {self.sfia_level} — {level_desc}"
             f"{skills_block}\n\n"
             f"Behaviour: {honesty_inst}\n\n"
-            "Keep responses conversational and natural (2–4 sentences per answer). "
+            f"Speech style: {articulation_inst}\n\n"
             "Do NOT mention SFIA levels, SFIA codes, or framework names explicitly — "
             "talk naturally about your work. "
             "When asked for examples, provide specific but realistic work scenarios. "

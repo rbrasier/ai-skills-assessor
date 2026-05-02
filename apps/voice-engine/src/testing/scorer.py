@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.domain.models.claim import AssessmentReport
+from src.domain.models.claim import AssessmentReport, HolisticSkillProfile
 from src.testing.candidate_bot import CandidatePersona
 
 
@@ -33,6 +33,7 @@ class ScoreResult:
     mean_confidence: float
     total_claims: int
     per_skill: list[PerSkillScore] = field(default_factory=list)
+    holistic_profiles: list[HolisticSkillProfile] = field(default_factory=list)
 
 
 def score(persona: CandidatePersona, report: AssessmentReport) -> ScoreResult:
@@ -52,6 +53,7 @@ def score(persona: CandidatePersona, report: AssessmentReport) -> ScoreResult:
             mean_accuracy_pct=0.0,
             mean_confidence=0.0,
             total_claims=0,
+            holistic_profiles=report.holistic_assessment,
         )
 
     configured = persona.sfia_level
@@ -90,6 +92,7 @@ def score(persona: CandidatePersona, report: AssessmentReport) -> ScoreResult:
         mean_confidence=round(sum(confidences) / len(confidences), 3),
         total_claims=len(claims),
         per_skill=per_skill,
+        holistic_profiles=report.holistic_assessment,
     )
 
 

@@ -57,6 +57,7 @@ class ReportGenerator:
             candidate_name=candidate_name,
             claims=extraction_result.claims,
             total_claims=extraction_result.total_claims,
+            holistic_assessment=extraction_result.holistic_assessment,
             overall_confidence=overall_confidence,
             generated_at=now,
             status="awaiting_expert",
