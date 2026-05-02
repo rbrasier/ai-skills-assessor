@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 # Noa and post-call models are fixed — latest available, not user-configurable
-_NOA_MODEL = "claude-sonnet-4-6"
+_NOA_MODEL = "claude-haiku-4-5-20251001"
 _POST_CALL_MODEL = "claude-sonnet-4-6"
 
 _SFIA_LEVEL_DESCRIPTIONS = {
