@@ -16,10 +16,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-# Latest models — not user-configurable
-_CANDIDATE_MODEL = "claude-haiku-4-5-20251001"   # fast, many turns
-_NOA_MODEL = "claude-sonnet-4-6"                 # capable interviewer
-_POST_CALL_MODEL = "claude-sonnet-4-6"            # accurate claim extraction
+# Noa and post-call models are fixed — latest available, not user-configurable
+_NOA_MODEL = "claude-sonnet-4-6"
+_POST_CALL_MODEL = "claude-sonnet-4-6"
 
 _SFIA_LEVEL_DESCRIPTIONS = {
     1: "Follow           — performs routine tasks under close supervision",
@@ -32,11 +31,44 @@ _SFIA_LEVEL_DESCRIPTIONS = {
 }
 
 _HONESTY_DESCRIPTIONS = [
-    (range(1, 3),  "Fabricate   — invents projects/outcomes, claims 2–3 levels above reality"),
-    (range(3, 6),  "Exaggerate  — claims others' work, overstates impact"),
-    (range(6, 9),  "Truthful    — mostly honest with minor embellishment"),
-    (range(9, 11), "Accurate    — fully honest and specific"),
+    ("1–2",  "Fabricate   — invents projects/outcomes, claims 2–3 levels above reality"),
+    ("3–5",  "Exaggerate  — claims others' work, overstates impact"),
+    ("6–8",  "Truthful    — mostly honest with minor embellishment"),
+    ("9–10", "Accurate    — fully honest and specific"),
 ]
+
+# Grouped by category for the skills prompt
+_SKILL_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Development & Implementation", [
+        ("PROG", "Programming / software development"),
+        ("DENG", "Data engineering"),
+        ("TEST", "Testing"),
+        ("SINT", "Systems integration and testing"),
+        ("DESN", "Systems design"),
+    ]),
+    ("Delivery & Operation", [
+        ("CLOP", "Cloud operations"),
+        ("DBAD", "Database administration"),
+        ("NTAS", "Network administration"),
+        ("HSIN", "Hardware / infrastructure"),
+    ]),
+    ("Strategy & Architecture", [
+        ("ARCH", "Solution architecture"),
+        ("SCTY", "Information security"),
+    ]),
+    ("Business Change", [
+        ("BUAN", "Business analysis"),
+    ]),
+    ("Management & Governance", [
+        ("ITMG", "IT management"),
+        ("PRMG", "Project management"),
+        ("DLMG", "Delivery management"),
+    ]),
+]
+
+_ALL_SKILL_CODES: set[str] = {
+    code for _, skills in _SKILL_GROUPS for code, _ in skills
+}
 
 
 def _hr(char: str = "─", width: int = 58) -> str:
@@ -55,10 +87,10 @@ def _prompt_text(label: str, description: str, example: str = "") -> str:
         print("  (required — please enter a value)")
 
 
-def _prompt_int(label: str, options: dict, lo: int, hi: int) -> int:
+def _prompt_int(label: str, options: dict[str, str], lo: int, hi: int) -> int:
     print(f"\n{label}")
-    for k, v in options.items():
-        print(f"  {k}  {v}")
+    for key, desc in options.items():
+        print(f"  {key:>4}  {desc}")
     while True:
         raw = input(f"\n  Enter {lo}–{hi}: ").strip()
         try:
@@ -68,6 +100,45 @@ def _prompt_int(label: str, options: dict, lo: int, hi: int) -> int:
         except ValueError:
             pass
         print(f"  Please enter a number between {lo} and {hi}.")
+
+
+def _prompt_model() -> str:
+    from src.testing.candidate_bot import CANDIDATE_MODELS
+
+    print("\nCandidate intelligence  (affects how articulate and convincing the candidate is)")
+    print(f"  1  Haiku   — straightforward, concise answers")
+    print(f"  2  Sonnet  — articulate, well-structured responses")
+    print(f"  3  Opus    — sophisticated, nuanced, highly convincing")
+    while True:
+        raw = input("\n  Enter 1–3: ").strip()
+        if raw == "1":
+            return CANDIDATE_MODELS["haiku"]
+        if raw == "2":
+            return CANDIDATE_MODELS["sonnet"]
+        if raw == "3":
+            return CANDIDATE_MODELS["opus"]
+        print("  Please enter 1, 2, or 3.")
+
+
+def _prompt_skills() -> list[str]:
+    print("\nTarget SFIA skills  (3 skills the candidate wants to be assessed on)")
+    print("  An honest candidate has genuine experience in these areas.")
+    print("  A dishonest candidate may have the role but fabricate experience in them.\n")
+    for group_name, skills in _SKILL_GROUPS:
+        print(f"  {group_name}:")
+        for code, name in skills:
+            print(f"    {code:6}  {name}")
+    print()
+    while True:
+        raw = input("  Enter 3 codes separated by spaces (e.g. PROG ARCH CLOP): ").strip().upper()
+        codes = [c.strip(",") for c in raw.split() if c.strip(",")]
+        unknown = [c for c in codes if c not in _ALL_SKILL_CODES]
+        if len(codes) != 3:
+            print(f"  Please enter exactly 3 codes (you entered {len(codes)}).")
+        elif unknown:
+            print(f"  Unknown code(s): {', '.join(unknown)}. Check the list above.")
+        else:
+            return codes
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -93,16 +164,24 @@ def _to_json_safe(obj: object) -> object:
     return obj
 
 
-def _collect_inputs() -> tuple[str, int, int]:
+def _model_label(model_id: str) -> str:
+    from src.testing.candidate_bot import CANDIDATE_MODELS
+    for label, mid in CANDIDATE_MODELS.items():
+        if mid == model_id:
+            return label
+    return model_id
+
+
+def _collect_inputs() -> tuple[str, int, int, str, list[str]]:
     print(f"\n{_hr('═')}")
     print("  AI Mock Interview Test")
     print(_hr("═"))
     print("  Simulates a full SFIA skills assessment interview.")
     print("  One AI plays the candidate; Noa (the AI interviewer) conducts the call.")
-    print("  The transcript is processed through claim extraction and scored.")
+    print("  The full pipeline runs: conversation → claim extraction → scored report.")
 
     role = _prompt_text(
-        "Candidate role",
+        "Candidate role / persona",
         "Describe the candidate's job title and context.",
         "Senior Software Engineer at a fintech startup, 8 years experience",
     )
@@ -114,24 +193,29 @@ def _collect_inputs() -> tuple[str, int, int]:
         hi=7,
     )
 
-    honesty_options: dict[str, str] = {}
-    for rng, desc in _HONESTY_DESCRIPTIONS:
-        lo, hi = rng.start, rng.stop - 1
-        label = f"{lo}" if lo == hi else f"{lo}–{hi}"
-        honesty_options[label] = desc
-
     honesty = _prompt_int(
-        "Honesty  (how truthfully the candidate represents their level)",
-        honesty_options,
+        "Honesty  (how truthfully the candidate represents their capability)",
+        dict(_HONESTY_DESCRIPTIONS),
         lo=1,
         hi=10,
     )
 
-    return role, sfia_level, honesty
+    model = _prompt_model()
+
+    target_skills = _prompt_skills()
+
+    return role, sfia_level, honesty, model, target_skills
 
 
-async def _run(role: str, sfia_level: int, honesty: int, output_dir: str) -> None:
-    from src.testing.candidate_bot import CandidatePersona
+async def _run(
+    role: str,
+    sfia_level: int,
+    honesty: int,
+    model: str,
+    target_skills: list[str],
+    output_dir: str,
+) -> None:
+    from src.testing.candidate_bot import SFIA_SKILL_NAMES, CandidatePersona
     from src.testing.mock_interview_runner import run_mock_interview
     from src.testing.scorer import score
 
@@ -144,15 +228,23 @@ async def _run(role: str, sfia_level: int, honesty: int, output_dir: str) -> Non
         role=role,
         sfia_level=sfia_level,
         honesty=honesty,
-        model=_CANDIDATE_MODEL,
+        target_skills=target_skills,
+        model=model,
     )
+
+    skills_display = ", ".join(
+        f"{c} ({SFIA_SKILL_NAMES.get(c, c)})" for c in target_skills
+    )
+    level_label = _SFIA_LEVEL_DESCRIPTIONS[sfia_level].split("—")[1].strip()
 
     print(f"\n{_hr()}")
     print("  Running interview  (this takes 1–2 minutes)")
     print(_hr())
-    print(f"  Role       : {persona.role}")
-    print(f"  SFIA level : {persona.sfia_level}  —  {_SFIA_LEVEL_DESCRIPTIONS[persona.sfia_level].split('—')[1].strip()}")
-    print(f"  Honesty    : {persona.honesty}/10")
+    print(f"  Role           : {persona.role}")
+    print(f"  SFIA level     : {persona.sfia_level}  —  {level_label}")
+    print(f"  Honesty        : {persona.honesty}/10")
+    print(f"  Intelligence   : {_model_label(model)} ({model})")
+    print(f"  Target skills  : {skills_display}")
     print(_hr())
     print()
 
@@ -202,13 +294,15 @@ async def _run(role: str, sfia_level: int, honesty: int, output_dir: str) -> Non
     if score_result.per_skill:
         print(f"\n  Per-skill breakdown:")
         for s in score_result.per_skill:
+            tag = " ✓" if s.skill_code in target_skills else ""
             print(
                 f"    {s.skill_code:6}  {s.skill_name[:28]:28}  "
                 f"assessed={s.mean_assessed_level:.1f}  "
                 f"acc={s.mean_accuracy_pct:.0f}%  "
                 f"conf={s.mean_confidence:.2f}  "
-                f"({s.claim_count} claim{'s' if s.claim_count != 1 else ''})"
+                f"({s.claim_count} claim{'s' if s.claim_count != 1 else ''}){tag}"
             )
+        print("         ✓ = targeted skill")
 
     print(f"\n  Output: {out_path}")
     print(_hr())
@@ -225,12 +319,12 @@ def main() -> None:
     _setup_logging(verbose)
 
     try:
-        role, sfia_level, honesty = _collect_inputs()
+        role, sfia_level, honesty, model, target_skills = _collect_inputs()
     except (KeyboardInterrupt, EOFError):
         print("\n\nCancelled.")
         sys.exit(0)
 
-    print(f"\n  Ready to run with the above settings? (y/n) ", end="")
+    print(f"\n  Ready to run? (y/n) ", end="")
     try:
         confirm = input().strip().lower()
     except (KeyboardInterrupt, EOFError):
@@ -241,7 +335,7 @@ def main() -> None:
         print("Cancelled.")
         sys.exit(0)
 
-    asyncio.run(_run(role, sfia_level, honesty, output_dir))
+    asyncio.run(_run(role, sfia_level, honesty, model, target_skills, output_dir))
 
 
 if __name__ == "__main__":

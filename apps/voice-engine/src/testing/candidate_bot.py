@@ -1,14 +1,17 @@
 """CandidatePersona and CandidateBot — AI-powered mock interview candidate.
 
-The candidate is a Claude instance whose behaviour is shaped by three parameters:
-- role: job title / context sentence
+The candidate is a Claude instance shaped by four parameters:
+- role: job title / persona context
 - sfia_level: genuine capability level (1–7)
 - honesty: how truthfully they represent that level (1=fabricates, 10=accurate)
+- target_skills: 3 SFIA codes the candidate wants to be assessed on
+  (an honest candidate has real experience; a dishonest one fabricates it)
+- model: which Claude model to use — proxy for candidate intelligence/articulateness
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 _LEVEL_DESCRIPTORS = {
@@ -24,7 +27,7 @@ _LEVEL_DESCRIPTORS = {
 _HONESTY_INSTRUCTIONS = {
     (9, 10): (
         "Answer honestly and accurately. Your examples genuinely reflect work at "
-        "your stated SFIA level. Be specific and concrete."
+        "your stated SFIA level in your target skill areas. Be specific and concrete."
     ),
     (6, 8): (
         "Mostly honest, but occasionally present team achievements as primarily "
@@ -33,13 +36,39 @@ _HONESTY_INSTRUCTIONS = {
     (3, 5): (
         "Moderately exaggerate. Claim credit for work you observed or partially "
         "contributed to. Present outcomes as more impactful than they were. "
-        "Avoid outright lies but stretch the truth."
+        "Avoid outright lies but stretch the truth significantly."
     ),
     (1, 2): (
-        "Heavily fabricate. Invent plausible-sounding project names and outcomes. "
-        "Claim to have led initiatives that were run by others. Present yourself "
-        "as operating 2–3 SFIA levels above your actual capability."
+        "Heavily fabricate. You have the role described but little real expertise in "
+        "your target skills. Invent plausible-sounding project names and outcomes. "
+        "Claim to have led initiatives that were actually run by others. Present "
+        "yourself as operating 2–3 SFIA levels above your actual capability."
     ),
+}
+
+# Skill names for readable persona prompts — mirrors StubKnowledgeBase
+SFIA_SKILL_NAMES: dict[str, str] = {
+    "PROG": "Programming/software development",
+    "DENG": "Data engineering",
+    "CLOP": "Cloud operations",
+    "ARCH": "Solution architecture",
+    "SCTY": "Information security",
+    "ITMG": "IT management",
+    "PRMG": "Project management",
+    "BUAN": "Business analysis",
+    "TEST": "Testing",
+    "DBAD": "Database administration",
+    "NTAS": "Network administration",
+    "HSIN": "Hardware/infrastructure",
+    "SINT": "Systems integration and testing",
+    "DESN": "Systems design",
+    "DLMG": "Delivery management",
+}
+
+CANDIDATE_MODELS: dict[str, str] = {
+    "haiku":  "claude-haiku-4-5-20251001",
+    "sonnet": "claude-sonnet-4-6",
+    "opus":   "claude-opus-4-7",
 }
 
 
@@ -55,7 +84,8 @@ class CandidatePersona:
     role: str
     sfia_level: int
     honesty: int
-    model: str = "claude-haiku-4-5-20251001"  # latest Haiku; not user-configurable
+    target_skills: list[str] = field(default_factory=list)
+    model: str = CANDIDATE_MODELS["haiku"]
 
     def __post_init__(self) -> None:
         if not 1 <= self.sfia_level <= 7:
@@ -66,16 +96,30 @@ class CandidatePersona:
     def system_prompt(self) -> str:
         level_desc = _LEVEL_DESCRIPTORS[self.sfia_level]
         honesty_inst = _honesty_instruction(self.honesty)
+
+        skills_block = ""
+        if self.target_skills:
+            skill_list = ", ".join(
+                f"{code} ({SFIA_SKILL_NAMES.get(code, code)})"
+                for code in self.target_skills
+            )
+            skills_block = (
+                f"\n\nTarget skills: You want the assessment to cover {skill_list}. "
+                "Steer the conversation naturally towards these areas when describing "
+                "your background and when asked for examples. Do not mention skill "
+                "codes explicitly — just talk about the work itself."
+            )
+
         return (
             f"You are Alex, a candidate in a structured skills assessment interview.\n\n"
             f"Your role: {self.role}\n"
-            f"Your genuine SFIA responsibility level: {self.sfia_level} — {level_desc}\n\n"
+            f"Your genuine SFIA responsibility level: {self.sfia_level} — {level_desc}"
+            f"{skills_block}\n\n"
             f"Behaviour: {honesty_inst}\n\n"
             "Keep responses conversational and natural (2–4 sentences per answer). "
             "Do NOT mention SFIA levels, SFIA codes, or framework names explicitly — "
             "talk naturally about your work. "
-            "When asked for examples, provide specific but realistic work scenarios "
-            "consistent with your role and level. "
+            "When asked for examples, provide specific but realistic work scenarios. "
             "If the interviewer asks for consent at the start, give it enthusiastically."
         )
 
@@ -95,8 +139,7 @@ class CandidateBot:
                 import anthropic
             except ImportError as exc:
                 raise RuntimeError(
-                    "anthropic SDK not installed. "
-                    "Run: pip install -e .[voice]"
+                    "anthropic SDK not installed. Run: pip install -e .[voice]"
                 ) from exc
             self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
         return self._client
@@ -115,4 +158,4 @@ class CandidateBot:
         return text
 
 
-__all__ = ["CandidateBot", "CandidatePersona"]
+__all__ = ["CANDIDATE_MODELS", "SFIA_SKILL_NAMES", "CandidateBot", "CandidatePersona"]
