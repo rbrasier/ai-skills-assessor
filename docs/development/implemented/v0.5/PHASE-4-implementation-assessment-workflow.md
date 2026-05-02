@@ -128,6 +128,7 @@ No deviations from the phase document. RAG context injection deferred to Phase 5
 | Date | Revision | Summary | Status |
 |------|----------|---------|--------|
 | 2026-04-29 | — | Initial implementation plan | In Progress |
+| 2026-05-02 | Revision-1 | AI Mock Interview Test — text-only AI-to-AI end-to-end pipeline test via `scripts/mock-interview.sh`. See `docs/development/to-be-implemented/PHASE-4-Revision-1-ai-mock-interview-test.md` | Added |
 
 ---
 
