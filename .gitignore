@@ -41,6 +41,9 @@ packages/database/src/generated/
 *.swp
 *.swo
 
+# Mock interview results
+scripts/mock-results/
+
 # Logs
 *.log
 npm-debug.log*

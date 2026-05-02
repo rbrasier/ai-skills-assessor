@@ -38,4 +38,4 @@ elif [[ -f "venv/bin/activate" ]]; then
   source venv/bin/activate
 fi
 
-exec python -m src.testing.cli "$@"
+exec python -m src.testing.cli --output-dir "$SCRIPT_DIR/mock-results" "$@"
