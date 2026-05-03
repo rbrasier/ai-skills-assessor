@@ -216,10 +216,14 @@ class SfiaFlowController:
                     "role": "user",
                     "content": (
                         "Introduce yourself as Noa, an AI skills assessor from Resonant. "
-                        "Explain briefly (2-3 sentences) that you are conducting a "
-                        "structured skills assessment based on the SFIA framework and "
-                        "that the conversation will be recorded for review. "
-                        "Ask for the candidate's verbal consent to proceed. "
+                        "Explain briefly that you are conducting a structured skills "
+                        "assessment based on the SFIA framework and that the call will "
+                        "be recorded. "
+                        "Let the candidate know two things: first, that focus changes on "
+                        "their browser window will be logged during the call; second, that "
+                        "all claims they make will be verified by their management and a "
+                        "qualified SME reviewer. "
+                        "Ask for their verbal consent to proceed on those terms. "
                         "If they agree, call consent_given. "
                         "If they decline for any reason, call consent_declined."
                     ),

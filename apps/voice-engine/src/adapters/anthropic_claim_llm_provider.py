@@ -106,11 +106,15 @@ decisions, algorithms, implementation approaches, design reasoning. Requires a s
 matter expert to validate.
    - "supervisor": A factual claim about WHAT, WHERE, WHEN, or HOW LONG — job title, \
 employer, project name, team size, duration, role scope. A manager or HR records can verify.
-5. evidence_segments: The timestamp range(s) in the transcript (seconds from call start) \
+5. sfia_skill_code: The SFIA 9 skill code that best fits this claim \
+(e.g. PROG, ARCH, CLOP, SCTY, DENG, ITMG, PRMG, BUAN, TEST, DBAD, NTAS, SINT, DESN, DLMG).
+6. sfia_skill_name: The full SFIA 9 skill name matching the code \
+(e.g. "Programming/Software Development", "Solution Architecture").
+7. evidence_segments: The timestamp range(s) in the transcript (seconds from call start) \
    that contain this claim. Derive start_time and end_time from the [MM:SS] timestamps \
    shown, converting to total seconds (e.g. [02:15] = 135.0 seconds).
 
-Do NOT assess SFIA responsibility levels — that is done separately.
+Do NOT assess SFIA responsibility levels — level assessment is done holistically and separately.
 
 Return ONLY a JSON array, no other text:
 [
@@ -119,6 +123,8 @@ Return ONLY a JSON array, no other text:
     "interpreted_claim": "clear interpretation",
     "summary": "one sentence summary",
     "claim_type": "sme",
+    "sfia_skill_code": "ARCH",
+    "sfia_skill_name": "Solution Architecture",
     "evidence_segments": [
       {{"start_time": 45.0, "end_time": 67.0}}
     ]
@@ -240,9 +246,9 @@ TRANSCRIPT:
                 interpreted_claim=item["interpreted_claim"],
                 summary=item.get("summary", ""),
                 claim_type=item.get("claim_type", "sme"),
+                sfia_skill_code=item.get("sfia_skill_code", ""),
+                sfia_skill_name=item.get("sfia_skill_name", ""),
                 evidence_segments=segments,
-                sfia_skill_code="",
-                sfia_skill_name="",
             ))
         return claims
 

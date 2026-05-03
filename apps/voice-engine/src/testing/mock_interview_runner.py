@@ -101,7 +101,7 @@ async def run_mock_interview(
         persona.honesty,
     )
 
-    await driver.run(controller, recorder)
+    await driver.run(controller, recorder, persistence=persistence, session_id=session_id)
     elapsed = time.monotonic() - start
     turn_count = recorder.turn_count
 

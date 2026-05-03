@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from src.domain.models.claim import Claim, ClaimExtractionResult
+from src.domain.models.claim import ClaimExtractionResult
 from src.domain.ports.claim_llm_provider import IClaimLLMProvider
 from src.domain.ports.knowledge_base import IKnowledgeBase
 
@@ -43,22 +43,9 @@ class ClaimExtractor:
         transcript_text = self._format_transcript(transcript_json)
         raw_claims = await self.llm.extract_claims(transcript_text)
 
-        enriched: list[Claim] = []
-        for claim in raw_claims:
-            try:
-                skill_defs = await self.kb.query(
-                    text=claim.interpreted_claim,
-                    framework_type=framework_type,
-                    top_k=3,
-                )
-                mapped = await self.llm.map_claim_to_skill(claim, skill_defs)
-                mapped = mapped.model_copy(update={"framework_type": framework_type})
-                enriched.append(mapped)
-            except Exception:
-                logger.exception(
-                    "ClaimExtractor: failed to map claim for session %s — skipping",
-                    session_id,
-                )
+        # SFIA skill mapping is now included in the extraction call — no per-claim
+        # round-trips needed. Just stamp framework_type onto each claim.
+        enriched = [c.model_copy(update={"framework_type": framework_type}) for c in raw_claims]
 
         holistic = []
         try:

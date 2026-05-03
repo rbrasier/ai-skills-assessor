@@ -39,15 +39,15 @@ def _make_claim(**kwargs: object) -> Claim:
 
 
 async def test_extract_returns_mapped_claims() -> None:
-    raw_claim = _make_claim(sfia_skill_code="", sfia_skill_name="", sfia_level=1, confidence=0.0, reasoning="")
+    # extract_claims now returns claims with SFIA mapping already populated —
+    # no per-claim map_claim_to_skill round-trips, no kb.query calls.
     mapped_claim = _make_claim()
 
     llm = AsyncMock()
-    llm.extract_claims.return_value = [raw_claim]
-    llm.map_claim_to_skill.return_value = mapped_claim
+    llm.extract_claims.return_value = [mapped_claim]
+    llm.analyse_transcript_holistically.return_value = []
 
     kb = AsyncMock()
-    kb.query.return_value = []
 
     extractor = ClaimExtractor(llm_provider=llm, knowledge_base=kb)
     result = await extractor.process_transcript("sess-1", _TRANSCRIPT_JSON)
@@ -56,13 +56,26 @@ async def test_extract_returns_mapped_claims() -> None:
     assert result.total_claims == 1
     assert result.claims[0].sfia_skill_code == "ITOP"
     llm.extract_claims.assert_awaited_once()
-    llm.map_claim_to_skill.assert_awaited_once()
-    kb.query.assert_awaited_once()
+    llm.map_claim_to_skill.assert_not_awaited()
+    kb.query.assert_not_awaited()
+
+
+async def test_framework_type_stamped_on_claims() -> None:
+    claim = _make_claim(framework_type="")
+    llm = AsyncMock()
+    llm.extract_claims.return_value = [claim]
+    llm.analyse_transcript_holistically.return_value = []
+
+    extractor = ClaimExtractor(llm_provider=llm, knowledge_base=AsyncMock())
+    result = await extractor.process_transcript("sess-fw", _TRANSCRIPT_JSON, framework_type="sfia-9")
+
+    assert result.claims[0].framework_type == "sfia-9"
 
 
 async def test_empty_transcript_returns_empty_result() -> None:
     llm = AsyncMock()
     llm.extract_claims.return_value = []
+    llm.analyse_transcript_holistically.return_value = []
     kb = AsyncMock()
 
     extractor = ClaimExtractor(llm_provider=llm, knowledge_base=kb)
@@ -73,19 +86,16 @@ async def test_empty_transcript_returns_empty_result() -> None:
     kb.query.assert_not_awaited()
 
 
-async def test_mapping_failure_skips_claim() -> None:
-    raw_claim = _make_claim(sfia_skill_code="", confidence=0.0, reasoning="")
+async def test_holistic_failure_is_swallowed() -> None:
     llm = AsyncMock()
-    llm.extract_claims.return_value = [raw_claim]
-    llm.map_claim_to_skill.side_effect = RuntimeError("LLM error")
+    llm.extract_claims.return_value = [_make_claim()]
+    llm.analyse_transcript_holistically.side_effect = RuntimeError("LLM error")
 
-    kb = AsyncMock()
-    kb.query.return_value = []
-
-    extractor = ClaimExtractor(llm_provider=llm, knowledge_base=kb)
+    extractor = ClaimExtractor(llm_provider=llm, knowledge_base=AsyncMock())
     result = await extractor.process_transcript("sess-3", _TRANSCRIPT_JSON)
 
-    assert result.total_claims == 0
+    assert result.total_claims == 1
+    assert result.holistic_assessment == []
 
 
 def test_format_transcript_timestamps() -> None:
