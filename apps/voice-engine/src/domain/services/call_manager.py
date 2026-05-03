@@ -25,6 +25,7 @@ from src.domain.models.assessment import (
 from src.domain.ports.call_lifecycle_listener import ICallLifecycleListener
 from src.domain.ports.persistence import IPersistence
 from src.domain.ports.voice_transport import IVoiceTransport
+from src.domain.services.eligibility_service import AssessmentEligibilityService
 from src.domain.utils.phone import InvalidPhoneNumberError, normalise_phone_number
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,14 @@ class SessionNotFoundError(CallManagerError):
     """Raised when a status / cancel lookup hits an unknown session id."""
 
 
+class EligibilityError(CallManagerError):
+    """Raised when a candidate is ineligible to start a new assessment."""
+
+    def __init__(self, reason: str, next_eligible_at: str | None = None) -> None:
+        super().__init__(reason)
+        self.next_eligible_at = next_eligible_at
+
+
 class CallManager(ICallLifecycleListener):
     def __init__(
         self,
@@ -49,10 +58,12 @@ class CallManager(ICallLifecycleListener):
         voice_transport: IVoiceTransport,
         *,
         region: str = "ap-southeast-1",
+        eligibility_service: AssessmentEligibilityService | None = None,
     ) -> None:
         self._persistence = persistence
         self._voice_transport = voice_transport
         self._region = region
+        self._eligibility = eligibility_service
         # Background dial tasks — kept around so tests can ``await`` them
         # deterministically and so the event loop holds a reference.
         self._tasks: set[asyncio.Task[None]] = set()
@@ -99,6 +110,19 @@ class CallManager(ICallLifecycleListener):
             normalised = ""
         else:
             normalised = normalise_phone_number(phone_number)
+
+        # Eligibility gate — skip when no service is wired (e.g. tests)
+        if self._eligibility is not None:
+            result = await self._eligibility.check(candidate_email)
+            if not result.eligible:
+                raise EligibilityError(
+                    result.reason or "Assessment not yet available.",
+                    next_eligible_at=(
+                        result.next_eligible_at.isoformat()
+                        if result.next_eligible_at
+                        else None
+                    ),
+                )
 
         candidate = await self._persistence.get_or_create_candidate(
             email=candidate_email,
@@ -174,6 +198,11 @@ class CallManager(ICallLifecycleListener):
                 metadata={"failureReason": str(exc)},
                 ended_at=datetime.now(UTC),
             )
+            await self._persistence.set_termination(
+                session_id,
+                termination_reason="transport_error",
+                error_details={"message": str(exc), "type": type(exc).__name__},
+            )
 
     # ─── ICallLifecycleListener ──────────────────────────────────────
 
@@ -226,6 +255,11 @@ class CallManager(ICallLifecycleListener):
                 AssessmentStatus.FAILED,
                 metadata={"failureReason": reason},
                 ended_at=datetime.now(UTC),
+            )
+            await self._persistence.set_termination(
+                session_id,
+                termination_reason="transport_error",
+                error_details={"message": reason},
             )
         except Exception:  # pragma: no cover
             logger.exception(
@@ -283,17 +317,37 @@ class CallManager(ICallLifecycleListener):
 
     # ─── Candidate-initiated cancel ──────────────────────────────────
 
-    async def cancel_call(self, session_id: str) -> AssessmentSession:
+    async def cancel_call(
+        self,
+        session_id: str,
+        termination_reason: str = "user_ended",
+    ) -> AssessmentSession:
+        """Cancel / end the call.
+
+        ``termination_reason`` distinguishes how the call ended:
+          - ``"user_ended"``     — candidate clicked the Cancel button
+          - ``"browser_closed"`` — browser tab was closed / navigated away
+        The call status is set to ``user_ended`` when the call was connected,
+        or ``cancelled`` when it was still pending/dialling.
+        """
         session = await self._persistence.get_session(session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
 
+        # If the call never connected, use plain cancelled (no cooldown impact)
+        pre_call = session.status in (
+            AssessmentStatus.PENDING,
+            AssessmentStatus.DIALLING,
+        )
+        new_status = AssessmentStatus.CANCELLED if pre_call else AssessmentStatus.USER_ENDED
+
         updated = await self._persistence.update_session_status(
             session_id,
-            AssessmentStatus.CANCELLED,
+            new_status,
             metadata={"cancelledAt": datetime.now(UTC).isoformat()},
             ended_at=datetime.now(UTC),
         )
+        await self._persistence.set_termination(session_id, termination_reason)
 
         # Hang up the bot so it leaves the LiveKit room (or ends the Daily call).
         # Without this the browser stays connected and the mic indicator stays on.
@@ -371,6 +425,7 @@ __all__ = [
     "CallManager",
     "CallManagerError",
     "CandidateNotFoundError",
+    "EligibilityError",
     "InvalidPhoneNumberError",
     "SessionNotFoundError",
 ]

@@ -17,7 +17,77 @@ export type AssessmentStatus =
   | "in_progress"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "user_ended";
+
+// ─── Monitoring: termination reason ──────────────────────────────────
+
+/** Why a call ended — stored alongside status for fine-grained analytics. */
+export type TerminationReason =
+  | "user_ended"       // candidate clicked the Cancel button
+  | "browser_closed"   // browser tab closed / navigated away mid-call
+  | "timeout_no_audio" // no speech detected within the configured window
+  | "timeout_duration" // call exceeded maximum allowed duration
+  | "websocket_error"  // WebSocket / WebRTC connection dropped
+  | "llm_error"        // LLM provider failure during the call
+  | "transport_error"  // Daily / LiveKit transport-level error
+  | "admin_cancelled"; // admin manually terminated the session
+
+// ─── Monitoring: focus events ────────────────────────────────────────
+
+/** One tab-focus-loss event recorded client-side during a live call. */
+export interface FocusEvent {
+  at: string;           // ISO-8601 timestamp when focus was lost
+  phase: string;        // assessment phase at the time (e.g. "evidence_gathering")
+  durationMs: number;   // milliseconds the window stayed out of focus
+}
+
+export interface FocusEventRequest {
+  phase: string;
+  durationMs: number;
+}
+
+// ─── Monitoring: candidate restrictions ──────────────────────────────
+
+export interface CandidateRestrictions {
+  candidateId: string;
+  noRestrictions: boolean;
+  cooldownOverrideGrantedAt: string | null;
+  cooldownOverrideExpiresAt: string | null;
+  auditLog: CandidateRestrictionAuditEntry[];
+}
+
+export interface CandidateRestrictionAuditEntry {
+  id: string;
+  action: "grant_override" | "revoke_override" | "set_no_restrictions" | "unset_no_restrictions";
+  grantedBy: string;
+  expiresAt: string | null;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface GrantOverrideRequest {
+  grantedBy: string;
+  expiresInDays?: number;
+  reason?: string;
+}
+
+// ─── Monitoring: assessment eligibility ──────────────────────────────
+
+export interface AssessmentEligibility {
+  eligible: boolean;
+  reason: string | null;
+  nextEligibleAt: string | null;
+  cooldownDays: number;
+}
+
+// ─── Monitoring: admin settings ──────────────────────────────────────
+
+export interface AdminSettings {
+  cooldownDays: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
 
 // ─── Candidate intake (Step 01) ──────────────────────────────────────
 
@@ -193,6 +263,10 @@ export interface AdminSessionSummary extends SessionSummary {
   maxSfiaLevel: number | null;
   overallConfidence: number | null;
   topSkillCodes: string[];
+  // Monitoring fields
+  terminationReason: TerminationReason | null;
+  focusSuspicious: boolean;
+  totalFocusAwayMs: number;
 }
 
 // ─── Phase 7: Stats / chart aggregates ──────────────────────────────

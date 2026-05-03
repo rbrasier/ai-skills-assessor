@@ -37,7 +37,13 @@ model Candidate {
   metadata  Json     @default("{}")
   createdAt DateTime @default(now())
 
-  assessmentSessions AssessmentSession[]
+  // Assessment cooldown controls (monitoring phase)
+  cooldownOverrideGrantedAt DateTime? @map("cooldown_override_granted_at")
+  cooldownOverrideExpiresAt DateTime? @map("cooldown_override_expires_at")
+  noRestrictions            Boolean   @default(false) @map("no_restrictions")
+
+  assessmentSessions    AssessmentSession[]
+  restrictionAuditLog   CandidateRestrictionAudit[]
 
   @@index([createdAt])
   @@map("candidates")
@@ -58,6 +64,14 @@ model AssessmentSession {
   startedAt    DateTime?
   endedAt      DateTime?
   createdAt    DateTime  @default(now())
+
+  // Monitoring phase: structured termination + error tracking
+  terminationReason  String?   @db.VarChar(50)  @map("termination_reason")
+  errorDetails       Json?     @map("error_details")
+  lastTurnSavedAt    DateTime? @map("last_turn_saved_at")
+  focusSuspicious    Boolean   @default(false)  @map("focus_suspicious")
+  totalFocusAwayMs   Int       @default(0)      @map("total_focus_away_ms")
+  focusEventsJson    Json?     @map("focus_events_json")
 
   // Phase 6: claim extraction pipeline columns
   candidateName      String?   @db.VarChar(255) @map("candidate_name")
@@ -173,6 +187,35 @@ model FrameworkSkillLevels {
   @@unique([frameworkSkillId, level], name: "idx_unique_skill_level")
   @@index([frameworkSkillId])
   @@map("framework_skill_levels")
+}
+
+/// Singleton row holding platform-wide admin configuration.
+/// Created on first write; read back with id = 'default'.
+model AdminSettings {
+  id          String   @id @default("default")
+  cooldownDays Int     @default(90)
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?  @db.VarChar(255)
+
+  @@map("admin_settings")
+}
+
+/// Immutable log of every grant / revoke / toggle action an admin takes
+/// on a candidate's assessment restrictions.
+model CandidateRestrictionAudit {
+  id          String    @id @default(uuid())
+  candidateId String    @db.VarChar(255)
+  candidate   Candidate @relation(fields: [candidateId], references: [email], onDelete: Cascade)
+  // grant_override | revoke_override | set_no_restrictions | unset_no_restrictions
+  action      String    @db.VarChar(50)
+  grantedBy   String    @db.VarChar(255)
+  expiresAt   DateTime?
+  reason      String?
+  createdAt   DateTime  @default(now())
+
+  @@index([candidateId])
+  @@index([createdAt])
+  @@map("candidate_restriction_audit")
 }
 
 /// Scaffold for SME review reports. Phase 3 creates the table so the

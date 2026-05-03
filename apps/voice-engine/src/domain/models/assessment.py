@@ -25,6 +25,7 @@ class AssessmentStatus(str, Enum):
     PROCESSED = "processed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    USER_ENDED = "user_ended"  # candidate explicitly ended the call via the UI
 
 
 @dataclass
@@ -82,3 +83,10 @@ class AssessmentSession:
     created_at: datetime | None = None
     # Phase 6: denormalised from Candidate at session creation to avoid JOIN in pipeline
     candidate_name: str | None = None
+    # Monitoring phase: structured termination + focus tracking
+    termination_reason: str | None = None
+    error_details: dict[str, Any] | None = None
+    last_turn_saved_at: datetime | None = None
+    focus_suspicious: bool = False
+    total_focus_away_ms: int = 0
+    focus_events_json: list[dict[str, Any]] | None = None

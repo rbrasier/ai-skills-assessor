@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AssessmentStatus, CallStatusResponse } from "@ai-skills-assessor/shared-types";
 
@@ -17,6 +17,28 @@ function getBadgeState(status: AssessmentStatus): BadgeState {
   if (status === "in_progress") return "connected";
   if (status === "completed") return "finished";
   return "dialling";
+}
+
+async function postFocusEvent(sessionId: string, phase: string, durationMs: number) {
+  try {
+    await fetch(`/api/assessment/${sessionId}/focus-event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phase, durationMs }),
+    });
+  } catch {
+    // Non-critical — best-effort telemetry
+  }
+}
+
+function sendCancelBeacon(sessionId: string, terminationReason: string) {
+  const url = `/api/assessment/${sessionId}/cancel`;
+  const data = JSON.stringify({ termination_reason: terminationReason });
+  // sendBeacon is fire-and-forget and survives page unload
+  if (navigator.sendBeacon) {
+    const blob = new Blob([data], { type: "application/json" });
+    navigator.sendBeacon(url, blob);
+  }
 }
 
 function getBadgeClass(
@@ -36,6 +58,10 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
 
+  // Track the current assessment phase so focus events are tagged correctly.
+  // Derived from status polling; defaults to "unknown" until the call connects.
+  const currentPhaseRef = useRef<string>("unknown");
+
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -48,7 +74,12 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
         if (cancelled) return;
         setStatus(body);
         setError(null);
-        if (body.status !== "completed" && body.status !== "failed" && body.status !== "cancelled") {
+        const terminal =
+          body.status === "completed" ||
+          body.status === "failed" ||
+          body.status === "cancelled" ||
+          body.status === "user_ended";
+        if (!terminal) {
           timer = setTimeout(poll, POLL_MS);
         }
       } catch (err) {
@@ -65,23 +96,70 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
     };
   }, [sessionId]);
 
+  // ── Focus / visibility monitoring ───────────────────────────────
+  const focusLostAtRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const currentStatus = status?.status ?? "pending";
+    const isLive = currentStatus === "in_progress";
+    if (!isLive) return;
+
+    const handleHidden = () => {
+      if (document.visibilityState === "hidden") {
+        focusLostAtRef.current = Date.now();
+      } else if (focusLostAtRef.current !== null) {
+        const durationMs = Date.now() - focusLostAtRef.current;
+        focusLostAtRef.current = null;
+        void postFocusEvent(sessionId, currentPhaseRef.current, durationMs);
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleHidden);
+    return () => document.removeEventListener("visibilitychange", handleHidden);
+  }, [sessionId, status?.status]);
+
+  // ── Browser-close beacon ─────────────────────────────────────────
+  // Fires when the candidate closes the tab or navigates away mid-call.
+  useEffect(() => {
+    const currentStatus = status?.status ?? "pending";
+    const isLive =
+      currentStatus === "in_progress" ||
+      currentStatus === "dialling" ||
+      currentStatus === "pending";
+    if (!isLive) return;
+
+    const handleUnload = () => {
+      sendCancelBeacon(sessionId, "browser_closed");
+    };
+
+    window.addEventListener("beforeunload", handleUnload);
+    return () => window.removeEventListener("beforeunload", handleUnload);
+  }, [sessionId, status?.status]);
+
   const currentStatus = status?.status ?? "pending";
   const badgeState = getBadgeState(currentStatus);
   const badgeIndex = BADGE_ORDER.indexOf(badgeState);
 
-  const handleCancel = async () => {
+  const handleCancel = useCallback(async () => {
     if (!onCancel) return;
     setCancelling(true);
     try {
-      await fetch(`/api/assessment/${sessionId}/cancel`, { method: "POST" });
+      await fetch(`/api/assessment/${sessionId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ termination_reason: "user_ended" }),
+      });
       onCancel();
     } finally {
       setCancelling(false);
     }
-  };
+  }, [sessionId, onCancel]);
 
   const isTerminal =
-    currentStatus === "completed" || currentStatus === "failed" || currentStatus === "cancelled";
+    currentStatus === "completed" ||
+    currentStatus === "failed" ||
+    currentStatus === "cancelled" ||
+    currentStatus === "user_ended";
 
   return (
     <>
@@ -258,7 +336,7 @@ function CallVisual({
     );
   }
 
-  if (status === "failed" || status === "cancelled") {
+  if (status === "failed" || status === "cancelled" || status === "user_ended") {
     return (
       <div className="call-visual">
         <div className="error-circle">
@@ -331,6 +409,7 @@ function labelFor(s: AssessmentStatus): string {
     case "failed":
       return "Call failed";
     case "cancelled":
+    case "user_ended":
       return "Cancelled";
     default:
       return "";
@@ -349,6 +428,7 @@ function valueFor(s: AssessmentStatus, dialingMethod?: string | null): string {
     case "failed":
       return "Error";
     case "cancelled":
+    case "user_ended":
       return "Cancelled";
     default:
       return "";
@@ -397,7 +477,8 @@ function CallSubText({
       content = failureReason ?? "Something went wrong with the call. Please try again.";
       break;
     case "cancelled":
-      content = "Call cancelled. Return to start a new assessment.";
+    case "user_ended":
+      content = "Call ended. Return to start a new assessment.";
       break;
   }
 

@@ -53,10 +53,22 @@ def _row_to_candidate(row: Any) -> Candidate:
     )
 
 
+_DEFAULT_COOLDOWN_DAYS = 90
+_FOCUS_SUSPICIOUS_MAX_EVENTS = 5
+_FOCUS_SUSPICIOUS_MAX_AWAY_MS = 60_000
+_COUNTABLE_STATUSES = ("completed", "processed", "user_ended")
+
+
 def _row_to_session(row: Any) -> AssessmentSession:
     metadata = row["metadata"]
     if isinstance(metadata, str):
         metadata = json.loads(metadata)
+    error_details = row.get("error_details")
+    if isinstance(error_details, str):
+        error_details = json.loads(error_details)
+    focus_events = row.get("focus_events_json")
+    if isinstance(focus_events, str):
+        focus_events = json.loads(focus_events)
     return AssessmentSession(
         id=row["id"],
         candidate_id=row["candidateId"],
@@ -69,6 +81,12 @@ def _row_to_session(row: Any) -> AssessmentSession:
         ended_at=row["endedAt"],
         created_at=row["createdAt"],
         candidate_name=row.get("candidate_name"),
+        termination_reason=row.get("termination_reason"),
+        error_details=error_details,
+        last_turn_saved_at=row.get("last_turn_saved_at"),
+        focus_suspicious=bool(row.get("focus_suspicious", False)),
+        total_focus_away_ms=int(row.get("total_focus_away_ms") or 0),
+        focus_events_json=focus_events,
     )
 
 
@@ -611,7 +629,10 @@ class PostgresPersistence(IPersistence):
                 "expert_review_token",
                 "supervisor_review_token",
                 "claims_json",
-                "overall_confidence"
+                "overall_confidence",
+                "termination_reason",
+                "focus_suspicious",
+                "total_focus_away_ms"
             FROM assessment_sessions
             {where}
             ORDER BY "createdAt" DESC
@@ -667,6 +688,9 @@ class PostgresPersistence(IPersistence):
                 "max_sfia_level": max_level,
                 "overall_confidence": row.get("overall_confidence"),
                 "top_skill_codes": top_codes,
+                "termination_reason": row.get("termination_reason"),
+                "focus_suspicious": bool(row.get("focus_suspicious", False)),
+                "total_focus_away_ms": int(row.get("total_focus_away_ms") or 0),
             })
 
         return summaries
@@ -689,6 +713,355 @@ class PostgresPersistence(IPersistence):
                 session_id,
                 json.dumps(metadata),
             )
+
+    # ─── Monitoring: focus events ────────────────────────────────────
+
+    async def append_focus_event(
+        self,
+        session_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        pool = await self._get_pool()
+        duration_ms = int(event.get("durationMs", 0))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET
+                    "focus_events_json"  = COALESCE("focus_events_json", '[]'::jsonb)
+                                           || $2::jsonb,
+                    "total_focus_away_ms" = "total_focus_away_ms" + $3,
+                    "focus_suspicious"   = CASE
+                        WHEN "focus_suspicious" THEN TRUE
+                        WHEN (jsonb_array_length(
+                                COALESCE("focus_events_json", '[]'::jsonb)
+                              ) + 1) >= $4 THEN TRUE
+                        WHEN ("total_focus_away_ms" + $3) >= $5 THEN TRUE
+                        ELSE FALSE
+                    END
+                WHERE "id" = $1
+                """,
+                session_id,
+                json.dumps([event]),
+                duration_ms,
+                _FOCUS_SUSPICIOUS_MAX_EVENTS,
+                _FOCUS_SUSPICIOUS_MAX_AWAY_MS,
+            )
+
+    # ─── Monitoring: progressive transcript ──────────────────────────
+
+    async def save_transcript_turn(
+        self,
+        session_id: str,
+        turn: dict[str, Any],
+    ) -> None:
+        pool = await self._get_pool()
+        now = _to_naive(datetime.now(UTC))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET
+                    "transcript_json" = jsonb_set(
+                        COALESCE("transcript_json", '{"turns":[]}'::jsonb),
+                        '{turns}',
+                        COALESCE("transcript_json"->'turns', '[]'::jsonb) || $2::jsonb
+                    ),
+                    "last_turn_saved_at" = $3
+                WHERE "id" = $1
+                """,
+                session_id,
+                json.dumps([turn]),
+                now,
+            )
+
+    # ─── Monitoring: structured termination ──────────────────────────
+
+    async def set_termination(
+        self,
+        session_id: str,
+        termination_reason: str,
+        error_details: dict[str, Any] | None = None,
+    ) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET
+                    "termination_reason" = $2,
+                    "error_details"      = $3::jsonb
+                WHERE "id" = $1
+                """,
+                session_id,
+                termination_reason,
+                json.dumps(error_details) if error_details is not None else "null",
+            )
+
+    # ─── Monitoring: candidate restrictions ──────────────────────────
+
+    async def get_candidate_restrictions(
+        self,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT "no_restrictions",
+                       "cooldown_override_granted_at",
+                       "cooldown_override_expires_at"
+                FROM candidates WHERE "email" = $1
+                """,
+                candidate_id,
+            )
+            audit_rows = await conn.fetch(
+                """
+                SELECT "id", "action", "grantedBy", "expiresAt", "reason", "createdAt"
+                FROM candidate_restriction_audit
+                WHERE "candidateId" = $1
+                ORDER BY "createdAt" DESC
+                """,
+                candidate_id,
+            )
+
+        if row is None:
+            return {
+                "no_restrictions": False,
+                "cooldown_override_granted_at": None,
+                "cooldown_override_expires_at": None,
+                "audit_log": [],
+            }
+
+        def _iso(v: Any) -> str | None:
+            if v is None:
+                return None
+            return v.isoformat() if isinstance(v, datetime) else str(v)
+
+        audit = [
+            {
+                "id": str(r["id"]),
+                "action": r["action"],
+                "granted_by": r["grantedBy"],
+                "expires_at": _iso(r["expiresAt"]),
+                "reason": r["reason"],
+                "created_at": _iso(r["createdAt"]),
+            }
+            for r in audit_rows
+        ]
+        return {
+            "no_restrictions": bool(row["no_restrictions"]),
+            "cooldown_override_granted_at": _iso(row["cooldown_override_granted_at"]),
+            "cooldown_override_expires_at": _iso(row["cooldown_override_expires_at"]),
+            "audit_log": audit,
+        }
+
+    async def grant_cooldown_override(
+        self,
+        candidate_id: str,
+        granted_by: str,
+        expires_at: datetime,
+        reason: str | None = None,
+    ) -> None:
+        pool = await self._get_pool()
+        now = _to_naive(datetime.now(UTC))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE candidates
+                SET "cooldown_override_granted_at" = $2,
+                    "cooldown_override_expires_at"  = $3
+                WHERE "email" = $1
+                """,
+                candidate_id,
+                now,
+                _to_naive(expires_at),
+            )
+            await conn.execute(
+                """
+                INSERT INTO candidate_restriction_audit
+                    ("id", "candidateId", "action", "grantedBy", "expiresAt", "reason", "createdAt")
+                VALUES (gen_random_uuid()::text, $1, 'grant_override', $2, $3, $4, $5)
+                """,
+                candidate_id,
+                granted_by,
+                _to_naive(expires_at),
+                reason,
+                now,
+            )
+
+    async def revoke_cooldown_override(
+        self,
+        candidate_id: str,
+        revoked_by: str,
+    ) -> None:
+        pool = await self._get_pool()
+        now = _to_naive(datetime.now(UTC))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE candidates
+                SET "cooldown_override_granted_at" = NULL,
+                    "cooldown_override_expires_at"  = NULL
+                WHERE "email" = $1
+                """,
+                candidate_id,
+            )
+            await conn.execute(
+                """
+                INSERT INTO candidate_restriction_audit
+                    ("id", "candidateId", "action", "grantedBy", "expiresAt", "reason", "createdAt")
+                VALUES (gen_random_uuid()::text, $1, 'revoke_override', $2, NULL, NULL, $3)
+                """,
+                candidate_id,
+                revoked_by,
+                now,
+            )
+
+    async def set_no_restrictions(
+        self,
+        candidate_id: str,
+        enabled: bool,
+        updated_by: str,
+    ) -> None:
+        pool = await self._get_pool()
+        now = _to_naive(datetime.now(UTC))
+        action = "set_no_restrictions" if enabled else "unset_no_restrictions"
+        async with pool.acquire() as conn:
+            await conn.execute(
+                'UPDATE candidates SET "no_restrictions" = $2 WHERE "email" = $1',
+                candidate_id,
+                enabled,
+            )
+            await conn.execute(
+                """
+                INSERT INTO candidate_restriction_audit
+                    ("id", "candidateId", "action", "grantedBy", "expiresAt", "reason", "createdAt")
+                VALUES (gen_random_uuid()::text, $1, $2, $3, NULL, NULL, $4)
+                """,
+                candidate_id,
+                action,
+                updated_by,
+                now,
+            )
+
+    # ─── Monitoring: admin settings ──────────────────────────────────
+
+    async def get_admin_settings(self) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM admin_settings WHERE id = 'default'")
+        if row is None:
+            return {
+                "cooldown_days": _DEFAULT_COOLDOWN_DAYS,
+                "updated_at": None,
+                "updated_by": None,
+            }
+        return {
+            "cooldown_days": row["cooldownDays"],
+            "updated_at": row["updatedAt"].isoformat() if row["updatedAt"] else None,
+            "updated_by": row["updatedBy"],
+        }
+
+    async def save_admin_settings(
+        self,
+        cooldown_days: int,
+        updated_by: str | None = None,
+    ) -> None:
+        pool = await self._get_pool()
+        now = _to_naive(datetime.now(UTC))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO admin_settings ("id", "cooldownDays", "updatedAt", "updatedBy")
+                VALUES ('default', $1, $2, $3)
+                ON CONFLICT ("id") DO UPDATE
+                    SET "cooldownDays" = EXCLUDED."cooldownDays",
+                        "updatedAt"    = EXCLUDED."updatedAt",
+                        "updatedBy"    = EXCLUDED."updatedBy"
+                """,
+                cooldown_days,
+                now,
+                updated_by,
+            )
+
+    # ─── Monitoring: eligibility ──────────────────────────────────────
+
+    async def check_assessment_eligibility(
+        self,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        from datetime import timedelta
+
+        pool = await self._get_pool()
+        settings = await self.get_admin_settings()
+        cooldown_days: int = settings["cooldown_days"]
+        now = datetime.now(UTC)
+        cutoff = _to_naive(now - timedelta(days=cooldown_days))
+
+        async with pool.acquire() as conn:
+            candidate_row = await conn.fetchrow(
+                """
+                SELECT "no_restrictions",
+                       "cooldown_override_granted_at",
+                       "cooldown_override_expires_at"
+                FROM candidates WHERE "email" = $1
+                """,
+                candidate_id,
+            )
+
+            if candidate_row is not None:
+                if candidate_row["no_restrictions"]:
+                    return {
+                        "eligible": True,
+                        "reason": None,
+                        "next_eligible_at": None,
+                        "cooldown_days": cooldown_days,
+                    }
+                override_expires = candidate_row["cooldown_override_expires_at"]
+                if override_expires is not None:
+                    oe = override_expires.replace(tzinfo=UTC) if override_expires.tzinfo is None else override_expires
+                    if oe > now:
+                        return {
+                            "eligible": True,
+                            "reason": None,
+                            "next_eligible_at": None,
+                            "cooldown_days": cooldown_days,
+                        }
+
+            blocking = await conn.fetchrow(
+                """
+                SELECT "id", "endedAt"
+                FROM assessment_sessions
+                WHERE "candidateId" = $1
+                  AND "status" = ANY($2::text[])
+                  AND "endedAt" >= $3
+                ORDER BY "endedAt" DESC
+                LIMIT 1
+                """,
+                candidate_id,
+                list(_COUNTABLE_STATUSES),
+                cutoff,
+            )
+
+        if blocking is None:
+            return {
+                "eligible": True,
+                "reason": None,
+                "next_eligible_at": None,
+                "cooldown_days": cooldown_days,
+            }
+
+        ended_at = blocking["endedAt"]
+        if ended_at.tzinfo is None:
+            ended_at = ended_at.replace(tzinfo=UTC)
+        next_eligible = ended_at + timedelta(days=cooldown_days)
+        return {
+            "eligible": False,
+            "reason": f"A completed assessment exists within the {cooldown_days}-day cooldown period.",
+            "next_eligible_at": next_eligible.isoformat(),
+            "cooldown_days": cooldown_days,
+        }
 
 
 def _report_row_to_dict(row: Any) -> dict[str, Any]:
