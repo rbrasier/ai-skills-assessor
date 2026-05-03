@@ -204,8 +204,16 @@ class MockFlowDriver:
         self,
         controller: Any,
         recorder: TranscriptRecorder,
+        *,
+        persistence: Any = None,
+        session_id: str = "",
     ) -> None:
-        """Drive the full interview from Introduction to Closing."""
+        """Drive the full interview from Introduction to Closing.
+
+        When ``persistence`` and ``session_id`` are supplied, each turn is
+        written to storage via ``save_transcript_turn`` as it occurs —
+        mirroring the progressive transcript saving a live call produces.
+        """
         client = self._get_noa_client()
         current_node = controller.get_initial_node()
         messages: list[dict[str, Any]] = list(current_node.get("task_messages", []))
@@ -236,6 +244,10 @@ class MockFlowDriver:
             noa_text = " ".join(b.text.strip() for b in text_blocks if b.text.strip())
             if noa_text:
                 recorder.record_turn(speaker="bot", text=noa_text)
+                if persistence and session_id and recorder.turn_count > 0:
+                    await persistence.save_transcript_turn(
+                        session_id, recorder.to_dict()["turns"][-1]
+                    )
                 if self._print_dialog:
                     print(f"  Noa ({_short_model_label(self._noa_model)}): {noa_text}")
 
@@ -298,6 +310,10 @@ class MockFlowDriver:
                 messages.append({"role": "assistant", "content": noa_text})
                 candidate_text = await self._candidate_bot.respond(noa_text)
                 recorder.record_turn(speaker="candidate", text=candidate_text)
+                if persistence and session_id and recorder.turn_count > 0:
+                    await persistence.save_transcript_turn(
+                        session_id, recorder.to_dict()["turns"][-1]
+                    )
                 if self._print_dialog:
                     candidate_label = _short_model_label(self._candidate_bot._persona.model)
                     print(f"  Candidate ({candidate_label}): {candidate_text}")
