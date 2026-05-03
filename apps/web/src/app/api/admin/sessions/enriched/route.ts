@@ -31,6 +31,9 @@ export async function GET(request: NextRequest) {
     maxSfiaLevel: s.max_sfia_level ?? null,
     overallConfidence: s.overall_confidence ?? null,
     topSkillCodes: Array.isArray(s.top_skill_codes) ? s.top_skill_codes : [],
+    terminationReason: s.termination_reason ?? null,
+    focusSuspicious: Boolean(s.focus_suspicious ?? false),
+    totalFocusAwayMs: Number(s.total_focus_away_ms ?? 0),
   }));
 
   return NextResponse.json(mapped);

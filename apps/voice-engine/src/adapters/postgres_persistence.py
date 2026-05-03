@@ -662,12 +662,12 @@ class PostgresPersistence(IPersistence):
             max_level: int | None = None
             top_codes: list[str] = []
             if claims:
-                levels = [c.get("level") for c in claims if c.get("level")]
+                levels = [c.get("sfia_level") for c in claims if c.get("sfia_level")]
                 if levels:
                     max_level = max(levels)
                 seen: dict[str, int] = {}
                 for c in claims:
-                    code = c.get("skill_code") or c.get("skillCode")
+                    code = c.get("sfia_skill_code") or c.get("skill_code") or c.get("skillCode")
                     if code:
                         seen[code] = seen.get(code, 0) + 1
                 top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
