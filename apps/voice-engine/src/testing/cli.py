@@ -15,6 +15,7 @@ import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 # Noa and post-call models are fixed — latest available, not user-configurable
 _NOA_MODEL = "claude-haiku-4-5-20251001"
@@ -222,6 +223,26 @@ def _collect_inputs() -> tuple[str, int, int, int, str, list[str]]:
     return role, sfia_level, honesty, articulation, model, target_skills
 
 
+def _build_persistence() -> tuple[Any, bool]:
+    """Return (persistence_adapter, is_postgres).
+
+    Tries PostgresPersistence when DATABASE_URL is set, falls back to
+    InMemoryPersistence so the CLI works without a database connection.
+    """
+    database_url = os.environ.get("DATABASE_URL", "")
+    if database_url:
+        try:
+            from src.adapters.postgres_persistence import PostgresPersistence
+            return PostgresPersistence(database_url=database_url), True
+        except Exception as exc:
+            print(
+                f"  [warn] PostgresPersistence unavailable ({exc}); "
+                "falling back to in-memory — results will NOT appear in the dashboard.",
+                file=sys.stderr,
+            )
+    return None, False  # run_mock_interview will create InMemoryPersistence
+
+
 async def _run(
     role: str,
     sfia_level: int,
@@ -240,6 +261,9 @@ async def _run(
     if not api_key:
         print("\nERROR: ANTHROPIC_API_KEY environment variable is not set.", file=sys.stderr)
         sys.exit(1)
+
+    base_url = os.environ.get("BASE_URL", "http://localhost:3000")
+    persistence, is_postgres = _build_persistence()
 
     persona = CandidatePersona(
         role=role,
@@ -264,16 +288,25 @@ async def _run(
     print(f"  Articulation   : {persona.articulation}/10")
     print(f"  Intelligence   : {_model_label(model)} ({model})")
     print(f"  Target skills  : {skills_display}")
+    print(f"  Persistence    : {'Postgres (visible in dashboard)' if is_postgres else 'In-memory (not persisted)'}")
     print(_hr())
     print()
 
-    result = await run_mock_interview(
-        persona=persona,
-        api_key=api_key,
-        noa_model=_NOA_MODEL,
-        post_call_model=_POST_CALL_MODEL,
-        print_dialog=print_dialog,
-    )
+    try:
+        result = await run_mock_interview(
+            persona=persona,
+            api_key=api_key,
+            noa_model=_NOA_MODEL,
+            post_call_model=_POST_CALL_MODEL,
+            print_dialog=print_dialog,
+            persistence=persistence,
+            base_url=base_url,
+        )
+    finally:
+        if persistence is not None:
+            close = getattr(persistence, "close", None)
+            if callable(close):
+                await close()
 
     score_result = score(persona, result.report)
 

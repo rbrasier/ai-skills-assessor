@@ -16,6 +16,7 @@ from src.adapters.anthropic_claim_llm_provider import AnthropicClaimLLMProvider
 from src.adapters.in_memory_persistence import InMemoryPersistence
 from src.domain.models.assessment import AssessmentSession, AssessmentStatus
 from src.domain.models.claim import AssessmentReport
+from src.domain.ports.persistence import IPersistence
 from src.domain.services.claim_extractor import ClaimExtractor
 from src.domain.services.post_call_pipeline import PostCallPipeline
 from src.domain.services.report_generator import ReportGenerator
@@ -44,6 +45,8 @@ async def run_mock_interview(
     post_call_model: str = "claude-sonnet-4-6",
     max_turns: int = 40,
     print_dialog: bool = False,
+    persistence: IPersistence | None = None,
+    base_url: str = "http://localhost",
 ) -> MockInterviewResult:
     """Run a complete mock interview and return the result.
 
@@ -53,13 +56,27 @@ async def run_mock_interview(
         noa_model: Model for the Noa interviewer. Defaults to persona.model.
         post_call_model: Model for claim extraction.
         max_turns: Safety cap on conversation turns.
+        persistence: Persistence adapter. Defaults to InMemoryPersistence.
+            Pass a PostgresPersistence instance to write mock runs to the
+            real database so they appear in the admin dashboard.
+        base_url: Base URL used when building review links in the report.
     """
     if noa_model is None:
         noa_model = persona.model
 
     session_id = str(uuid.uuid4())
-    persistence = InMemoryPersistence()
+    if persistence is None:
+        persistence = InMemoryPersistence()
     kb = StubKnowledgeBase()
+
+    # Ensure a candidate row exists before creating the session (required by
+    # the foreign-key constraint in Postgres; a no-op for InMemoryPersistence).
+    await persistence.get_or_create_candidate(
+        email="mock@test.local",
+        first_name="Mock",
+        last_name="Candidate",
+        employee_id="MOCK-001",
+    )
 
     # Seed a minimal session record so PostCallPipeline.process() can find it.
     await persistence.create_session(
@@ -68,7 +85,7 @@ async def run_mock_interview(
             candidate_id="mock@test.local",
             phone_number="",
             status=AssessmentStatus.IN_PROGRESS,
-            candidate_name="Alex (mock candidate)",
+            candidate_name="Mock Candidate",
         )
     )
 
@@ -121,7 +138,7 @@ async def run_mock_interview(
         ),
         report_generator=ReportGenerator(
             persistence=persistence,
-            base_url="http://localhost",
+            base_url=base_url,
         ),
         persistence=persistence,
     )
