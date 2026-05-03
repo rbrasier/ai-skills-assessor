@@ -104,7 +104,10 @@ fi
 # Turbo may exit 0 but still print TS errors — guard against both.
 # ──────────────────────────────────────────────────────────────
 print_header "Check 3 / ${TOTAL_CHECKS}: TypeScript build (turbo build)"
-BUILD_OUTPUT=$(pnpm build 2>&1)
+# NODE_TLS_REJECT_UNAUTHORIZED=0 is required in this environment because
+# next/font/google fetches font manifests at build time and the network uses
+# a self-signed certificate. This flag is scoped to this one subprocess only.
+BUILD_OUTPUT=$(NODE_TLS_REJECT_UNAUTHORIZED=0 pnpm build 2>&1)
 BUILD_EXIT=$?
 if [ $BUILD_EXIT -eq 0 ] && ! echo "$BUILD_OUTPUT" | grep -qE "error TS[0-9]+|Build failed"; then
   pass "pnpm build (0 TS errors)"

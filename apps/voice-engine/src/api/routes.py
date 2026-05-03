@@ -29,6 +29,7 @@ from src.domain.ports.persistence import IPersistence
 from src.domain.services.call_manager import (
     CallManager,
     CallManagerError,
+    EligibilityError,
     SessionNotFoundError,
 )
 from src.domain.utils.phone import InvalidPhoneNumberError
@@ -173,6 +174,15 @@ async def trigger_assessment_call(
             phone_number=payload.phone_number or "",
             dialing_method=payload.dialing_method,
         )
+    except EligibilityError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "assessment_cooldown",
+                "message": str(exc),
+                "next_eligible_at": exc.next_eligible_at,
+            },
+        ) from exc
     except InvalidPhoneNumberError as exc:
         raise HTTPException(status_code=400, detail=_INVALID_FORM) from exc
     except CallManagerError as exc:
@@ -218,15 +228,25 @@ async def get_call_status(session_id: str, request: Request) -> CallStatusPayloa
     return CallStatusPayload(**data)
 
 
+class CancelCallPayload(BaseModel):
+    termination_reason: str = Field(default="user_ended", pattern="^(user_ended|browser_closed)$")
+
+
 @router.post(
     "/api/v1/assessment/{session_id}/cancel",
     response_model=CallStatusPayload,
     tags=["assessment"],
 )
-async def cancel_call(session_id: str, request: Request) -> CallStatusPayload:
+async def cancel_call(
+    session_id: str,
+    request: Request,
+    payload: CancelCallPayload | None = None,
+) -> CallStatusPayload:
+    if payload is None:
+        payload = CancelCallPayload()
     manager = _manager(request)
     try:
-        await manager.cancel_call(session_id)
+        await manager.cancel_call(session_id, termination_reason=payload.termination_reason)
         data = await manager.get_call_status(session_id)
     except SessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
@@ -304,6 +324,9 @@ class EnrichedSessionSummaryPayload(BaseModel):
     max_sfia_level: int | None = None
     overall_confidence: float | None = None
     top_skill_codes: list[str] = []
+    termination_reason: str | None = None
+    focus_suspicious: bool = False
+    total_focus_away_ms: int = 0
 
 
 class AdminStatsPayload(BaseModel):
@@ -631,7 +654,226 @@ async def submit_supervisor_review(
     return ReviewSaveResponse(**result)
 
 
-# ─── LiveKit join page ───────────────────────────────────────────
+# ─── Monitoring: focus events ───────────────────────────────────
+
+
+class FocusEventPayload(BaseModel):
+    phase: str = Field(..., min_length=1, max_length=64)
+    duration_ms: int = Field(..., ge=0)
+
+
+@router.post(
+    "/api/v1/assessment/{session_id}/focus-event",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["monitoring"],
+)
+async def log_focus_event(
+    session_id: str,
+    payload: FocusEventPayload,
+    request: Request,
+) -> None:
+    """Record a browser focus-loss event during a live assessment."""
+    persistence = _persistence(request)
+    from datetime import UTC
+    from datetime import datetime as _dt
+    event = {
+        "at": _dt.now(UTC).isoformat(),
+        "phase": payload.phase,
+        "durationMs": payload.duration_ms,
+    }
+    await persistence.append_focus_event(session_id, event)
+
+
+# ─── Monitoring: progressive transcript ──────────────────────────
+
+
+class TranscriptTurnPayload(BaseModel):
+    timestamp: float
+    speaker: str = Field(..., pattern="^(candidate|bot)$")
+    text: str = Field(..., min_length=1)
+    phase: str = Field(..., min_length=1)
+    vad_confidence: float | None = None
+
+
+@router.post(
+    "/api/v1/assessment/{session_id}/transcript-turn",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["monitoring"],
+)
+async def save_transcript_turn(
+    session_id: str,
+    payload: TranscriptTurnPayload,
+    request: Request,
+) -> None:
+    """Append one transcript turn — called after every bot/candidate utterance."""
+    persistence = _persistence(request)
+    await persistence.save_transcript_turn(session_id, payload.model_dump())
+
+
+# ─── Monitoring: candidate restrictions ──────────────────────────
+
+
+class GrantOverridePayload(BaseModel):
+    granted_by: str = Field(..., min_length=1)
+    expires_in_days: int = Field(default=7, ge=1, le=365)
+    reason: str | None = None
+
+
+class NoRestrictionsPayload(BaseModel):
+    enabled: bool
+    updated_by: str = Field(..., min_length=1)
+
+
+class CandidateRestrictionsPayload(BaseModel):
+    no_restrictions: bool
+    cooldown_override_granted_at: str | None = None
+    cooldown_override_expires_at: str | None = None
+    audit_log: list[dict[str, Any]] = []
+
+
+@router.get(
+    "/api/v1/admin/candidates/{candidate_id}/restrictions",
+    response_model=CandidateRestrictionsPayload,
+    tags=["admin"],
+)
+async def get_candidate_restrictions(
+    candidate_id: str,
+    request: Request,
+) -> CandidateRestrictionsPayload:
+    """Return restriction state and audit log for a candidate."""
+    persistence = _persistence(request)
+    data = await persistence.get_candidate_restrictions(candidate_id)
+    return CandidateRestrictionsPayload(**data)
+
+
+@router.post(
+    "/api/v1/admin/candidates/{candidate_id}/override",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["admin"],
+)
+async def grant_cooldown_override(
+    candidate_id: str,
+    payload: GrantOverridePayload,
+    request: Request,
+) -> None:
+    """Grant a time-limited cooldown bypass for one candidate."""
+    from datetime import UTC, timedelta
+    from datetime import datetime as _dt
+    persistence = _persistence(request)
+    expires_at = _dt.now(UTC) + timedelta(days=payload.expires_in_days)
+    await persistence.grant_cooldown_override(
+        candidate_id,
+        granted_by=payload.granted_by,
+        expires_at=expires_at,
+        reason=payload.reason,
+    )
+
+
+@router.delete(
+    "/api/v1/admin/candidates/{candidate_id}/override",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["admin"],
+)
+async def revoke_cooldown_override(
+    candidate_id: str,
+    request: Request,
+    revoked_by: str = Query(..., min_length=1),
+) -> None:
+    """Revoke any active cooldown override for a candidate."""
+    persistence = _persistence(request)
+    await persistence.revoke_cooldown_override(candidate_id, revoked_by=revoked_by)
+
+
+@router.patch(
+    "/api/v1/admin/candidates/{candidate_id}/no-restrictions",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["admin"],
+)
+async def set_no_restrictions(
+    candidate_id: str,
+    payload: NoRestrictionsPayload,
+    request: Request,
+) -> None:
+    """Toggle the no-restrictions flag for a candidate."""
+    persistence = _persistence(request)
+    await persistence.set_no_restrictions(
+        candidate_id,
+        enabled=payload.enabled,
+        updated_by=payload.updated_by,
+    )
+
+
+# ─── Monitoring: admin settings ──────────────────────────────────
+
+
+class AdminSettingsPayload(BaseModel):
+    cooldown_days: int
+    updated_at: str | None = None
+    updated_by: str | None = None
+
+
+class AdminSettingsUpdatePayload(BaseModel):
+    cooldown_days: int = Field(..., ge=1, le=3650)
+    updated_by: str | None = None
+
+
+@router.get(
+    "/api/v1/admin/settings",
+    response_model=AdminSettingsPayload,
+    tags=["admin"],
+)
+async def get_admin_settings(request: Request) -> AdminSettingsPayload:
+    """Return platform-wide admin settings."""
+    persistence = _persistence(request)
+    data = await persistence.get_admin_settings()
+    return AdminSettingsPayload(**data)
+
+
+@router.put(
+    "/api/v1/admin/settings",
+    response_model=AdminSettingsPayload,
+    tags=["admin"],
+)
+async def update_admin_settings(
+    payload: AdminSettingsUpdatePayload,
+    request: Request,
+) -> AdminSettingsPayload:
+    """Update platform-wide admin settings."""
+    persistence = _persistence(request)
+    await persistence.save_admin_settings(
+        cooldown_days=payload.cooldown_days,
+        updated_by=payload.updated_by,
+    )
+    data = await persistence.get_admin_settings()
+    return AdminSettingsPayload(**data)
+
+
+# ─── Monitoring: eligibility check ──────────────────────────
+
+
+class EligibilityPayload(BaseModel):
+    eligible: bool
+    reason: str | None = None
+    next_eligible_at: str | None = None
+    cooldown_days: int
+
+
+@router.get(
+    "/api/v1/assessment/eligibility",
+    response_model=EligibilityPayload,
+    tags=["assessment"],
+)
+async def check_eligibility(
+    request: Request,
+    candidate_id: str = Query(..., description="Candidate email"),
+) -> EligibilityPayload:
+    """Check whether a candidate may start a new assessment."""
+    persistence = _persistence(request)
+    data = await persistence.check_assessment_eligibility(candidate_id)
+    return EligibilityPayload(**data)
+
+
+# ─── LiveKit join page ─────────────────────────────────────────
 
 
 @router.get("/join", response_class=HTMLResponse, tags=["livekit"])

@@ -37,7 +37,57 @@ function StatusChip({ status, reportStatus }: { status: string; reportStatus: st
   if (status === "in_progress") return <span className="chip chip-accent">In progress</span>;
   if (status === "failed") return <span className="chip chip-danger">Failed</span>;
   if (status === "cancelled") return <span className="chip chip-neutral">Cancelled</span>;
+  if (status === "user_ended") return <span className="chip chip-neutral">User ended</span>;
   return <span className="chip chip-neutral">{status}</span>;
+}
+
+const TERMINATION_LABELS: Record<string, string> = {
+  user_ended: "Ended by user",
+  browser_closed: "Browser closed",
+  timeout_no_audio: "Timeout: no audio",
+  timeout_duration: "Timeout: max duration",
+  websocket_error: "WebSocket error",
+  llm_error: "LLM error",
+  transport_error: "Transport error",
+  admin_cancelled: "Admin cancelled",
+};
+
+function TerminationChip({ reason }: { reason: string | null | undefined }) {
+  if (!reason) return null;
+  const label = TERMINATION_LABELS[reason] ?? reason.replace(/_/g, " ");
+  const isError =
+    reason.includes("error") || reason.includes("timeout") || reason === "transport_error";
+  return (
+    <span
+      className={`chip ${isError ? "chip-danger" : "chip-neutral"}`}
+      style={{ fontSize: 10, marginLeft: 4 }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function FocusFlag({ suspicious, totalMs }: { suspicious: boolean; totalMs: number }) {
+  if (!suspicious && totalMs === 0) return null;
+  const minutes = Math.round(totalMs / 60000);
+  return (
+    <span
+      title={`Focus lost ~${minutes}m total away`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 11,
+        color: suspicious ? "var(--danger)" : "var(--warn)",
+        fontWeight: suspicious ? 600 : 400,
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+      </svg>
+      {suspicious ? "Suspicious" : `${minutes}m away`}
+    </span>
+  );
 }
 
 function fmt(iso: string): string {
@@ -129,6 +179,7 @@ export default function AssessmentsTable({
           <div>Top skills</div>
           <div>Max level</div>
           <div>Confidence</div>
+          <div>Integrity</div>
           <div />
         </div>
 
@@ -171,6 +222,10 @@ export default function AssessmentsTable({
                     <span className="pct">{Math.round(s.overallConfidence * 100)}%</span>
                   </div>
                 ) : "—"}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <TerminationChip reason={s.terminationReason} />
+                <FocusFlag suspicious={s.focusSuspicious ?? false} totalMs={s.totalFocusAwayMs ?? 0} />
               </div>
               <div>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
