@@ -153,6 +153,11 @@ export function IntakeForm({ dialingMethod, onSubmit, submitError }: IntakeFormP
           By starting, you agree to the call being recorded and analysed for this assessment.{" "}
           <a href="#">Read our privacy notice.</a>
         </p>
+        <p className="consent" style={{ marginTop: "8px" }}>
+          <strong>Please keep this browser window in focus</strong> during the call — focus
+          changes are logged. All claims made during the assessment will be verified by your
+          management and a qualified SME reviewer.
+        </p>
       </div>
     </form>
   );

@@ -10,6 +10,13 @@ dedicated columns on ``assessment_sessions`` (promoted from JSONB metadata).
 Phase 6 Revision (dual-review-tokens) extends save_report() to take
 separate expert + supervisor tokens, and adds role-specific read and
 save methods for the two-stage review workflow.
+
+Monitoring phase adds:
+  - append_focus_event / save_transcript_turn / set_termination for
+    real-time call telemetry
+  - get/grant/revoke candidate cooldown overrides and no-restrictions flag
+  - get/save admin-level settings (cooldown period)
+  - check_assessment_eligibility for the pre-call gate
 """
 
 from __future__ import annotations
@@ -225,4 +232,135 @@ class IPersistence(ABC):
         metadata: dict[str, Any],
     ) -> None:
         """Merge additional metadata into a session without changing its status."""
+        ...
+
+    # ─── Monitoring: focus events ────────────────────────────────────
+
+    @abstractmethod
+    async def append_focus_event(
+        self,
+        session_id: str,
+        event: dict[str, Any],
+    ) -> None:
+        """Append one focus-loss event and update focus_suspicious / total_focus_away_ms.
+
+        ``event`` must contain: ``at`` (ISO string), ``phase`` (str),
+        ``durationMs`` (int).  The adapter recomputes totals and sets
+        ``focus_suspicious = True`` when either total events > 4 or
+        any single absence exceeds 60 000 ms.
+        """
+        ...
+
+    # ─── Monitoring: progressive transcript ──────────────────────────
+
+    @abstractmethod
+    async def save_transcript_turn(
+        self,
+        session_id: str,
+        turn: dict[str, Any],
+    ) -> None:
+        """Append one transcript turn to transcript_json.turns and update last_turn_saved_at.
+
+        If no transcript row exists yet, initialises ``{"turns": [turn]}``.
+        ``turn`` shape: ``{timestamp, speaker, text, phase, vad_confidence}``.
+        """
+        ...
+
+    # ─── Monitoring: structured termination ──────────────────────────
+
+    @abstractmethod
+    async def set_termination(
+        self,
+        session_id: str,
+        termination_reason: str,
+        error_details: dict[str, Any] | None = None,
+    ) -> None:
+        """Write termination_reason and optional error_details to the session row."""
+        ...
+
+    # ─── Monitoring: candidate restrictions ──────────────────────────
+
+    @abstractmethod
+    async def get_candidate_restrictions(
+        self,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        """Return restriction state for a candidate.
+
+        Keys: ``no_restrictions``, ``cooldown_override_granted_at``,
+        ``cooldown_override_expires_at``, ``audit_log`` (list).
+        Returns defaults (all None / False) when the candidate does not exist.
+        """
+        ...
+
+    @abstractmethod
+    async def grant_cooldown_override(
+        self,
+        candidate_id: str,
+        granted_by: str,
+        expires_at: datetime,
+        reason: str | None = None,
+    ) -> None:
+        """Set a time-limited cooldown bypass and write an audit row."""
+        ...
+
+    @abstractmethod
+    async def revoke_cooldown_override(
+        self,
+        candidate_id: str,
+        revoked_by: str,
+    ) -> None:
+        """Clear the cooldown override and write an audit row."""
+        ...
+
+    @abstractmethod
+    async def set_no_restrictions(
+        self,
+        candidate_id: str,
+        enabled: bool,
+        updated_by: str,
+    ) -> None:
+        """Toggle the no-restrictions flag and write an audit row."""
+        ...
+
+    # ─── Monitoring: admin settings ──────────────────────────────────
+
+    @abstractmethod
+    async def get_admin_settings(self) -> dict[str, Any]:
+        """Return platform-wide admin settings (singleton row).
+
+        Keys: ``cooldown_days``, ``updated_at``, ``updated_by``.
+        Returns defaults when no row has been written yet.
+        """
+        ...
+
+    @abstractmethod
+    async def save_admin_settings(
+        self,
+        cooldown_days: int,
+        updated_by: str | None = None,
+    ) -> None:
+        """Upsert the singleton admin-settings row."""
+        ...
+
+    # ─── Monitoring: eligibility ──────────────────────────────────────
+
+    @abstractmethod
+    async def check_assessment_eligibility(
+        self,
+        candidate_id: str,
+    ) -> dict[str, Any]:
+        """Compute whether a candidate may start a new assessment.
+
+        Returns a dict with keys:
+          ``eligible`` (bool), ``reason`` (str | None),
+          ``next_eligible_at`` (datetime | None), ``cooldown_days`` (int).
+
+        A candidate is ineligible when a session with a countable status
+        (``completed``, ``processed``, ``user_ended``) exists within the
+        current cooldown window AND neither ``no_restrictions`` nor a
+        valid (non-expired) cooldown override is active.
+
+        Technical failures (``failed`` status) are never counted.
+        """
         ...
