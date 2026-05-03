@@ -333,6 +333,37 @@ async def _run(
         json.dump(payload, f, indent=2, default=str)
 
     print(f"\n{_hr()}")
+    print("  STEP 1 — Claims analysis")
+    print(_hr())
+    if result.report.claims:
+        for i, claim in enumerate(result.report.claims, 1):
+            claim_type_label = "SME" if claim.claim_type == "sme" else "supervisor"
+            print(
+                f"  {i:2}.  [{claim.sfia_skill_code:6}]  "
+                f"[{claim_type_label}]  "
+                f"{claim.summary[:70]}"
+            )
+    else:
+        print("  (no claims extracted)")
+
+    print(f"\n{_hr()}")
+    print("  STEP 2 — Holistic assessment")
+    print(_hr())
+    if score_result.holistic_profiles:
+        for h in score_result.holistic_profiles:
+            tag = " ✓" if h.skill_code in target_skills else ""
+            bar = "█" * round(h.prominence * 10)
+            print(
+                f"  {h.skill_code:6}  {h.skill_name[:28]:28}  "
+                f"level={h.estimated_level}  "
+                f"prominence={h.prominence:.2f} {bar}{tag}"
+            )
+            print(f"         {h.evidence_summary[:80]}")
+        print("       ✓ = targeted skill")
+    else:
+        print("  (no holistic profiles)")
+
+    print(f"\n{_hr()}")
     print("  RESULTS")
     print(_hr())
     print(f"  Turns            : {result.turn_count}")
@@ -343,19 +374,6 @@ async def _run(
     print(f"  Mean delta       : {score_result.mean_level_delta}")
     print(f"  Accuracy         : {score_result.mean_accuracy_pct:.1f}%")
     print(f"  Mean prominence  : {score_result.mean_prominence:.2f}")
-
-    if score_result.holistic_profiles:
-        print(f"\n  Holistic skill profile  (full-transcript view, top {len(score_result.holistic_profiles)}):")
-        for h in score_result.holistic_profiles:
-            tag = " ✓" if h.skill_code in target_skills else ""
-            bar = "█" * round(h.prominence * 10)
-            print(
-                f"    {h.skill_code:6}  {h.skill_name[:28]:28}  "
-                f"level={h.estimated_level}  "
-                f"prominence={h.prominence:.2f} {bar}{tag}"
-            )
-            print(f"           {h.evidence_summary[:80]}")
-        print("         ✓ = targeted skill")
 
     print(f"\n  Output: {out_path}")
     print(_hr())

@@ -29,6 +29,13 @@ fi
 
 cd "$VOICE_ENGINE_DIR"
 
+# Load .env so DATABASE_URL and other vars are available without
+# the caller needing to export them manually.
+if [[ -f ".env" ]]; then
+  # shellcheck disable=SC1091
+  set -a; source .env; set +a
+fi
+
 # Activate virtual environment if present
 if [[ -f ".venv/bin/activate" ]]; then
   # shellcheck disable=SC1091

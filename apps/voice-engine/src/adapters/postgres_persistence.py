@@ -92,6 +92,10 @@ def _row_to_session(row: Any) -> AssessmentSession:
 
 class PostgresPersistence(IPersistence):
     def __init__(self, database_url: str) -> None:
+        # Strip Prisma-specific query parameters (e.g. ?schema=public) that
+        # asyncpg doesn't understand and will reject.
+        if "?schema=" in database_url:
+            database_url = database_url.split("?schema=")[0]
         self._database_url = database_url
         self._pool: Any = None
 
