@@ -26,16 +26,28 @@ class EvidenceSegment(BaseModel):
 
 
 class Claim(BaseModel):
-    """A discrete, verifiable work claim extracted and enriched from a transcript."""
+    """A discrete, verifiable work claim extracted and enriched from a transcript.
+
+    claim_type governs which reviewer validates it:
+    - "sme":        Technical HOW/WHY — technology choices, architecture, algorithms.
+                    Routed to the expert (SME) reviewer.
+    - "supervisor": Factual WHAT/WHERE/WHEN — job titles, projects, team sizes, durations.
+                    Routed to the supervisor reviewer.
+
+    SFIA level is NOT assessed at the individual claim level — only the holistic
+    analysis produces level estimates. sfia_level defaults to 0 (unset).
+    """
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     verbatim_quote: str
     interpreted_claim: str
+    summary: str = ""
+    claim_type: str = "sme"  # "sme" | "supervisor"
     sfia_skill_code: str
     sfia_skill_name: str
-    sfia_level: int = Field(ge=1, le=7)
-    confidence: float = Field(ge=0.0, le=1.0)
-    reasoning: str
+    sfia_level: int = Field(default=0, ge=0, le=7)  # 0 = not evaluated at claim level
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reasoning: str = ""
     framework_type: str = "sfia-9"
     evidence_segments: list[EvidenceSegment] = Field(default_factory=list)
 

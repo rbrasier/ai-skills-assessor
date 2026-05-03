@@ -85,9 +85,7 @@ class AnthropicClaimLLMProvider(IClaimLLMProvider):
         return claim.model_copy(update={
             "sfia_skill_code": mapping["skill_code"],
             "sfia_skill_name": mapping["skill_name"],
-            "sfia_level": int(mapping["level"]),
-            "confidence": float(mapping["confidence"]),
-            "reasoning": mapping["reasoning"],
+            "reasoning": mapping.get("reasoning", ""),
         })
 
     def _extraction_prompt(self, transcript_text: str) -> str:
@@ -101,15 +99,26 @@ context are NOT claims.
 For each claim provide:
 1. verbatim_quote: The exact words from the transcript
 2. interpreted_claim: A concise, clear restatement of what the candidate is claiming
-3. evidence_segments: The timestamp range(s) in the transcript (seconds from call start) \
+3. summary: A single sentence (max 20 words) capturing the core of the claim
+4. claim_type: Classify as one of:
+   - "sme": A technical claim about HOW or WHY — technology choices, architecture \
+decisions, algorithms, implementation approaches, design reasoning. Requires a subject \
+matter expert to validate.
+   - "supervisor": A factual claim about WHAT, WHERE, WHEN, or HOW LONG — job title, \
+employer, project name, team size, duration, role scope. A manager or HR records can verify.
+5. evidence_segments: The timestamp range(s) in the transcript (seconds from call start) \
    that contain this claim. Derive start_time and end_time from the [MM:SS] timestamps \
    shown, converting to total seconds (e.g. [02:15] = 135.0 seconds).
+
+Do NOT assess SFIA responsibility levels — that is done separately.
 
 Return ONLY a JSON array, no other text:
 [
   {{
     "verbatim_quote": "exact quote",
     "interpreted_claim": "clear interpretation",
+    "summary": "one sentence summary",
+    "claim_type": "sme",
     "evidence_segments": [
       {{"start_time": 45.0, "end_time": 67.0}}
     ]
@@ -122,8 +131,7 @@ TRANSCRIPT:
 ---"""
 
     def _mapping_prompt(self, claim: Claim, skill_context: str) -> str:
-        return f"""Map the following work claim to the most appropriate SFIA skill code \
-and responsibility level (1–7).
+        return f"""Map the following work claim to the most appropriate SFIA skill area.
 
 CLAIM:
 Verbatim: "{claim.verbatim_quote}"
@@ -132,15 +140,11 @@ Interpreted: "{claim.interpreted_claim}"
 CANDIDATE SFIA SKILL DEFINITIONS:
 {skill_context}
 
-Consider all four SFIA level attributes: Autonomy, Influence, Complexity, Knowledge.
-
 Return ONLY a JSON object, no other text:
 {{
   "skill_code": "XXXX",
   "skill_name": "Full Skill Name",
-  "level": 4,
-  "confidence": 0.85,
-  "reasoning": "Brief explanation of why this skill and level were chosen"
+  "reasoning": "Brief explanation of why this skill area best fits the claim"
 }}"""
 
     async def analyse_transcript_holistically(
@@ -234,12 +238,11 @@ TRANSCRIPT:
             claims.append(Claim(
                 verbatim_quote=item["verbatim_quote"],
                 interpreted_claim=item["interpreted_claim"],
+                summary=item.get("summary", ""),
+                claim_type=item.get("claim_type", "sme"),
                 evidence_segments=segments,
                 sfia_skill_code="",
                 sfia_skill_name="",
-                sfia_level=1,
-                confidence=0.0,
-                reasoning="",
             ))
         return claims
 
