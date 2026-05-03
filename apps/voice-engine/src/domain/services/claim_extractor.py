@@ -1,8 +1,8 @@
 """ClaimExtractor — post-call claim extraction pipeline (Phase 6).
 
-Pure domain service with no infrastructure imports. Orchestrates the two-pass
-LLM pipeline: raw extraction from formatted transcript text, then RAG-enriched
-SFIA skill mapping for each claim.
+Pure domain service with no infrastructure imports. Makes exactly two LLM
+calls per transcript: one to extract all claims (with SFIA skill mapping
+included), one for the holistic assessment.
 """
 
 from __future__ import annotations
@@ -33,12 +33,11 @@ class ClaimExtractor:
         transcript_json: dict,
         framework_type: str = "sfia-9",
     ) -> ClaimExtractionResult:
-        """Full extraction pipeline.
+        """Full extraction pipeline — exactly 2 LLM calls.
 
         1. Format transcript JSON into readable "[MM:SS] SPEAKER: text" lines.
-        2. Extract raw claims (with evidence_segments) from formatted text.
-        3. For each claim, query RAG for top-3 relevant SFIA skill definitions.
-        4. Map each claim to a skill code, level, and confidence score.
+        2. Call 1: extract all claims including SFIA skill code/name and claim type.
+        3. Call 2: holistic transcript analysis for overall skill level estimates.
         """
         transcript_text = self._format_transcript(transcript_json)
         raw_claims = await self.llm.extract_claims(transcript_text)
