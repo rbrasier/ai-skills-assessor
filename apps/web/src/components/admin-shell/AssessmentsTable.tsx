@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import type { AdminSessionSummary } from "@ai-skills-assessor/shared-types";
+import type { AdminSessionSummary, AssessmentReport } from "@ai-skills-assessor/shared-types";
 import AssessmentReviewModal from "@/components/review-modal/AssessmentReviewModal";
-import type { AssessmentReport } from "@ai-skills-assessor/shared-types";
+import { mapVoiceEngineClaim, mapVoiceEngineReport } from "@/lib/map-assessment-report";
 
 type Filter = "all" | "complete" | "review" | "incomplete";
 
@@ -111,17 +111,27 @@ export default function AssessmentsTable({
 
   const visible = sessions.filter((s) => statusFilter(s, filter));
 
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+
   async function openRow(s: AdminSessionSummary) {
     setModalSession(s);
-    if (s.expertReviewToken) {
-      setReportLoading(true);
-      try {
-        const res = await fetch(`/api/review/expert/${s.expertReviewToken}`, { cache: "no-store" });
-        if (res.ok) setReportData((await res.json()) as AssessmentReport);
-      } finally {
-        setReportLoading(false);
+    setReportLoading(true);
+    try {
+      const adminRes = await fetch(`/api/admin/sessions/${encodeURIComponent(s.sessionId)}/report`, {
+        cache: "no-store",
+      });
+      if (adminRes.ok) {
+        const raw = (await adminRes.json()) as Record<string, unknown>;
+        setReportData(mapVoiceEngineReport(raw));
+        return;
       }
-    } else {
+      if (s.expertReviewToken) {
+        const res = await fetch(`/api/review/expert/${s.expertReviewToken}`, { cache: "no-store" });
+        if (res.ok) {
+          setReportData((await res.json()) as AssessmentReport);
+          return;
+        }
+      }
       setReportData({
         sessionId: s.sessionId,
         candidateName: s.candidateName ?? null,
@@ -130,6 +140,8 @@ export default function AssessmentsTable({
         overallConfidence: s.overallConfidence ?? null,
         reportStatus: s.reportStatus ?? null,
         claimsJson: [],
+        holisticAssessmentJson: [],
+        transcriptJson: null,
         reportGeneratedAt: null,
         expiresAt: null,
         expertSubmittedAt: null,
@@ -140,10 +152,29 @@ export default function AssessmentsTable({
         supervisorReviewerEmail: null,
         reviewsCompletedAt: null,
       });
+    } finally {
+      setReportLoading(false);
     }
   }
 
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  async function handleAdminClaimsSave(payload: {
+    adminActor: string;
+    claims: Array<{ id: string; adminDecision?: "verified" | "rejected" | "flagged"; adminComment?: string }>;
+  }) {
+    if (!modalSession) return;
+    const res = await fetch(`/api/admin/sessions/${encodeURIComponent(modalSession.sessionId)}/claims`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`Save failed (${res.status})`);
+    const updated = (await res.json()) as { claims: unknown[] };
+    setReportData((r) => {
+      if (!r) return r;
+      const mapped = (updated.claims as Record<string, unknown>[]).map((c) => mapVoiceEngineClaim(c));
+      return { ...r, claimsJson: mapped };
+    });
+  }
 
   return (
     <>
@@ -253,6 +284,8 @@ export default function AssessmentsTable({
               onClose={() => { setModalSession(null); setReportData(null); }}
               expertReviewUrl={modalSession.expertReviewToken ? `${origin}/review/expert/${modalSession.expertReviewToken}` : undefined}
               supervisorReviewUrl={modalSession.supervisorReviewToken ? `${origin}/review/supervisor/${modalSession.supervisorReviewToken}` : undefined}
+              showReviewLinksInHeader
+              onAdminClaimsSave={handleAdminClaimsSave}
             />
           )}
         </div>

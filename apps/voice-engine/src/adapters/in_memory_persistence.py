@@ -9,6 +9,7 @@ in ``apps/voice-engine/src/main.py`` should prefer
 from __future__ import annotations
 
 import asyncio
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,42 @@ from src.domain.ports.persistence import IPersistence
 _DEFAULT_COOLDOWN_DAYS = 90
 _FOCUS_SUSPICIOUS_MAX_EVENTS = 5
 _FOCUS_SUSPICIOUS_MAX_AWAY_MS = 60_000
+
+
+def _in_memory_dashboard_skill_metrics(
+    claims: list[dict[str, Any]],
+    holistic: list[dict[str, Any]],
+) -> tuple[int | None, list[str]]:
+    max_level: int | None = None
+    claim_levels: list[int] = []
+    for c in claims:
+        sl = c.get("sfia_level")
+        if sl is not None and int(sl) > 0:
+            claim_levels.append(int(sl))
+    if claim_levels:
+        max_level = max(claim_levels)
+
+    hol_levels = [
+        int(h["estimated_level"])
+        for h in holistic
+        if h.get("estimated_level") is not None
+    ]
+    if hol_levels:
+        hol_max = max(hol_levels)
+        max_level = hol_max if max_level is None else max(max_level, hol_max)
+
+    seen: dict[str, float] = {}
+    for c in claims:
+        code = c.get("sfia_skill_code") or c.get("skill_code") or c.get("skillCode")
+        if code:
+            seen[code] = seen.get(code, 0.0) + float(c.get("confidence") or 0.0)
+    for h in holistic:
+        code = h.get("skill_code")
+        if code:
+            seen[code] = seen.get(code, 0.0) + float(h.get("prominence") or 0.0)
+    top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
+    return max_level, top_codes
+
 
 # Statuses that count toward the cooldown window
 _COUNTABLE_STATUSES = {"completed", "processed", "user_ended"}
@@ -47,6 +84,15 @@ class InMemoryPersistence(IPersistence):
             "updated_by": None,
         }
         self._lock = asyncio.Lock()
+        # Admin UI: in-memory framework catalog (tests / dev without Postgres)
+        self._frameworks: dict[str, dict[str, Any]] = {}
+        self._framework_tv: dict[tuple[str, str], str] = {}
+        self._framework_skills: dict[str, dict[str, Any]] = {}
+        self._framework_skill_by_key: dict[tuple[str, str], str] = {}
+        self._framework_skill_levels: dict[str, dict[str, Any]] = {}
+        self._framework_level_by_key: dict[tuple[str, int | None], str] = {}
+        self._framework_attributes: dict[str, dict[str, Any]] = {}
+        self._framework_attr_by_key: dict[tuple[str, str, int], str] = {}
 
     async def ping(self) -> bool:
         return True
@@ -217,6 +263,7 @@ class InMemoryPersistence(IPersistence):
                 "supervisor_reviewer_email": None,
                 "reviews_completed_at": None,
                 "expires_at": expires_at.isoformat(),
+                "transcript_json": self._transcript_jsons.get(session_id),
             }
             self._reports[session_id] = report
             self._expert_tokens[expert_review_token] = session_id
@@ -227,7 +274,10 @@ class InMemoryPersistence(IPersistence):
         session_id: str,
     ) -> dict[str, Any] | None:
         async with self._lock:
-            return self._reports.get(session_id)
+            r = self._reports.get(session_id)
+            if r is None:
+                return None
+            return self._report_dict_with_transcript(session_id, r)
 
     async def get_report_by_expert_token(
         self,
@@ -237,7 +287,10 @@ class InMemoryPersistence(IPersistence):
             session_id = self._expert_tokens.get(expert_review_token)
             if session_id is None:
                 return None
-            return self._reports.get(session_id)
+            r = self._reports.get(session_id)
+            if r is None:
+                return None
+            return self._report_dict_with_transcript(session_id, r)
 
     async def get_report_by_supervisor_token(
         self,
@@ -247,7 +300,19 @@ class InMemoryPersistence(IPersistence):
             session_id = self._supervisor_tokens.get(supervisor_review_token)
             if session_id is None:
                 return None
-            return self._reports.get(session_id)
+            r = self._reports.get(session_id)
+            if r is None:
+                return None
+            return self._report_dict_with_transcript(session_id, r)
+
+    def _report_dict_with_transcript(self, session_id: str, report: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(report)
+        tx = self._transcript_jsons.get(session_id)
+        if tx is not None:
+            merged["transcript_json"] = tx
+        elif "transcript_json" not in merged:
+            merged["transcript_json"] = None
+        return merged
 
     async def save_expert_review(
         self,
@@ -377,22 +442,17 @@ class InMemoryPersistence(IPersistence):
         for s in page:
             report = self._reports.get(s.id, {})
             claims = report.get("claims_json") or []
-            max_level: int | None = None
-            top_codes: list[str] = []
-            if claims:
-                levels = [c.get("sfia_level") for c in claims if c.get("sfia_level")]
-                if levels:
-                    max_level = max(levels)
-                seen: dict[str, int] = {}
-                for c in claims:
-                    code = c.get("sfia_skill_code") or c.get("skill_code") or c.get("skillCode")
-                    if code:
-                        seen[code] = seen.get(code, 0) + 1
-                top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
+            holistic = report.get("holistic_assessment_json") or []
+            max_level, top_codes = _in_memory_dashboard_skill_metrics(claims, holistic)
 
             duration = 0.0
             if s.started_at and s.ended_at:
                 duration = (s.ended_at - s.started_at).total_seconds()
+            meta = s.metadata or {}
+            if isinstance(meta, dict):
+                rec_dur = meta.get("recording_duration_seconds")
+                if isinstance(rec_dur, (int, float)) and rec_dur > 0:
+                    duration = float(rec_dur)
 
             summaries.append({
                 "session_id": s.id,
@@ -415,6 +475,305 @@ class InMemoryPersistence(IPersistence):
                 "total_focus_away_ms": s.total_focus_away_ms,
             })
         return summaries
+
+    async def save_admin_claim_flags(
+        self,
+        session_id: str,
+        claims_patch: list[dict[str, Any]],
+        *,
+        admin_actor: str,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            report = self._reports.get(session_id)
+            if report is None:
+                raise ValueError(f"Session not found: {session_id}")
+            claims_json = list(report.get("claims_json") or [])
+            patch_by_id = {p["id"]: p for p in claims_patch}
+            now_iso = datetime.now(UTC).isoformat()
+            updated: list[dict[str, Any]] = []
+            for claim in claims_json:
+                patch = patch_by_id.get(claim.get("id", ""))
+                if patch:
+                    nc = {**claim}
+                    if "admin_decision" in patch and patch["admin_decision"] is not None:
+                        nc["admin_decision"] = patch["admin_decision"]
+                    if "admin_comment" in patch:
+                        nc["admin_comment"] = patch.get("admin_comment")
+                    nc["admin_actor"] = admin_actor
+                    nc["admin_updated_at"] = now_iso
+                    claim = nc
+                updated.append(claim)
+            report["claims_json"] = updated
+            return {
+                "session_id": session_id,
+                "report_status": report.get("report_status"),
+                "claims": updated,
+            }
+
+    async def list_candidates_with_sessions(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            sessions = list(self._sessions.values())
+        by_email: dict[str, list[AssessmentSession]] = {}
+        for s in sessions:
+            by_email.setdefault(s.candidate_id, []).append(s)
+        rows: list[dict[str, Any]] = []
+        for email, sess_list in by_email.items():
+            cand = self._candidates.get(email)
+            if not sess_list:
+                continue
+            last = max(s.created_at or datetime.min.replace(tzinfo=UTC) for s in sess_list)
+            rows.append({
+                "email": email,
+                "candidate": cand,
+                "sessions": sorted(
+                    sess_list,
+                    key=lambda x: x.created_at or datetime.min.replace(tzinfo=UTC),
+                    reverse=True,
+                ),
+                "last_call_at": last,
+            })
+        rows.sort(key=lambda r: r["last_call_at"], reverse=True)
+        page = rows[offset : offset + limit]
+
+        out: list[dict[str, Any]] = []
+        for r in page:
+            email = r["email"]
+            cand: Candidate | None = r["candidate"]
+            sess_list: list[AssessmentSession] = r["sessions"]
+            summaries_inner: list[dict[str, Any]] = []
+            for s in sess_list:
+                rep = self._reports.get(s.id, {})
+                claims = rep.get("claims_json") or []
+                holistic = rep.get("holistic_assessment_json") or []
+                max_level, top_codes = _in_memory_dashboard_skill_metrics(claims, holistic)
+                duration = 0.0
+                if s.started_at and s.ended_at:
+                    duration = (s.ended_at - s.started_at).total_seconds()
+                meta = s.metadata or {}
+                if isinstance(meta, dict):
+                    rec_dur = meta.get("recording_duration_seconds")
+                    if isinstance(rec_dur, (int, float)) and rec_dur > 0:
+                        duration = float(rec_dur)
+                summaries_inner.append({
+                    "session_id": s.id,
+                    "candidate_email": s.candidate_id,
+                    "phone_number": s.phone_number or "",
+                    "status": s.status.value if isinstance(s.status, AssessmentStatus) else s.status,
+                    "duration_seconds": duration,
+                    "created_at": s.created_at.isoformat() if s.created_at else "",
+                    "started_at": s.started_at.isoformat() if s.started_at else None,
+                    "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+                    "candidate_name": s.candidate_name,
+                    "report_status": rep.get("report_status"),
+                    "expert_review_token": rep.get("expert_review_token"),
+                    "supervisor_review_token": rep.get("supervisor_review_token"),
+                    "max_sfia_level": max_level,
+                    "overall_confidence": rep.get("overall_confidence"),
+                    "top_skill_codes": top_codes,
+                    "termination_reason": s.termination_reason,
+                    "focus_suspicious": s.focus_suspicious,
+                    "total_focus_away_ms": s.total_focus_away_ms,
+                })
+            out.append({
+                "email": email,
+                "first_name": cand.first_name if cand else "",
+                "last_name": cand.last_name if cand else "",
+                "total_calls": len(sess_list),
+                "last_call_at": r["last_call_at"].isoformat() if r["last_call_at"] else None,
+                "sessions": summaries_inner,
+            })
+        return out
+
+    async def list_frameworks(self) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [dict(v) for v in self._frameworks.values()]
+
+    async def upsert_framework(
+        self,
+        *,
+        framework_id: str | None,
+        type_: str,
+        version: str,
+        name: str,
+        rubric: str,
+        is_active: bool,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            if framework_id and framework_id in self._frameworks:
+                row = self._frameworks[framework_id]
+                row.update({
+                    "type": type_, "version": version, "name": name,
+                    "rubric": rubric, "is_active": is_active,
+                })
+                return dict(row)
+            key = (type_, version)
+            existing_id = self._framework_tv.get(key)
+            if existing_id:
+                row = self._frameworks[existing_id]
+                row.update({"name": name, "rubric": rubric, "is_active": is_active})
+                return dict(row)
+            fid = str(uuid.uuid4())
+            self._frameworks[fid] = {
+                "id": fid, "type": type_, "version": version,
+                "name": name, "rubric": rubric, "is_active": is_active,
+            }
+            self._framework_tv[key] = fid
+            return dict(self._frameworks[fid])
+
+    async def list_framework_skills(self, framework_id: str) -> list[dict[str, Any]]:
+        async with self._lock:
+            out = []
+            for sk in self._framework_skills.values():
+                if sk.get("framework_id") != framework_id:
+                    continue
+                levels = [
+                    {"id": lv["id"], "level": lv.get("level"), "content": lv.get("content", "")}
+                    for lv in self._framework_skill_levels.values()
+                    if lv.get("framework_skill_id") == sk["id"]
+                ]
+                levels.sort(key=lambda x: (x.get("level") is None, x.get("level") or 0))
+                row = dict(sk)
+                row["levels"] = levels
+                out.append(row)
+            out.sort(key=lambda x: x.get("skill_code", ""))
+            return out
+
+    async def upsert_framework_skill(
+        self,
+        *,
+        framework_id: str,
+        skill_id: str | None,
+        skill_code: str,
+        skill_name: str,
+        category: str,
+        subcategory: str | None,
+        description: str,
+        guidance: str | None,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            if skill_id and skill_id in self._framework_skills:
+                sk = self._framework_skills[skill_id]
+                sk.update({
+                    "skill_code": skill_code, "skill_name": skill_name,
+                    "category": category, "subcategory": subcategory,
+                    "description": description, "guidance": guidance,
+                })
+                return {k: sk[k] for k in (
+                    "id", "skill_code", "skill_name", "category",
+                    "subcategory", "description", "guidance",
+                ) if k in sk}
+
+            key = (framework_id, skill_code)
+            eid = self._framework_skill_by_key.get(key)
+            if eid:
+                sk = self._framework_skills[eid]
+                sk.update({
+                    "skill_name": skill_name, "category": category,
+                    "subcategory": subcategory, "description": description, "guidance": guidance,
+                })
+                return {k: sk[k] for k in (
+                    "id", "skill_code", "skill_name", "category",
+                    "subcategory", "description", "guidance",
+                )}
+
+            sid = str(uuid.uuid4())
+            self._framework_skills[sid] = {
+                "id": sid,
+                "framework_id": framework_id,
+                "skill_code": skill_code,
+                "skill_name": skill_name,
+                "category": category,
+                "subcategory": subcategory,
+                "description": description,
+                "guidance": guidance,
+            }
+            self._framework_skill_by_key[key] = sid
+            sk = self._framework_skills[sid]
+            return {k: sk[k] for k in (
+                "id", "skill_code", "skill_name", "category",
+                "subcategory", "description", "guidance",
+            )}
+
+    async def upsert_framework_skill_level(
+        self,
+        *,
+        framework_skill_id: str,
+        level_id: str | None,
+        level: int | None,
+        content: str,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            if level_id and level_id in self._framework_skill_levels:
+                lv = self._framework_skill_levels[level_id]
+                lv["level"] = level
+                lv["content"] = content
+                return {"id": lv["id"], "level": lv["level"], "content": lv["content"]}
+
+            key = (framework_skill_id, level)
+            eid = self._framework_level_by_key.get(key)
+            if eid:
+                lv = self._framework_skill_levels[eid]
+                lv["content"] = content
+                return {"id": lv["id"], "level": lv["level"], "content": lv["content"]}
+
+            lid = str(uuid.uuid4())
+            self._framework_skill_levels[lid] = {
+                "id": lid,
+                "framework_skill_id": framework_skill_id,
+                "level": level,
+                "content": content,
+            }
+            self._framework_level_by_key[key] = lid
+            lv = self._framework_skill_levels[lid]
+            return {"id": lv["id"], "level": lv["level"], "content": lv["content"]}
+
+    async def list_framework_attributes(self, framework_id: str) -> list[dict[str, Any]]:
+        async with self._lock:
+            rows = [dict(a) for a in self._framework_attributes.values()
+                    if a.get("framework_id") == framework_id]
+            rows.sort(key=lambda x: (x.get("attribute", ""), x.get("level", 0)))
+            return rows
+
+    async def upsert_framework_attribute(
+        self,
+        *,
+        framework_id: str,
+        attribute_id: str | None,
+        attribute: str,
+        level: int,
+        description: str,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            if attribute_id and attribute_id in self._framework_attributes:
+                a = self._framework_attributes[attribute_id]
+                a.update({"attribute": attribute, "level": level, "description": description})
+                return {"id": a["id"], "attribute": a["attribute"],
+                        "level": a["level"], "description": a["description"]}
+
+            key = (framework_id, attribute, level)
+            eid = self._framework_attr_by_key.get(key)
+            if eid:
+                a = self._framework_attributes[eid]
+                a["description"] = description
+                return {"id": a["id"], "attribute": a["attribute"],
+                        "level": a["level"], "description": a["description"]}
+
+            aid = str(uuid.uuid4())
+            self._framework_attributes[aid] = {
+                "id": aid,
+                "framework_id": framework_id,
+                "attribute": attribute,
+                "level": level,
+                "description": description,
+            }
+            self._framework_attr_by_key[key] = aid
+            a = self._framework_attributes[aid]
+            return {"id": a["id"], "attribute": a["attribute"],
+                    "level": a["level"], "description": a["description"]}
 
     # ─── Metadata ────────────────────────────────────────────────────
 

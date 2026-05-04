@@ -1,21 +1,23 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { voiceEngineAdminHeaders } from "@/lib/voice-engine-admin";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: Request,
+  request: NextRequest,
   { params }: { params: { candidateId: string } },
 ) {
   const voiceEngineUrl = process.env.VOICE_ENGINE_URL ?? "http://localhost:8000";
   const upstream = await fetch(
     `${voiceEngineUrl}/api/v1/admin/candidates/${encodeURIComponent(params.candidateId)}/restrictions`,
+    { headers: voiceEngineAdminHeaders(request) },
   );
   const data = await upstream.json();
   return NextResponse.json(data, { status: upstream.status });
 }
 
 export async function POST(
-  request: Request,
+  request: NextRequest,
   { params }: { params: { candidateId: string } },
 ) {
   const voiceEngineUrl = process.env.VOICE_ENGINE_URL ?? "http://localhost:8000";
@@ -24,7 +26,10 @@ export async function POST(
     `${voiceEngineUrl}/api/v1/admin/candidates/${encodeURIComponent(params.candidateId)}/override`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...voiceEngineAdminHeaders(request),
+      },
       body: JSON.stringify({
         granted_by: body.grantedBy,
         expires_in_days: body.expiresInDays ?? 7,
@@ -40,7 +45,7 @@ export async function POST(
 }
 
 export async function DELETE(
-  request: Request,
+  request: NextRequest,
   { params }: { params: { candidateId: string } },
 ) {
   const voiceEngineUrl = process.env.VOICE_ENGINE_URL ?? "http://localhost:8000";
@@ -48,7 +53,7 @@ export async function DELETE(
   const revokedBy = searchParams.get("revokedBy") ?? "admin";
   const upstream = await fetch(
     `${voiceEngineUrl}/api/v1/admin/candidates/${encodeURIComponent(params.candidateId)}/override?revoked_by=${encodeURIComponent(revokedBy)}`,
-    { method: "DELETE" },
+    { method: "DELETE", headers: voiceEngineAdminHeaders(request) },
   );
   if (!upstream.ok) {
     return NextResponse.json({}, { status: upstream.status });

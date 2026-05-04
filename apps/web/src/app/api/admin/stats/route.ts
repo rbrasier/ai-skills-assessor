@@ -1,11 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { voiceEngineAdminHeaders } from "@/lib/voice-engine-admin";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest) {
+export async function GET(request: NextRequest) {
   const voiceEngineUrl = process.env.VOICE_ENGINE_URL ?? "http://localhost:8000";
   const upstream = await fetch(`${voiceEngineUrl}/api/v1/admin/stats`, {
     cache: "no-store",
+    headers: voiceEngineAdminHeaders(request),
   });
   const data = (await upstream.json()) as Record<string, unknown>;
   if (!upstream.ok) return NextResponse.json(data, { status: upstream.status });

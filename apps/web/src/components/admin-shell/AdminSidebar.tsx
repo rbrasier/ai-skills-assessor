@@ -1,6 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 
 interface Props {
   userName?: string;
@@ -10,6 +11,7 @@ interface Props {
 
 export default function AdminSidebar({ userName = "Operator", userOrg = "Admin", onLogout }: Props) {
   const router = useRouter();
+  const pathname = usePathname() ?? "";
 
   async function handleLogout() {
     await fetch("/api/auth/login", { method: "DELETE" });
@@ -38,14 +40,14 @@ export default function AdminSidebar({ userName = "Operator", userOrg = "Admin",
 
       <div className="nav-group">
         <div className="nav-label">Analytics</div>
-        <button className="nav-item active">
+        <Link href="/dashboard" className={`nav-item${pathname === "/dashboard" ? " active" : ""}`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
             <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
           </svg>
           Dashboard
-        </button>
-        <button className="nav-item">
+        </Link>
+        <Link href="/dashboard/candidates" className={`nav-item${pathname.startsWith("/dashboard/candidates") ? " active" : ""}`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="9" cy="8" r="3.5"/>
             <path d="M3 20c0-3 2.5-5 6-5s6 2 6 5"/>
@@ -53,18 +55,18 @@ export default function AdminSidebar({ userName = "Operator", userOrg = "Admin",
             <path d="M15 14c3 0 6 1.5 6 5"/>
           </svg>
           Candidates
-        </button>
+        </Link>
       </div>
 
       <div className="nav-group">
         <div className="nav-label">Configuration</div>
-        <button className="nav-item">
+        <Link href="/dashboard/skills" className={`nav-item${pathname.startsWith("/dashboard/skills") ? " active" : ""}`}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 3 2 8l10 5 10-5-10-5Z"/>
             <path d="M2 14l10 5 10-5"/>
           </svg>
           Skills library
-        </button>
+        </Link>
         <button className="nav-item" onClick={onLogout ?? handleLogout}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>

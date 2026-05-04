@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { AssessmentReport, ReviewSaveResponse } from "@ai-skills-assessor/shared-types";
 import AssessmentReviewModal from "@/components/review-modal/AssessmentReviewModal";
+import { mapVoiceEngineClaim } from "@/lib/map-assessment-report";
 
 interface PageProps {
   params: { token: string };
@@ -38,7 +39,11 @@ export default function ExpertReviewPage({ params }: PageProps) {
     if (res.status === 409) throw new Error("409: already submitted");
     if (!res.ok) throw new Error(`Save failed (${res.status})`);
     const updated = (await res.json()) as ReviewSaveResponse;
-    setReport((r) => r ? { ...r, reportStatus: updated.reportStatus, claimsJson: updated.claims } : r);
+    setReport((r) => r ? {
+      ...r,
+      reportStatus: updated.reportStatus,
+      claimsJson: updated.claims.map((c) => mapVoiceEngineClaim(c as Record<string, unknown>)),
+    } : r);
   }
 
   if (loading) {
