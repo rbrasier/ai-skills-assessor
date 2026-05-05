@@ -63,42 +63,42 @@ export default function ModalHeader({ report, onClose, expertReviewUrl, supervis
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flex: "none" }}>
-        {(expertReviewUrl || supervisorReviewUrl) && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", maxWidth: 360 }}>
-            {expertReviewUrl && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <span style={{ fontSize: 11, color: "var(--ink-4)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  SME review
-                </span>
-                <a href={expertReviewUrl} className="mono" style={{ fontSize: 11.5, wordBreak: "break-all", color: "var(--accent-ink)" }}>
-                  {expertReviewUrl}
-                </a>
-                <button type="button" className="btn" style={{ padding: "3px 8px", fontSize: 11 }} onClick={() => void copyText("SME URL", expertReviewUrl)}>
-                  Copy
-                </button>
-              </div>
-            )}
-            {supervisorReviewUrl && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <span style={{ fontSize: 11, color: "var(--ink-4)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  Supervisor review
-                </span>
-                <a href={supervisorReviewUrl} className="mono" style={{ fontSize: 11.5, wordBreak: "break-all", color: "var(--accent-ink)" }}>
-                  {supervisorReviewUrl}
-                </a>
-                <button type="button" className="btn" style={{ padding: "3px 8px", fontSize: 11 }} onClick={() => void copyText("Supervisor URL", supervisorReviewUrl)}>
-                  Copy
-                </button>
-              </div>
-            )}
-          </div>
-        )}
         {onClose && (
           <button className="modal-close" onClick={onClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
               <path d="M18 6 6 18M6 6l12 12"/>
             </svg>
           </button>
+        )}
+        {(expertReviewUrl || supervisorReviewUrl) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {expertReviewUrl && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "var(--ink-4)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+                  SME review
+                </span>
+                <a href={expertReviewUrl} className="mono" style={{ fontSize: 11, color: "var(--accent-ink)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {expertReviewUrl}
+                </a>
+                <button type="button" className="btn" style={{ padding: "3px 10px", fontSize: 11, flex: "none" }} onClick={() => void copyText("SME URL", expertReviewUrl)}>
+                  Copy
+                </button>
+              </div>
+            )}
+            {supervisorReviewUrl && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "var(--ink-4)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+                  Supervisor review
+                </span>
+                <a href={supervisorReviewUrl} className="mono" style={{ fontSize: 11, color: "var(--accent-ink)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {supervisorReviewUrl}
+                </a>
+                <button type="button" className="btn" style={{ padding: "3px 10px", fontSize: 11, flex: "none" }} onClick={() => void copyText("Supervisor URL", supervisorReviewUrl)}>
+                  Copy
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
