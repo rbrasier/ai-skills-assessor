@@ -15,9 +15,10 @@ export interface AssessmentReviewModalProps {
   variant: ModalVariant;
   report: AssessmentReport;
   onClose?: () => void;
-  /** For operator: copy-link helpers */
+  /** For operator: copy-link helpers (only when variant is operator) */
   expertReviewUrl?: string;
   supervisorReviewUrl?: string;
+  showReviewLinksInHeader?: boolean;
   /** Callbacks for expert/supervisor submit */
   onExpertSubmit?: (payload: {
     reviewerFullName: string;
@@ -27,7 +28,12 @@ export interface AssessmentReviewModalProps {
   onSupervisorSubmit?: (payload: {
     reviewerFullName: string;
     reviewerEmail: string;
-    claims: Array<{ id: string; supervisorDecision: "verified" | "rejected"; supervisorComment?: string }>;
+    claims: Array<{ id: string; supervisorDecision: "verified" | "rejected" | "flagged"; supervisorComment?: string }>;
+  }) => Promise<void>;
+  /** Operator: persist admin verify/reject/flag */
+  onAdminClaimsSave?: (payload: {
+    adminActor: string;
+    claims: Array<{ id: string; adminDecision?: "verified" | "rejected" | "flagged"; adminComment?: string }>;
   }) => Promise<void>;
 }
 
@@ -37,10 +43,12 @@ export default function AssessmentReviewModal({
   onClose,
   expertReviewUrl,
   supervisorReviewUrl,
+  showReviewLinksInHeader = false,
   onExpertSubmit,
   onSupervisorSubmit,
+  onAdminClaimsSave,
 }: AssessmentReviewModalProps) {
-  const [tab, setTab] = useState<"claims" | "transcript">("claims");
+  const [tab, setTab] = useState<"sme" | "supervisor" | "transcript">("sme");
 
   // Expert state
   const [expertState, setExpertState] = useState<ExpertState>({});
@@ -52,14 +60,42 @@ export default function AssessmentReviewModal({
   // Supervisor state
   const [supervisorState, setSupervisorState] = useState<SupervisorState>({});
 
+  // Admin operator state
+  const [adminActor, setAdminActor] = useState("");
+  const [adminState, setAdminState] = useState<SupervisorState>({});
+  const [adminSaving, setAdminSaving] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+
   const claims = report.claimsJson ?? [];
+  const holistic = report.holisticAssessmentJson ?? [];
+
+  const smeClaims = claims.filter((c) => (c.claimType ?? "sme") === "sme");
+  const supervisorClaims = claims.filter((c) => (c.claimType ?? "sme") === "supervisor");
+
+  function buildAiSummaryText(): string {
+    if (!holistic.length) return "";
+    const lines = holistic
+      .slice()
+      .sort((a, b) => b.prominence - a.prominence)
+      .slice(0, 8)
+      .map(
+        (h) =>
+          `${h.skillCode} (${h.skillName}) — estimated L${h.estimatedLevel} ` +
+          `(weight ${Math.round(h.prominence * 100)}%): ${h.evidenceSummary}`,
+      );
+    return lines.join("\n\n");
+  }
 
   function handleExpertLevelChange(claimId: string, level: number) {
     setExpertState((s) => ({ ...s, [claimId]: level }));
   }
 
-  function handleSupervisorChange(claimId: string, decision: "verified" | "rejected", comment: string) {
+  function handleSupervisorChange(claimId: string, decision: "verified" | "rejected" | "flagged", comment: string) {
     setSupervisorState((s) => ({ ...s, [claimId]: { decision, comment } }));
+  }
+
+  function handleAdminChange(claimId: string, decision: "verified" | "rejected" | "flagged", comment: string) {
+    setAdminState((s) => ({ ...s, [claimId]: { decision, comment } }));
   }
 
   async function handleSubmit() {
@@ -84,12 +120,12 @@ export default function AssessmentReviewModal({
         const claimsPayload = claims.map((c) => ({
           id: c.id,
           supervisorDecision: supervisorState[c.id]?.decision ?? c.supervisorDecision ?? "verified",
-          supervisorComment: supervisorState[c.id]?.comment || c.supervisorComment || undefined,
+          supervisorComment: supervisorState[c.id]?.comment ?? c.supervisorComment ?? "",
         }));
         await onSupervisorSubmit({
           reviewerFullName: identity.fullName,
           reviewerEmail: identity.email,
-          claims: claimsPayload as Array<{ id: string; supervisorDecision: "verified" | "rejected"; supervisorComment?: string }>,
+          claims: claimsPayload,
         });
         setSubmitted(true);
       }
@@ -103,61 +139,122 @@ export default function AssessmentReviewModal({
     }
   }
 
+  async function handleAdminSave() {
+    if (!onAdminClaimsSave) return;
+    const actor = adminActor.trim();
+    if (!actor) {
+      setAdminError("Enter your name or initials for the audit log.");
+      return;
+    }
+    setAdminSaving(true);
+    setAdminError(null);
+    try {
+      const payloadClaims = claims
+        .map((c) => {
+          const st = adminState[c.id];
+          if (!st) return null;
+          return {
+            id: c.id,
+            adminDecision: st.decision,
+            adminComment: st.comment,
+          };
+        })
+        .filter((x): x is { id: string; adminDecision: "verified" | "rejected" | "flagged"; adminComment: string } => x != null);
+      if (payloadClaims.length === 0) {
+        setAdminError("Change at least one claim before saving.");
+        setAdminSaving(false);
+        return;
+      }
+      await onAdminClaimsSave({ adminActor: actor, claims: payloadClaims });
+    } catch (e) {
+      setAdminError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setAdminSaving(false);
+    }
+  }
+
   const identityValid = Object.keys(validateIdentity(identity)).length === 0;
   const canSubmit = identityValid && !submitting && !submitted;
 
-  const transcript = (report as unknown as { transcriptJson?: unknown })?.transcriptJson;
+  const transcript = report.transcriptJson;
 
   return (
     <div className="modal">
-      <ModalHeader report={report} onClose={onClose} />
-
-      <div className="modal-tabs">
-        <button className={`mtab ${tab === "claims" ? "on" : ""}`} onClick={() => setTab("claims")}>
-          Claims register <span className="tc">{claims.length}</span>
-        </button>
-        <button className={`mtab ${tab === "transcript" ? "on" : ""}`} onClick={() => setTab("transcript")}>
-          Transcript
-        </button>
-      </div>
+      <ModalHeader
+        report={report}
+        onClose={onClose}
+        expertReviewUrl={showReviewLinksInHeader ? expertReviewUrl : undefined}
+        supervisorReviewUrl={showReviewLinksInHeader ? supervisorReviewUrl : undefined}
+      />
 
       <div className="modal-body">
         <ScoreStrip report={report} />
-        <AiSummaryPanel />
+        <AiSummaryPanel summary={buildAiSummaryText() || null} />
 
-        {tab === "claims" && (
+        <div className="modal-tabs">
+          <button className={`mtab ${tab === "sme" ? "on" : ""}`} onClick={() => setTab("sme")}>
+            SME claims <span className="tc">{smeClaims.length}</span>
+          </button>
+          <button className={`mtab ${tab === "supervisor" ? "on" : ""}`} onClick={() => setTab("supervisor")}>
+            Supervisor claims <span className="tc">{supervisorClaims.length}</span>
+          </button>
+          <button className={`mtab ${tab === "transcript" ? "on" : ""}`} onClick={() => setTab("transcript")}>
+            Transcript
+          </button>
+        </div>
+
+        {tab === "sme" && (
           <ClaimsRegisterTable
-            claims={claims}
+            claims={smeClaims}
             variant={variant}
             expertState={expertState}
             onExpertChange={handleExpertLevelChange}
             supervisorState={supervisorState}
             onSupervisorChange={handleSupervisorChange}
+            adminState={adminState}
+            onAdminChange={handleAdminChange}
+            registerSubView={variant === "supervisor" ? "supervisor" : "sme"}
+          />
+        )}
+        {tab === "supervisor" && (
+          <ClaimsRegisterTable
+            claims={supervisorClaims}
+            variant={variant}
+            expertState={expertState}
+            onExpertChange={handleExpertLevelChange}
+            supervisorState={supervisorState}
+            onSupervisorChange={handleSupervisorChange}
+            adminState={adminState}
+            onAdminChange={handleAdminChange}
+            registerSubView="supervisor"
           />
         )}
         {tab === "transcript" && (
-          <TranscriptPanel transcriptJson={transcript as { turns?: Array<{ speaker: string; text: string; timestamp?: string | number }> } | null} />
+          <TranscriptPanel transcriptJson={transcript} />
         )}
 
-        {variant === "operator-read-only" && (expertReviewUrl || supervisorReviewUrl) && (
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {expertReviewUrl && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => void navigator.clipboard.writeText(expertReviewUrl)}
-              >
-                Copy expert review URL
-              </button>
-            )}
-            {supervisorReviewUrl && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => void navigator.clipboard.writeText(supervisorReviewUrl)}
-              >
-                Copy supervisor review URL
-              </button>
+        {variant === "operator-read-only" && onAdminClaimsSave && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 12 }}>
+            <input
+              type="text"
+              placeholder="Your name (audit log)"
+              value={adminActor}
+              onChange={(e) => setAdminActor(e.target.value)}
+              style={{
+                flex: "1 1 200px",
+                minWidth: 160,
+                background: "var(--paper)",
+                border: "1px solid var(--line-2)",
+                borderRadius: 7,
+                padding: "8px 10px",
+                fontSize: 13,
+              }}
+            />
+            <button type="button" className="btn btn-primary" disabled={adminSaving} onClick={() => void handleAdminSave()}>
+              {adminSaving ? "Saving…" : "Save operator notes"}
+            </button>
+            {adminError && (
+              <span style={{ fontSize: 12, color: "var(--danger)", width: "100%" }}>{adminError}</span>
             )}
           </div>
         )}

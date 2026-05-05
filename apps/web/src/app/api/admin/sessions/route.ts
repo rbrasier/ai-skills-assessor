@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { voiceEngineAdminHeaders } from "@/lib/voice-engine-admin";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +8,10 @@ export async function GET(request: NextRequest) {
   const search = request.nextUrl.searchParams.toString();
   const url = `${voiceEngineUrl}/api/v1/admin/sessions${search ? `?${search}` : ""}`;
 
-  const upstream = await fetch(url, { cache: "no-store" });
+  const upstream = await fetch(url, {
+    cache: "no-store",
+    headers: voiceEngineAdminHeaders(request),
+  });
   const data = await upstream.json();
   if (!upstream.ok) {
     return NextResponse.json(data, { status: upstream.status });

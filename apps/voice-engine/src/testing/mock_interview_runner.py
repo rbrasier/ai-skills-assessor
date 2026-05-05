@@ -126,6 +126,7 @@ async def run_mock_interview(
         session_id,
         persistence,
         identified_skills=controller.identified_skills,
+        recording_duration_seconds=int(round(elapsed)),
     )
 
     pipeline = PostCallPipeline(

@@ -12,7 +12,7 @@ without requiring a live database.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from src.domain.models.assessment import (
@@ -21,6 +21,50 @@ from src.domain.models.assessment import (
     Candidate,
 )
 from src.domain.ports.persistence import IPersistence
+
+
+def _dashboard_skill_metrics(
+    claims: list[dict[str, Any]],
+    holistic: list[dict[str, Any]],
+) -> tuple[int | None, list[str]]:
+    """Derive max SFIA level and top skill codes for admin tables.
+
+    Prefer holistic ``estimated_level`` when per-claim ``sfia_level`` is unset.
+    """
+    max_level: int | None = None
+    top_codes: list[str] = []
+
+    claim_levels: list[int] = []
+    for c in claims:
+        sl = c.get("sfia_level")
+        if sl is not None and int(sl) > 0:
+            claim_levels.append(int(sl))
+    if claim_levels:
+        max_level = max(claim_levels)
+
+    hol_levels = [
+        int(h["estimated_level"])
+        for h in holistic
+        if h.get("estimated_level") is not None
+    ]
+    if hol_levels:
+        hol_max = max(hol_levels)
+        max_level = hol_max if max_level is None else max(max_level, hol_max)
+
+    seen: dict[str, float] = {}
+    for c in claims:
+        code = c.get("sfia_skill_code") or c.get("skill_code") or c.get("skillCode")
+        if code:
+            seen[code] = seen.get(code, 0.0) + float(c.get("confidence") or 0.0)
+
+    for h in holistic:
+        code = h.get("skill_code")
+        if code:
+            prom = float(h.get("prominence") or 0.0)
+            seen[code] = seen.get(code, 0.0) + prom
+
+    top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
+    return max_level, top_codes
 
 
 def _to_naive(dt: datetime | None) -> datetime | None:
@@ -349,8 +393,18 @@ class PostgresPersistence(IPersistence):
 
     # ─── Report ──────────────────────────────────────────────────────
 
-    _REPORT_COLS = """
+    _REPORT_COLS_COMPACT = """
         "id", "candidate_name", "claims_json", "holistic_assessment_json",
+        "expert_review_token", "supervisor_review_token", "review_token",
+        "report_status", "overall_confidence",
+        "report_generated_at", "sme_reviewed_at", "expires_at",
+        "expert_submitted_at", "expert_reviewer_name", "expert_reviewer_email",
+        "supervisor_submitted_at", "supervisor_reviewer_name",
+        "supervisor_reviewer_email", "reviews_completed_at"
+    """
+
+    _REPORT_COLS = """
+        "id", "candidate_name", "transcript_json", "claims_json", "holistic_assessment_json",
         "expert_review_token", "supervisor_review_token", "review_token",
         "report_status", "overall_confidence",
         "report_generated_at", "sme_reviewed_at", "expires_at",
@@ -421,7 +475,7 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                SELECT {self._REPORT_COLS}
+                SELECT {self._REPORT_COLS_COMPACT}
                 FROM assessment_sessions
                 WHERE "expert_review_token" = $1
                 """,
@@ -437,7 +491,7 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                SELECT {self._REPORT_COLS}
+                SELECT {self._REPORT_COLS_COMPACT}
                 FROM assessment_sessions
                 WHERE "supervisor_review_token" = $1
                 """,
@@ -456,7 +510,7 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                SELECT {self._REPORT_COLS}
+                SELECT {self._REPORT_COLS_COMPACT}
                 FROM assessment_sessions
                 WHERE "expert_review_token" = $1
                 """,
@@ -517,7 +571,7 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                SELECT {self._REPORT_COLS}
+                SELECT {self._REPORT_COLS_COMPACT}
                 FROM assessment_sessions
                 WHERE "supervisor_review_token" = $1
                 """,
@@ -633,6 +687,8 @@ class PostgresPersistence(IPersistence):
                 "expert_review_token",
                 "supervisor_review_token",
                 "claims_json",
+                "holistic_assessment_json",
+                "metadata",
                 "overall_confidence",
                 "termination_reason",
                 "focus_suspicious",
@@ -657,24 +713,24 @@ class PostgresPersistence(IPersistence):
                     if hasattr(ended - started, "total_seconds")
                     else 0.0
                 )
+            meta = row.get("metadata") or {}
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            rec_dur = meta.get("recording_duration_seconds")
+            if isinstance(rec_dur, (int, float)) and rec_dur > 0:
+                duration = float(rec_dur)
             created = row["createdAt"]
             claims_raw = row["claims_json"]
             if isinstance(claims_raw, str):
                 claims_raw = json.loads(claims_raw)
             claims = claims_raw or []
 
-            max_level: int | None = None
-            top_codes: list[str] = []
-            if claims:
-                levels = [c.get("sfia_level") for c in claims if c.get("sfia_level")]
-                if levels:
-                    max_level = max(levels)
-                seen: dict[str, int] = {}
-                for c in claims:
-                    code = c.get("sfia_skill_code") or c.get("skill_code") or c.get("skillCode")
-                    if code:
-                        seen[code] = seen.get(code, 0) + 1
-                top_codes = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:5]
+            holistic_raw = row.get("holistic_assessment_json")
+            if isinstance(holistic_raw, str):
+                holistic_raw = json.loads(holistic_raw)
+            holistic = holistic_raw or []
+
+            max_level, top_codes = _dashboard_skill_metrics(claims, holistic)
 
             summaries.append({
                 "session_id": row["id"],
@@ -698,6 +754,446 @@ class PostgresPersistence(IPersistence):
             })
 
         return summaries
+
+    async def save_admin_claim_flags(
+        self,
+        session_id: str,
+        claims_patch: list[dict[str, Any]],
+        *,
+        admin_actor: str,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT "id", "claims_json", "report_status"
+                FROM assessment_sessions
+                WHERE "id" = $1
+                """,
+                session_id,
+            )
+            if row is None:
+                raise ValueError(f"Session not found: {session_id}")
+
+            claims_json = row["claims_json"]
+            if isinstance(claims_json, str):
+                claims_json = json.loads(claims_json)
+
+            patch_by_id = {p["id"]: p for p in claims_patch}
+            now = _to_naive(datetime.now(UTC))
+            now_iso = datetime.now(UTC).isoformat()
+            updated_claims = []
+            for claim in claims_json or []:
+                patch = patch_by_id.get(claim.get("id", ""))
+                if patch:
+                    next_claim = {**claim}
+                    if "admin_decision" in patch and patch["admin_decision"] is not None:
+                        next_claim["admin_decision"] = patch["admin_decision"]
+                    if "admin_comment" in patch:
+                        next_claim["admin_comment"] = patch.get("admin_comment")
+                    next_claim["admin_actor"] = admin_actor
+                    next_claim["admin_updated_at"] = now_iso
+                    claim = next_claim
+                updated_claims.append(claim)
+
+            await conn.execute(
+                """
+                UPDATE assessment_sessions
+                SET "claims_json" = $2::jsonb
+                WHERE "id" = $1
+                """,
+                session_id,
+                json.dumps(updated_claims),
+            )
+            return {
+                "session_id": session_id,
+                "report_status": row["report_status"],
+                "claims": updated_claims,
+            }
+
+    async def list_candidates_with_sessions(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.email,
+                       c."firstName" AS first_name,
+                       c."lastName" AS last_name,
+                       (SELECT COUNT(*)::int FROM assessment_sessions s
+                        WHERE s."candidateId" = c.email) AS total_calls,
+                       (SELECT MAX("createdAt") FROM assessment_sessions s2
+                        WHERE s2."candidateId" = c.email) AS last_call_at
+                FROM candidates c
+                WHERE EXISTS (
+                    SELECT 1 FROM assessment_sessions s3
+                    WHERE s3."candidateId" = c.email
+                )
+                ORDER BY last_call_at DESC NULLS LAST
+                LIMIT $1 OFFSET $2
+                """,
+                limit,
+                offset,
+            )
+
+        if not rows:
+            return []
+
+        emails = [r["email"] for r in rows]
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            sess_rows = await conn.fetch(
+                """
+                SELECT
+                    "id",
+                    "candidateId",
+                    "phoneNumber",
+                    "status",
+                    "createdAt",
+                    "startedAt",
+                    "endedAt",
+                    "candidate_name",
+                    "report_status",
+                    "expert_review_token",
+                    "supervisor_review_token",
+                    "claims_json",
+                    "holistic_assessment_json",
+                    "metadata",
+                    "overall_confidence",
+                    "termination_reason",
+                    "focus_suspicious",
+                    "total_focus_away_ms"
+                FROM assessment_sessions
+                WHERE "candidateId" = ANY($1::text[])
+                ORDER BY "candidateId", "createdAt" DESC
+                """,
+                emails,
+            )
+
+        by_email: dict[str, list[dict[str, Any]]] = {e: [] for e in emails}
+        for srow in sess_rows:
+            started = srow["startedAt"]
+            ended = srow["endedAt"]
+            duration = 0.0
+            if started and ended:
+                duration = (
+                    (ended - started).total_seconds()
+                    if hasattr(ended - started, "total_seconds")
+                    else 0.0
+                )
+            meta = srow.get("metadata") or {}
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            rec_dur = meta.get("recording_duration_seconds")
+            if isinstance(rec_dur, (int, float)) and rec_dur > 0:
+                duration = float(rec_dur)
+
+            claims_raw = srow["claims_json"]
+            if isinstance(claims_raw, str):
+                claims_raw = json.loads(claims_raw)
+            claims = claims_raw or []
+            holistic_raw = srow.get("holistic_assessment_json")
+            if isinstance(holistic_raw, str):
+                holistic_raw = json.loads(holistic_raw)
+            holistic = holistic_raw or []
+            max_level, top_codes = _dashboard_skill_metrics(claims, holistic)
+
+            cid = srow["candidateId"]
+            by_email.setdefault(cid, []).append({
+                "session_id": srow["id"],
+                "candidate_email": cid,
+                "phone_number": srow["phoneNumber"] or "",
+                "status": srow["status"],
+                "duration_seconds": duration,
+                "created_at": srow["createdAt"].isoformat() if srow["createdAt"] else "",
+                "started_at": started.isoformat() if started else None,
+                "ended_at": ended.isoformat() if ended else None,
+                "candidate_name": srow.get("candidate_name"),
+                "report_status": srow.get("report_status"),
+                "expert_review_token": srow.get("expert_review_token"),
+                "supervisor_review_token": srow.get("supervisor_review_token"),
+                "max_sfia_level": max_level,
+                "overall_confidence": srow.get("overall_confidence"),
+                "top_skill_codes": top_codes,
+                "termination_reason": srow.get("termination_reason"),
+                "focus_suspicious": bool(srow.get("focus_suspicious", False)),
+                "total_focus_away_ms": int(srow.get("total_focus_away_ms") or 0),
+            })
+
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            email = r["email"]
+            out.append({
+                "email": email,
+                "first_name": r["first_name"],
+                "last_name": r["last_name"],
+                "total_calls": int(r["total_calls"] or 0),
+                "last_call_at": r["last_call_at"].isoformat() if r["last_call_at"] else None,
+                "sessions": by_email.get(email, []),
+            })
+        return out
+
+    async def list_frameworks(self) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, type, version, name, rubric, "isActive" AS is_active,
+                       "createdAt" AS created_at, "updatedAt" AS updated_at
+                FROM frameworks
+                ORDER BY type, version
+                """
+            )
+        return [dict(r) for r in rows]
+
+    async def upsert_framework(
+        self,
+        *,
+        framework_id: str | None,
+        type_: str,
+        version: str,
+        name: str,
+        rubric: str,
+        is_active: bool,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            if framework_id:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE frameworks
+                    SET type = $2, version = $3, name = $4, rubric = $5, "isActive" = $6
+                    WHERE id = $1
+                    RETURNING id, type, version, name, rubric, "isActive" AS is_active
+                    """,
+                    framework_id,
+                    type_,
+                    version,
+                    name,
+                    rubric,
+                    is_active,
+                )
+                if row is None:
+                    raise ValueError(f"Framework not found: {framework_id}")
+                return dict(row)
+
+            row = await conn.fetchrow(
+                """
+                INSERT INTO frameworks (id, type, version, name, rubric, "isActive")
+                VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+                ON CONFLICT (type, version)
+                DO UPDATE SET name = EXCLUDED.name, rubric = EXCLUDED.rubric,
+                              "isActive" = EXCLUDED."isActive"
+                RETURNING id, type, version, name, rubric, "isActive" AS is_active
+                """,
+                type_,
+                version,
+                name,
+                rubric,
+                is_active,
+            )
+            return dict(row)
+
+    async def list_framework_skills(self, framework_id: str) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT fs.id, fs."skillCode" AS skill_code, fs."skillName" AS skill_name,
+                       fs.category, fs.subcategory, fs.description, fs.guidance,
+                       fs."createdAt" AS created_at, fs."updatedAt" AS updated_at,
+                       COALESCE(
+                         json_agg(
+                           json_build_object(
+                             'id', fsl.id,
+                             'level', fsl.level,
+                             'content', fsl.content,
+                             'created_at', fsl."createdAt"
+                           ) ORDER BY fsl.level NULLS LAST
+                         ) FILTER (WHERE fsl.id IS NOT NULL),
+                         '[]'::json
+                       ) AS levels
+                FROM framework_skills fs
+                LEFT JOIN framework_skill_levels fsl ON fsl."frameworkSkillId" = fs.id
+                WHERE fs."frameworkId" = $1
+                GROUP BY fs.id
+                ORDER BY fs."skillCode"
+                """,
+                framework_id,
+            )
+        result: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            lv = d.get("levels")
+            if isinstance(lv, str):
+                lv = json.loads(lv)
+            d["levels"] = lv or []
+            result.append(d)
+        return result
+
+    async def upsert_framework_skill(
+        self,
+        *,
+        framework_id: str,
+        skill_id: str | None,
+        skill_code: str,
+        skill_name: str,
+        category: str,
+        subcategory: str | None,
+        description: str,
+        guidance: str | None,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            if skill_id:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE framework_skills
+                    SET "skillCode" = $3, "skillName" = $4, category = $5,
+                        subcategory = $6, description = $7, guidance = $8
+                    WHERE id = $1 AND "frameworkId" = $2
+                    RETURNING id, "skillCode" AS skill_code, "skillName" AS skill_name,
+                              category, subcategory, description, guidance
+                    """,
+                    skill_id,
+                    framework_id,
+                    skill_code,
+                    skill_name,
+                    category,
+                    subcategory,
+                    description,
+                    guidance,
+                )
+                if row is None:
+                    raise ValueError("Skill not found or wrong framework")
+                return dict(row)
+
+            row = await conn.fetchrow(
+                """
+                INSERT INTO framework_skills
+                    (id, "frameworkId", "skillCode", "skillName", category, subcategory, description, guidance)
+                VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT ("frameworkId", "skillCode")
+                DO UPDATE SET
+                    "skillName" = EXCLUDED."skillName",
+                    category = EXCLUDED.category,
+                    subcategory = EXCLUDED.subcategory,
+                    description = EXCLUDED.description,
+                    guidance = EXCLUDED.guidance
+                RETURNING id, "skillCode" AS skill_code, "skillName" AS skill_name,
+                          category, subcategory, description, guidance
+                """,
+                framework_id,
+                skill_code,
+                skill_name,
+                category,
+                subcategory,
+                description,
+                guidance,
+            )
+            return dict(row)
+
+    async def upsert_framework_skill_level(
+        self,
+        *,
+        framework_skill_id: str,
+        level_id: str | None,
+        level: int | None,
+        content: str,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            if level_id:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE framework_skill_levels
+                    SET level = $3, content = $4
+                    WHERE id = $1 AND "frameworkSkillId" = $2
+                    RETURNING id, level, content
+                    """,
+                    level_id,
+                    framework_skill_id,
+                    level,
+                    content,
+                )
+                if row is None:
+                    raise ValueError("Skill level not found")
+                return dict(row)
+
+            row = await conn.fetchrow(
+                """
+                INSERT INTO framework_skill_levels (id, "frameworkSkillId", level, content)
+                VALUES (gen_random_uuid(), $1, $2, $3)
+                ON CONFLICT ("frameworkSkillId", level)
+                DO UPDATE SET content = EXCLUDED.content
+                RETURNING id, level, content
+                """,
+                framework_skill_id,
+                level,
+                content,
+            )
+            return dict(row)
+
+    async def list_framework_attributes(self, framework_id: str) -> list[dict[str, Any]]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, attribute, level, description, "createdAt" AS created_at
+                FROM framework_attributes
+                WHERE "frameworkId" = $1
+                ORDER BY attribute, level
+                """,
+                framework_id,
+            )
+        return [dict(r) for r in rows]
+
+    async def upsert_framework_attribute(
+        self,
+        *,
+        framework_id: str,
+        attribute_id: str | None,
+        attribute: str,
+        level: int,
+        description: str,
+    ) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            if attribute_id:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE framework_attributes
+                    SET attribute = $3, level = $4, description = $5
+                    WHERE id = $1 AND "frameworkId" = $2
+                    RETURNING id, attribute, level, description
+                    """,
+                    attribute_id,
+                    framework_id,
+                    attribute,
+                    level,
+                    description,
+                )
+                if row is None:
+                    raise ValueError("Attribute row not found")
+                return dict(row)
+
+            row = await conn.fetchrow(
+                """
+                INSERT INTO framework_attributes (id, "frameworkId", attribute, level, description)
+                VALUES (gen_random_uuid(), $1, $2, $3, $4)
+                ON CONFLICT ("frameworkId", attribute, level)
+                DO UPDATE SET description = EXCLUDED.description
+                RETURNING id, attribute, level, description
+                """,
+                framework_id,
+                attribute,
+                level,
+                description,
+            )
+            return dict(row)
 
     # ─── Metadata ────────────────────────────────────────────────────
 
@@ -1077,6 +1573,10 @@ def _report_row_to_dict(row: Any) -> dict[str, Any]:
     if isinstance(holistic_json, str):
         holistic_json = json.loads(holistic_json)
 
+    transcript_json = row.get("transcript_json")
+    if isinstance(transcript_json, str):
+        transcript_json = json.loads(transcript_json)
+
     def _iso(val: Any) -> str | None:
         if val is None:
             return None
@@ -1087,6 +1587,7 @@ def _report_row_to_dict(row: Any) -> dict[str, Any]:
     return {
         "session_id": row["id"],
         "candidate_name": row.get("candidate_name"),
+        "transcript_json": transcript_json,
         "claims_json": claims_json or [],
         "holistic_assessment_json": holistic_json or [],
         "expert_review_token": row.get("expert_review_token"),

@@ -17,13 +17,14 @@ The route handlers read the singleton :class:`CallManager` from
 
 from __future__ import annotations
 
+import os
 import struct as _struct
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 from src.domain.ports.persistence import IPersistence
 from src.domain.services.call_manager import (
@@ -39,6 +40,20 @@ _VOICE_ENGINE_VERSION = "0.7.0"
 router = APIRouter()
 
 _INVALID_FORM = "Invalid form data. Please update and try again."
+
+
+def _require_admin_token(request: Request) -> None:
+    """Optional gate for admin-only voice-engine routes.
+
+    When ``ADMIN_TOKEN`` is set in the environment, callers must send the same
+    value in the ``X-Admin-Token`` header. When unset (local dev), no check.
+    """
+    expected = os.environ.get("ADMIN_TOKEN", "").strip()
+    if not expected:
+        return
+    got = (request.headers.get("x-admin-token") or "").strip()
+    if got != expected:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin authentication required")
 
 
 def _manager(request: Request) -> CallManager:
@@ -394,7 +409,7 @@ async def get_admin_stats(request: Request) -> AdminStatsPayload:
     summaries = await persistence.list_admin_session_summaries(limit=200, offset=0)
 
     total = len(summaries)
-    completed = [s for s in summaries if s["status"] in ("completed", "processed")]
+    completed = [s for s in summaries if s["status"] in ("completed", "processed", "user_ended")]
     completion_rate = round(len(completed) / total * 100, 1) if total else 0.0
 
     durations = [s["duration_seconds"] for s in summaries if s["duration_seconds"] > 0]
@@ -468,6 +483,8 @@ class ProcessAssessmentResult(BaseModel):
 
 
 class AssessmentReportPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     session_id: str
     candidate_name: str | None = None
     expert_review_token: str | None = None
@@ -476,6 +493,7 @@ class AssessmentReportPayload(BaseModel):
     report_status: str | None = None
     claims_json: list[Any] = []
     holistic_assessment_json: list[Any] = []
+    transcript_json: dict[str, Any] | list[Any] | None = None
     report_generated_at: str | None = None
     expires_at: str | None = None
     expert_submitted_at: str | None = None
@@ -500,8 +518,8 @@ class ExpertReviewSubmitPayload(BaseModel):
 
 class SupervisorReviewClaimItem(BaseModel):
     id: str
-    supervisor_decision: str = Field(pattern="^(verified|rejected)$")
-    supervisor_comment: str = Field(min_length=1)
+    supervisor_decision: str = Field(pattern="^(verified|rejected|flagged)$")
+    supervisor_comment: str = Field(default="", max_length=4000)
 
 
 class SupervisorReviewSubmitPayload(BaseModel):
@@ -846,6 +864,319 @@ async def update_admin_settings(
     )
     data = await persistence.get_admin_settings()
     return AdminSettingsPayload(**data)
+
+
+# ─── Admin: candidates directory & skill library ───────────────────
+
+
+class CandidateDirectoryRowPayload(BaseModel):
+    email: str
+    first_name: str
+    last_name: str
+    total_calls: int
+    last_call_at: str | None = None
+    sessions: list[EnrichedSessionSummaryPayload] = []
+
+
+@router.get(
+    "/api/v1/admin/candidates",
+    response_model=list[CandidateDirectoryRowPayload],
+    tags=["admin"],
+)
+async def list_admin_candidates(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[CandidateDirectoryRowPayload]:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    rows = await persistence.list_candidates_with_sessions(limit=limit, offset=offset)
+    return [
+        CandidateDirectoryRowPayload(
+            email=r["email"],
+            first_name=r["first_name"],
+            last_name=r["last_name"],
+            total_calls=r["total_calls"],
+            last_call_at=r.get("last_call_at"),
+            sessions=[EnrichedSessionSummaryPayload(**s) for s in r.get("sessions", [])],
+        )
+        for r in rows
+    ]
+
+
+class FrameworkPayload(BaseModel):
+    id: str
+    type: str
+    version: str
+    name: str
+    rubric: str
+    is_active: bool = True
+
+
+class FrameworkUpsertPayload(BaseModel):
+    id: str | None = None
+    type: str = Field(..., min_length=1, max_length=50)
+    version: str = Field(..., min_length=1, max_length=20)
+    name: str = Field(..., min_length=1, max_length=255)
+    rubric: str = ""
+    is_active: bool = True
+
+
+@router.get(
+    "/api/v1/admin/frameworks",
+    response_model=list[FrameworkPayload],
+    tags=["admin"],
+)
+async def list_frameworks_admin(request: Request) -> list[FrameworkPayload]:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    rows = await persistence.list_frameworks()
+    return [FrameworkPayload(**{**r, "is_active": r.get("is_active", True)}) for r in rows]
+
+
+@router.post(
+    "/api/v1/admin/frameworks",
+    response_model=FrameworkPayload,
+    tags=["admin"],
+)
+async def upsert_framework_admin(
+    payload: FrameworkUpsertPayload,
+    request: Request,
+) -> FrameworkPayload:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    row = await persistence.upsert_framework(
+        framework_id=payload.id,
+        type_=payload.type,
+        version=payload.version,
+        name=payload.name,
+        rubric=payload.rubric,
+        is_active=payload.is_active,
+    )
+    return FrameworkPayload(**{**row, "is_active": row.get("is_active", True)})
+
+
+class FrameworkSkillLevelPayload(BaseModel):
+    id: str
+    level: int | None = None
+    content: str
+    created_at: Any = None
+
+
+class FrameworkSkillPayload(BaseModel):
+    id: str
+    skill_code: str
+    skill_name: str
+    category: str
+    subcategory: str | None = None
+    description: str
+    guidance: str | None = None
+    levels: list[FrameworkSkillLevelPayload] = []
+
+
+class FrameworkSkillUpsertPayload(BaseModel):
+    id: str | None = None
+    skill_code: str = Field(..., min_length=1, max_length=50)
+    skill_name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(default="General", max_length=100)
+    subcategory: str | None = Field(default=None, max_length=100)
+    description: str = ""
+    guidance: str | None = None
+
+
+@router.get(
+    "/api/v1/admin/frameworks/{framework_id}/skills",
+    response_model=list[FrameworkSkillPayload],
+    tags=["admin"],
+)
+async def list_framework_skills_admin(
+    framework_id: str,
+    request: Request,
+) -> list[FrameworkSkillPayload]:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    rows = await persistence.list_framework_skills(framework_id)
+    out: list[FrameworkSkillPayload] = []
+    for r in rows:
+        levels = [
+            FrameworkSkillLevelPayload(
+                id=str(lv["id"]),
+                level=lv.get("level"),
+                content=str(lv.get("content", "")),
+                created_at=lv.get("created_at"),
+            )
+            for lv in (r.get("levels") or [])
+        ]
+        out.append(FrameworkSkillPayload(
+            id=str(r["id"]),
+            skill_code=str(r["skill_code"]),
+            skill_name=str(r["skill_name"]),
+            category=str(r.get("category", "")),
+            subcategory=r.get("subcategory"),
+            description=str(r.get("description", "")),
+            guidance=r.get("guidance"),
+            levels=levels,
+        ))
+    return out
+
+
+@router.post(
+    "/api/v1/admin/frameworks/{framework_id}/skills",
+    response_model=dict[str, Any],
+    tags=["admin"],
+)
+async def upsert_framework_skill_admin(
+    framework_id: str,
+    payload: FrameworkSkillUpsertPayload,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    return await persistence.upsert_framework_skill(
+        framework_id=framework_id,
+        skill_id=payload.id,
+        skill_code=payload.skill_code,
+        skill_name=payload.skill_name,
+        category=payload.category,
+        subcategory=payload.subcategory,
+        description=payload.description,
+        guidance=payload.guidance,
+    )
+
+
+class FrameworkSkillLevelUpsertPayload(BaseModel):
+    id: str | None = None
+    level: int | None = Field(default=None, ge=1, le=7)
+    content: str = Field(..., min_length=1)
+
+
+@router.post(
+    "/api/v1/admin/framework-skills/{framework_skill_id}/levels",
+    response_model=dict[str, Any],
+    tags=["admin"],
+)
+async def upsert_framework_skill_level_admin(
+    framework_skill_id: str,
+    payload: FrameworkSkillLevelUpsertPayload,
+    request: Request,
+) -> dict[str, Any]:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    return await persistence.upsert_framework_skill_level(
+        framework_skill_id=framework_skill_id,
+        level_id=payload.id,
+        level=payload.level,
+        content=payload.content,
+    )
+
+
+class FrameworkAttributePayload(BaseModel):
+    id: str
+    attribute: str
+    level: int
+    description: str
+
+
+class FrameworkAttributeUpsertPayload(BaseModel):
+    id: str | None = None
+    attribute: str = Field(..., min_length=1, max_length=100)
+    level: int = Field(..., ge=1, le=7)
+    description: str = Field(..., min_length=1)
+
+
+@router.get(
+    "/api/v1/admin/frameworks/{framework_id}/attributes",
+    response_model=list[FrameworkAttributePayload],
+    tags=["admin"],
+)
+async def list_framework_attributes_admin(
+    framework_id: str,
+    request: Request,
+) -> list[FrameworkAttributePayload]:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    rows = await persistence.list_framework_attributes(framework_id)
+    return [FrameworkAttributePayload(**r) for r in rows]
+
+
+@router.post(
+    "/api/v1/admin/frameworks/{framework_id}/attributes",
+    response_model=FrameworkAttributePayload,
+    tags=["admin"],
+)
+async def upsert_framework_attribute_admin(
+    framework_id: str,
+    payload: FrameworkAttributeUpsertPayload,
+    request: Request,
+) -> FrameworkAttributePayload:
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    row = await persistence.upsert_framework_attribute(
+        framework_id=framework_id,
+        attribute_id=payload.id,
+        attribute=payload.attribute,
+        level=payload.level,
+        description=payload.description,
+    )
+    return FrameworkAttributePayload(**row)
+
+
+class AdminClaimPatchItem(BaseModel):
+    id: str
+    admin_decision: str | None = Field(
+        default=None,
+        pattern="^(verified|rejected|flagged)$",
+    )
+    admin_comment: str | None = None
+
+
+class AdminClaimsSavePayload(BaseModel):
+    admin_actor: str = Field(..., min_length=1, max_length=255)
+    claims: list[AdminClaimPatchItem]
+
+
+@router.put(
+    "/api/v1/admin/sessions/{session_id}/claims",
+    response_model=ReviewSaveResponse,
+    tags=["admin"],
+)
+async def save_admin_session_claims(
+    session_id: str,
+    payload: AdminClaimsSavePayload,
+    request: Request,
+) -> ReviewSaveResponse:
+    """Operator pre-review: verify / reject / flag with optional comment per claim."""
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    try:
+        result = await persistence.save_admin_claim_flags(
+            session_id,
+            [c.model_dump(exclude_none=True) for c in payload.claims],
+            admin_actor=payload.admin_actor,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ReviewSaveResponse(
+        session_id=result["session_id"],
+        report_status=result["report_status"],
+        reviews_completed_at=None,
+        claims=result["claims"],
+    )
+
+
+@router.get(
+    "/api/v1/admin/sessions/{session_id}/report",
+    response_model=AssessmentReportPayload,
+    tags=["admin"],
+)
+async def get_admin_session_report(session_id: str, request: Request) -> AssessmentReportPayload:
+    """Full report including transcript_json — admin token only."""
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    report_data = await persistence.get_report(session_id)
+    if not report_data:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return AssessmentReportPayload(**report_data)
 
 
 # ─── Monitoring: eligibility check ──────────────────────────

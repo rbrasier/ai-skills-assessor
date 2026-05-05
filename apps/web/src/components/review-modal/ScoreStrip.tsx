@@ -1,10 +1,16 @@
-import type { AssessmentReport, Claim } from "@ai-skills-assessor/shared-types";
+import type { AssessmentReport, Claim, HolisticSkillProfile } from "@ai-skills-assessor/shared-types";
 
-function derivedMaxLevel(claims: Claim[], field: "level" | "expertLevel"): number | null {
+function derivedMaxLevelFromClaims(claims: Claim[], field: "level" | "expertLevel"): number | null {
   const vals = claims.map((c) => (field === "expertLevel" ? c.expertLevel : c.level)).filter(
-    (v): v is number => typeof v === "number",
+    (v): v is number => typeof v === "number" && v > 0,
   );
   return vals.length ? Math.max(...vals) : null;
+}
+
+function holisticMaxLevel(holistic: HolisticSkillProfile[]): number | null {
+  if (!holistic.length) return null;
+  const levels = holistic.map((h) => h.estimatedLevel).filter((n) => typeof n === "number" && n > 0);
+  return levels.length ? Math.max(...levels) : null;
 }
 
 function fmt(n: number | null, suffix = ""): string {
@@ -18,8 +24,17 @@ interface Props {
 
 export default function ScoreStrip({ report }: Props) {
   const claims = report.claimsJson ?? [];
-  const originalMax = derivedMaxLevel(claims, "level");
-  const currentMax = derivedMaxLevel(claims, "expertLevel") ?? originalMax;
+  const holistic = report.holisticAssessmentJson ?? [];
+
+  const claimAiMax = derivedMaxLevelFromClaims(claims, "level");
+  const holAiMax = holisticMaxLevel(holistic);
+  const originalMax =
+    holAiMax != null ? (claimAiMax != null ? Math.max(holAiMax, claimAiMax) : holAiMax) : claimAiMax;
+
+  const smeClaims = claims.filter((c) => (c.claimType ?? "sme") === "sme");
+  const expertAdjusted = derivedMaxLevelFromClaims(smeClaims, "expertLevel");
+  const currentMax = expertAdjusted ?? originalMax;
+
   const avgConf =
     claims.length > 0
       ? Math.round((claims.reduce((s, c) => s + (c.confidence ?? 0), 0) / claims.length) * 100)
@@ -30,12 +45,12 @@ export default function ScoreStrip({ report }: Props) {
       <div className="score-cell">
         <div className="sc-label">AI max level</div>
         <div className="sc-val">{fmt(originalMax)}<small>/7</small></div>
-        <div className="sc-sub">From extraction</div>
+        <div className="sc-sub">Holistic + extraction</div>
       </div>
       <div className="score-cell">
         <div className="sc-label">Current max level</div>
         <div className="sc-val">{fmt(currentMax)}<small>/7</small></div>
-        <div className="sc-sub">After reviews</div>
+        <div className="sc-sub">After SME review</div>
       </div>
       <div className="score-cell">
         <div className="sc-label">Avg confidence</div>

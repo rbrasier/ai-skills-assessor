@@ -178,13 +178,19 @@ export interface SessionListQuery {
 
 // ─── Phase 7: Review portal types ────────────────────────────────────
 
-export type SupervisorDecision = "pending" | "verified" | "rejected";
+export type SupervisorDecision = "pending" | "verified" | "rejected" | "flagged";
+
+export type AdminClaimDecision = "pending" | "verified" | "rejected" | "flagged";
 
 export interface Claim {
   id: string;
   sessionId?: string;
   verbatimQuote: string;
   interpretedClaim: string;
+  /** Short headline from extraction (optional for legacy rows). */
+  summary?: string;
+  /** "sme" | "supervisor" — drives reviewer routing. */
+  claimType?: string;
   skillCode: string;
   skillName: string;
   level: number;
@@ -193,6 +199,18 @@ export interface Claim {
   expertLevel?: number | null;
   supervisorDecision?: SupervisorDecision | null;
   supervisorComment?: string | null;
+  adminDecision?: AdminClaimDecision | null;
+  adminComment?: string | null;
+  adminActor?: string | null;
+  adminUpdatedAt?: string | null;
+}
+
+export interface HolisticSkillProfile {
+  skillCode: string;
+  skillName: string;
+  estimatedLevel: number;
+  prominence: number;
+  evidenceSummary: string;
 }
 
 export type ReportStatus =
@@ -212,6 +230,8 @@ export interface AssessmentReport {
   overallConfidence: number | null;
   reportStatus: ReportStatus | null;
   claimsJson: Claim[];
+  holisticAssessmentJson?: HolisticSkillProfile[];
+  transcriptJson?: { turns?: Array<{ speaker: string; text: string; timestamp?: string | number; phase?: string }> } | null;
   reportGeneratedAt: string | null;
   expiresAt: string | null;
   expertSubmittedAt: string | null;
@@ -236,7 +256,7 @@ export interface ExpertReviewPayload {
 
 export interface SupervisorReviewClaimItem {
   id: string;
-  supervisorDecision: "verified" | "rejected";
+  supervisorDecision: "verified" | "rejected" | "flagged";
   supervisorComment?: string;
 }
 
@@ -267,6 +287,50 @@ export interface AdminSessionSummary extends SessionSummary {
   terminationReason: TerminationReason | null;
   focusSuspicious: boolean;
   totalFocusAwayMs: number;
+}
+
+export interface CandidateDirectorySession extends AdminSessionSummary {}
+
+export interface CandidateDirectoryRow {
+  email: string;
+  firstName: string;
+  lastName: string;
+  totalCalls: number;
+  lastCallAt: string | null;
+  sessions: CandidateDirectorySession[];
+}
+
+export interface FrameworkRecord {
+  id: string;
+  type: string;
+  version: string;
+  name: string;
+  rubric: string;
+  isActive: boolean;
+}
+
+export interface FrameworkSkillLevelRecord {
+  id: string;
+  level: number | null;
+  content: string;
+}
+
+export interface FrameworkSkillRecord {
+  id: string;
+  skillCode: string;
+  skillName: string;
+  category: string;
+  subcategory: string | null;
+  description: string;
+  guidance: string | null;
+  levels: FrameworkSkillLevelRecord[];
+}
+
+export interface FrameworkAttributeRecord {
+  id: string;
+  attribute: string;
+  level: number;
+  description: string;
 }
 
 // ─── Phase 7: Stats / chart aggregates ──────────────────────────────

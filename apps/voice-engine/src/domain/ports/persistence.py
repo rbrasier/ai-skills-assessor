@@ -223,6 +223,104 @@ class IPersistence(ABC):
         """
         ...
 
+    @abstractmethod
+    async def list_candidates_with_sessions(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Candidates ordered by most recent assessment session (newest first).
+
+        Each item: email, first_name, last_name, total_calls, last_call_at,
+        sessions (list of session summary dicts for that candidate).
+        """
+        ...
+
+    @abstractmethod
+    async def list_frameworks(self) -> list[dict[str, Any]]:
+        """All framework rows (id, type, version, name, is_active)."""
+        ...
+
+    @abstractmethod
+    async def upsert_framework(
+        self,
+        *,
+        framework_id: str | None,
+        type_: str,
+        version: str,
+        name: str,
+        rubric: str,
+        is_active: bool,
+    ) -> dict[str, Any]:
+        """Create or update a framework. Pass framework_id to update."""
+        ...
+
+    @abstractmethod
+    async def list_framework_skills(self, framework_id: str) -> list[dict[str, Any]]:
+        """Skills for a framework (no embedding payloads)."""
+        ...
+
+    @abstractmethod
+    async def upsert_framework_skill(
+        self,
+        *,
+        framework_id: str,
+        skill_id: str | None,
+        skill_code: str,
+        skill_name: str,
+        category: str,
+        subcategory: str | None,
+        description: str,
+        guidance: str | None,
+    ) -> dict[str, Any]:
+        """Create or update a framework_skills row."""
+        ...
+
+    @abstractmethod
+    async def upsert_framework_skill_level(
+        self,
+        *,
+        framework_skill_id: str,
+        level_id: str | None,
+        level: int | None,
+        content: str,
+    ) -> dict[str, Any]:
+        """Create or update level content (never writes embedding)."""
+        ...
+
+    @abstractmethod
+    async def upsert_framework_attribute(
+        self,
+        *,
+        framework_id: str,
+        attribute_id: str | None,
+        attribute: str,
+        level: int,
+        description: str,
+    ) -> dict[str, Any]:
+        """Create or update a framework_attributes row."""
+        ...
+
+    @abstractmethod
+    async def list_framework_attributes(self, framework_id: str) -> list[dict[str, Any]]:
+        """Generic attributes for a framework."""
+        ...
+
+    @abstractmethod
+    async def save_admin_claim_flags(
+        self,
+        session_id: str,
+        claims_patch: list[dict[str, Any]],
+        *,
+        admin_actor: str,
+    ) -> dict[str, Any]:
+        """Merge admin_decision / admin_comment / admin_actor / admin_updated_at per claim.
+
+        ``claims_patch`` items: ``id``, optional ``admin_decision`` (verified|rejected|flagged),
+        optional ``admin_comment``.
+        """
+        ...
+
     # ─── Metadata ────────────────────────────────────────────────────
 
     @abstractmethod
