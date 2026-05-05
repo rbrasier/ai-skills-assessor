@@ -1,6 +1,22 @@
 /** Map voice-engine snake_case report JSON to camelCase AssessmentReport for the web app. */
 
-export function mapVoiceEngineClaim(c: Record<string, unknown>) {
+import type { AssessmentReport, Claim, ReportStatus, SupervisorDecision, AdminClaimDecision } from "@ai-skills-assessor/shared-types";
+
+function parseSupervisorDecision(v: unknown): SupervisorDecision | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v);
+  if (s === "pending" || s === "verified" || s === "rejected" || s === "flagged") return s;
+  return null;
+}
+
+function parseAdminDecision(v: unknown): AdminClaimDecision | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v);
+  if (s === "pending" || s === "verified" || s === "rejected" || s === "flagged") return s;
+  return null;
+}
+
+export function mapVoiceEngineClaim(c: Record<string, unknown>): Claim {
   return {
     id: String(c.id ?? ""),
     sessionId: c.session_id != null ? String(c.session_id) : undefined,
@@ -14,16 +30,16 @@ export function mapVoiceEngineClaim(c: Record<string, unknown>) {
     confidence: typeof c.confidence === "number" ? c.confidence : Number(c.confidence ?? 0),
     reasoning: c.reasoning != null ? String(c.reasoning) : undefined,
     expertLevel: c.expert_level != null ? Number(c.expert_level) : null,
-    supervisorDecision: (c.supervisor_decision as string | null | undefined) ?? null,
+    supervisorDecision: parseSupervisorDecision(c.supervisor_decision),
     supervisorComment: (c.supervisor_comment as string | null | undefined) ?? null,
-    adminDecision: (c.admin_decision as string | null | undefined) ?? null,
+    adminDecision: parseAdminDecision(c.admin_decision),
     adminComment: (c.admin_comment as string | null | undefined) ?? null,
     adminActor: (c.admin_actor as string | null | undefined) ?? null,
     adminUpdatedAt: (c.admin_updated_at as string | null | undefined) ?? null,
   };
 }
 
-export function mapVoiceEngineReport(raw: Record<string, unknown>) {
+export function mapVoiceEngineReport(raw: Record<string, unknown>): AssessmentReport {
   const claims = Array.isArray(raw.claims_json)
     ? raw.claims_json.map((c: Record<string, unknown>) => mapVoiceEngineClaim(c))
     : [];
@@ -44,7 +60,7 @@ export function mapVoiceEngineReport(raw: Record<string, unknown>) {
     expertReviewToken: (raw.expert_review_token as string | null | undefined) ?? null,
     supervisorReviewToken: (raw.supervisor_review_token as string | null | undefined) ?? null,
     overallConfidence: raw.overall_confidence != null ? Number(raw.overall_confidence) : null,
-    reportStatus: (raw.report_status as string | null | undefined) ?? null,
+    reportStatus: (raw.report_status as ReportStatus | null | undefined) ?? null,
     claimsJson: claims,
     holisticAssessmentJson: holistic,
     transcriptJson: (raw.transcript_json as object | null | undefined) ?? null,

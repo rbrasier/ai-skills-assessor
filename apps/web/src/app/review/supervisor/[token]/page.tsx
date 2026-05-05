@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import type { AssessmentReport, ReviewSaveResponse } from "@ai-skills-assessor/shared-types";
 import AssessmentReviewModal from "@/components/review-modal/AssessmentReviewModal";
-import { mapVoiceEngineClaim } from "@/lib/map-assessment-report";
 
 interface PageProps {
   params: { token: string };
@@ -42,7 +41,7 @@ export default function SupervisorReviewPage({ params }: PageProps) {
     setReport((r) => r ? {
       ...r,
       reportStatus: updated.reportStatus,
-      claimsJson: updated.claims.map((c) => mapVoiceEngineClaim(c as Record<string, unknown>)),
+      claimsJson: updated.claims,
     } : r);
   }
 

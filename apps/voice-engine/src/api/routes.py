@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from src.domain.ports.persistence import IPersistence
 from src.domain.services.call_manager import (
