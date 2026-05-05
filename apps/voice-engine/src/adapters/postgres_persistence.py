@@ -780,7 +780,6 @@ class PostgresPersistence(IPersistence):
                 claims_json = json.loads(claims_json)
 
             patch_by_id = {p["id"]: p for p in claims_patch}
-            now = _to_naive(datetime.now(UTC))
             now_iso = datetime.now(UTC).isoformat()
             updated_claims = []
             for claim in claims_json or []:
@@ -1491,7 +1490,6 @@ class PostgresPersistence(IPersistence):
         self,
         candidate_id: str,
     ) -> dict[str, Any]:
-        from datetime import timedelta
 
         pool = await self._get_pool()
         settings = await self.get_admin_settings()

@@ -289,7 +289,7 @@ export interface AdminSessionSummary extends SessionSummary {
   totalFocusAwayMs: number;
 }
 
-export interface CandidateDirectorySession extends AdminSessionSummary {}
+export type CandidateDirectorySession = AdminSessionSummary;
 
 export interface CandidateDirectoryRow {
   email: string;

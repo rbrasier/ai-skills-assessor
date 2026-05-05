@@ -117,11 +117,16 @@ export default function AssessmentReviewModal({
         });
         setSubmitted(true);
       } else if (variant === "supervisor" && onSupervisorSubmit) {
-        const claimsPayload = claims.map((c) => ({
-          id: c.id,
-          supervisorDecision: supervisorState[c.id]?.decision ?? c.supervisorDecision ?? "verified",
-          supervisorComment: supervisorState[c.id]?.comment ?? c.supervisorComment ?? "",
-        }));
+        const claimsPayload = claims.map((c) => {
+          const raw = supervisorState[c.id]?.decision ?? c.supervisorDecision;
+          const decision: "verified" | "rejected" | "flagged" =
+            raw === "verified" || raw === "rejected" || raw === "flagged" ? raw : "verified";
+          return {
+            id: c.id,
+            supervisorDecision: decision,
+            supervisorComment: supervisorState[c.id]?.comment ?? c.supervisorComment ?? "",
+          };
+        });
         await onSupervisorSubmit({
           reviewerFullName: identity.fullName,
           reviewerEmail: identity.email,
