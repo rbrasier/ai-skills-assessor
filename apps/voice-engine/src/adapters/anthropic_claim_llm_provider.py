@@ -53,7 +53,7 @@ class AnthropicClaimLLMProvider(IClaimLLMProvider):
         client = self._get_client()
         response = await client.messages.create(
             model=self._model,
-            max_tokens=8192,
+            max_tokens=16384,
             messages=[{"role": "user", "content": self._extraction_prompt(transcript_text)}],
         )
         raw_text = response.content[0].text
