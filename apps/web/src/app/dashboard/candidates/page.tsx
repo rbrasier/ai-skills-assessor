@@ -75,7 +75,7 @@ export default function CandidatesPage() {
 
   async function grantOverride() {
     if (!restrictOpen) return;
-    const res = await fetch(`/api/admin/candidates/${encodeURIComponent(restrictOpen.email)}/override`, {
+    const res = await fetch(`/api/admin/candidates/${encodeURIComponent(restrictOpen.email)}/restrictions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -90,7 +90,7 @@ export default function CandidatesPage() {
   async function revokeOverride() {
     if (!restrictOpen) return;
     const res = await fetch(
-      `/api/admin/candidates/${encodeURIComponent(restrictOpen.email)}/override?revokedBy=${encodeURIComponent(actor)}`,
+      `/api/admin/candidates/${encodeURIComponent(restrictOpen.email)}/restrictions?revokedBy=${encodeURIComponent(actor)}`,
       { method: "DELETE" },
     );
     if (res.ok) void openRestrictions(restrictOpen);
@@ -242,13 +242,17 @@ export default function CandidatesPage() {
         <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) { setRestrictOpen(null); setRestrictData(null); } }}>
           <div className="modal" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <div className="modal-meta" style={{ flex: 1 }}>
+              <div className="modal-meta">
                 <div className="modal-name">Call settings</div>
                 <div className="modal-facts">
                   <span><b>{restrictOpen.email}</b></span>
                 </div>
               </div>
-              <button type="button" className="modal-close" onClick={() => { setRestrictOpen(null); setRestrictData(null); }} aria-label="Close">×</button>
+              <button type="button" className="modal-close" onClick={() => { setRestrictOpen(null); setRestrictData(null); }} aria-label="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M18 6 6 18M6 6l12 12"/>
+                </svg>
+              </button>
             </div>
             <div className="modal-body">
               <div style={{ marginBottom: 12 }}>
