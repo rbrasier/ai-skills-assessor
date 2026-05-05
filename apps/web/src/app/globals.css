@@ -856,6 +856,8 @@ footer a:hover {
 .btn:hover { background: var(--paper-2); }
 .btn-primary { background: var(--ink); color: var(--paper); border-color: var(--ink); }
 .btn-primary:hover { background: var(--ink-2); }
+.btn-ghost { display: inline-flex; align-items: center; gap: 7px; border-radius: 7px; border: none; background: none; cursor: pointer; font-family: inherit; color: var(--ink-3); transition: background 0.1s, color 0.1s; }
+.btn-ghost:hover { background: var(--paper-2); color: var(--ink); }
 
 .page { padding: 26px 28px 64px; }
 .page-head { margin-bottom: 22px; }

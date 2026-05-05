@@ -190,8 +190,14 @@ function FrameworkModal({ onClose, onSaved }: { onClose: () => void; onSaved: ()
     <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-name">New framework</div>
-          <button type="button" className="modal-close" onClick={onClose}>×</button>
+          <div className="modal-meta">
+            <div className="modal-name">New framework</div>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
         </div>
         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <label>Type <input value={type} onChange={(e) => setType(e.target.value)} style={{ width: "100%", padding: 8 }} /></label>
@@ -255,8 +261,14 @@ function SkillModal({
     <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-name">{initial ? "Edit skill" : "Add skill"}</div>
-          <button type="button" className="modal-close" onClick={onClose}>×</button>
+          <div className="modal-meta">
+            <div className="modal-name">{initial ? "Edit skill" : "Add skill"}</div>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
         </div>
         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <label>Code <input value={code} onChange={(e) => setCode(e.target.value)} className="mono" style={{ width: "100%", padding: 8 }} /></label>
@@ -322,8 +334,14 @@ function LevelModal({
     <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <div className="modal-name">Skill level</div>
-          <button type="button" className="modal-close" onClick={onClose}>×</button>
+          <div className="modal-meta">
+            <div className="modal-name">Skill level</div>
+          </div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
         </div>
         <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <label>Level (1–7) <input type="number" min={1} max={7} value={level} onChange={(e) => setLevel(e.target.value === "" ? "" : Number(e.target.value))} style={{ width: "100%", padding: 8 }} /></label>
