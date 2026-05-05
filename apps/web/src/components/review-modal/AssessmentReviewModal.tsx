@@ -192,22 +192,24 @@ export default function AssessmentReviewModal({
         supervisorReviewUrl={showReviewLinksInHeader ? supervisorReviewUrl : undefined}
       />
 
-      <div className="modal-body">
+      <div className="modal-body" style={{ paddingBottom: 0 }}>
         <ScoreStrip report={report} />
         <AiSummaryPanel summary={buildAiSummaryText() || null} />
+      </div>
 
-        <div className="modal-tabs">
-          <button className={`mtab ${tab === "sme" ? "on" : ""}`} onClick={() => setTab("sme")}>
-            SME claims <span className="tc">{smeClaims.length}</span>
-          </button>
-          <button className={`mtab ${tab === "supervisor" ? "on" : ""}`} onClick={() => setTab("supervisor")}>
-            Supervisor claims <span className="tc">{supervisorClaims.length}</span>
-          </button>
-          <button className={`mtab ${tab === "transcript" ? "on" : ""}`} onClick={() => setTab("transcript")}>
-            Transcript
-          </button>
-        </div>
+      <div className="modal-tabs">
+        <button className={`mtab ${tab === "sme" ? "on" : ""}`} onClick={() => setTab("sme")}>
+          SME claims <span className="tc">{smeClaims.length}</span>
+        </button>
+        <button className={`mtab ${tab === "supervisor" ? "on" : ""}`} onClick={() => setTab("supervisor")}>
+          Supervisor claims <span className="tc">{supervisorClaims.length}</span>
+        </button>
+        <button className={`mtab ${tab === "transcript" ? "on" : ""}`} onClick={() => setTab("transcript")}>
+          Transcript
+        </button>
+      </div>
 
+      <div className="modal-body">
         {tab === "sme" && (
           <ClaimsRegisterTable
             claims={smeClaims}
