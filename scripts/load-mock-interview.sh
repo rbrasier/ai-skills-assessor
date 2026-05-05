@@ -21,7 +21,8 @@ if [[ ! -d "$VOICE_ENGINE_DIR" ]]; then
 fi
 
 mkdir -p "$RESULTS_DIR"
-mapfile -t FILES < <(find "$RESULTS_DIR" -maxdepth 1 -name 'mock-interview-*.json' -type f | sort)
+FILES=()
+while IFS= read -r line; do FILES+=("$line"); done < <(find "$RESULTS_DIR" -maxdepth 1 -name 'mock-interview-*.json' -type f | sort)
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
   echo "No mock-interview-*.json files in $RESULTS_DIR" >&2
