@@ -1,19 +1,36 @@
 """Ingest SFIA skills from Excel into ``framework_skills`` + ``framework_skill_levels``.
 
+This script UPDATES the embeddings in an existing database. For a fresh database,
+apply the SQL migration first:
+  packages/database/prisma/migrations/v0_9_0_local_embeddings_sfia_data/migration.sql
+
+The migration seeds all 147 skills with pre-computed embeddings so this script
+is only needed to re-embed with a different model (e.g. upgrading from LSA to
+sentence-transformers once internet access is available).
+
 Usage::
 
+    # Local embedder — no API key or internet required:
     python -m src.scripts.ingest_sfia_skills \\
       --excel docs/development/contracts/sfia-9.xlsx \\
-      --framework-type sfia-9 \\
-      --framework-version 9.0
+      --embedder sentence-transformers    # or: lsa
 
-Expected result: ~120 rows in ``framework_skills`` and ~500–800 rows in
-``framework_skill_levels``. Idempotent (ON CONFLICT DO UPDATE).
+    # OpenAI (legacy, requires OPENAI_API_KEY):
+    python -m src.scripts.ingest_sfia_skills \\
+      --excel docs/development/contracts/sfia-9.xlsx \\
+      --embedder openai
 
-Expected column layout in the ``Skills`` sheet (1-indexed):
-  A: Code, B: URL (ignored), C: Skill name, D: Category, E: Subcategory,
-  F: Overall description, G: Guidance notes,
-  H–N: Level 1–7 descriptions.
+Excel column layout (0-indexed):
+  0:    Row #
+  1-7:  Level indicators (non-null = skill available at that level)
+  8:    Skill code   ← was incorrectly read as col 0 in earlier versions
+  9:    URL (ignored)
+  10:   Skill name
+  11:   Category
+  12:   Subcategory
+  13:   Overall description
+  14:   Guidance notes
+  15-21: Level 1-7 descriptions
 """
 
 from __future__ import annotations
@@ -29,16 +46,35 @@ async def ingest_sfia_skills(
     framework_type: str,
     framework_version: str,
     database_url: str,
-    openai_api_key: str,
+    embedder_name: str,
+    openai_api_key: str = "",
+    lsa_model_path: str = "",
 ) -> None:
     import asyncpg
     import openpyxl
 
-    from src.adapters.openai_embedder import OpenAIEmbeddingService
+    from src.domain.ports.embedding_service import IEmbeddingService
 
-    embedder = OpenAIEmbeddingService(api_key=openai_api_key)
+    embedder: IEmbeddingService
+    if embedder_name == "openai":
+        from src.adapters.openai_embedder import OpenAIEmbeddingService
+
+        if not openai_api_key:
+            raise SystemExit("--openai-api-key (or $OPENAI_API_KEY) is required for openai embedder")
+        embedder = OpenAIEmbeddingService(api_key=openai_api_key)
+    elif embedder_name == "sentence-transformers":
+        from src.adapters.sentence_transformers_embedder import SentenceTransformersEmbeddingService
+
+        embedder = SentenceTransformersEmbeddingService()
+    elif embedder_name == "lsa":
+        from src.adapters.sklearn_lsa_embedder import SklearnLsaEmbeddingService
+
+        kwargs = {"model_path": lsa_model_path} if lsa_model_path else {}
+        embedder = SklearnLsaEmbeddingService(**kwargs)
+    else:
+        raise SystemExit(f"Unknown embedder: {embedder_name!r}")
+
     pool = await asyncpg.create_pool(database_url)
-
     try:
         async with pool.acquire() as conn:
             framework_id = await conn.fetchval(
@@ -49,7 +85,7 @@ async def ingest_sfia_skills(
             if not framework_id:
                 raise SystemExit(
                     f"Framework '{framework_type}' v{framework_version} not found. "
-                    "Run create_framework.py first."
+                    "Apply the v0_9_0 migration or run create_framework.py first."
                 )
 
         wb = openpyxl.load_workbook(excel_path, data_only=True)
@@ -61,21 +97,21 @@ async def ingest_sfia_skills(
 
         async with pool.acquire() as conn:
             for row in sheet.iter_rows(min_row=2, values_only=True):
-                if not row[0]:
+                # Skill code is at index 8 (column I), not index 0.
+                if not row[8]:
                     continue
 
                 try:
-                    skill_code = str(row[0]).strip()
-                    # row[1] is URL — ignored
-                    skill_name = str(row[2] or "").strip()
-                    category = str(row[3] or "").strip()
-                    subcategory = str(row[4]).strip() if row[4] else None
-                    overall_desc = str(row[5] or "").strip()
-                    guidance = str(row[6]).strip() if row[6] else None
-                    # Columns H–N are level 1–7 descriptions (indices 7–13)
+                    skill_code = str(row[8]).strip()
+                    skill_name = str(row[10] or "").strip()
+                    category = str(row[11] or "").strip()
+                    subcategory = str(row[12]).strip() if row[12] else None
+                    overall_desc = str(row[13] or "").strip()
+                    guidance = str(row[14]).strip() if row[14] else None
+                    # Columns P-V are level 1-7 descriptions (indices 15-21)
                     level_descriptions = [
-                        str(row[i]).strip() if i < len(row) and row[i] else ""
-                        for i in range(7, 14)
+                        str(row[15 + i]).strip() if (15 + i) < len(row) and row[15 + i] else ""
+                        for i in range(7)
                     ]
 
                     framework_skill_id = await conn.fetchval(
@@ -108,11 +144,11 @@ async def ingest_sfia_skills(
                         if not level_desc:
                             continue
 
+                        cat_str = f"{category} > {subcategory}" if subcategory else category
                         content = (
                             f"Framework: SFIA 9\n"
                             f"Skill: {skill_name} ({skill_code})\n"
-                            f"Category: {category}"
-                            f"{f' > {subcategory}' if subcategory else ''}\n"
+                            f"Category: {cat_str}\n"
                             f"Level: {level}\n\n"
                             f"Overall Description:\n{overall_desc}\n\n"
                             f"Level {level} Description:\n{level_desc}"
@@ -134,12 +170,12 @@ async def ingest_sfia_skills(
                             framework_skill_id,
                             level,
                             content,
-                            str(embedding),  # asyncpg serialises vector as text
+                            str(embedding),
                         )
                         chunks_ingested += 1
 
                 except Exception as exc:
-                    print(f"  ERROR ingesting skill '{row[0]}': {exc}")
+                    print(f"  ERROR ingesting skill '{row[8]}': {exc}")
                     failed += 1
 
         print(
@@ -153,7 +189,7 @@ async def ingest_sfia_skills(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Ingest SFIA skills + embeddings into framework_skills / framework_skill_levels"
+        description="Re-embed SFIA skills into framework_skills / framework_skill_levels"
     )
     parser.add_argument("--excel", required=True, help="Path to sfia-9.xlsx")
     parser.add_argument("--framework-type", default="sfia-9")
@@ -163,16 +199,25 @@ def main() -> None:
         default=os.environ.get("DATABASE_URL", ""),
     )
     parser.add_argument(
+        "--embedder",
+        choices=["sentence-transformers", "lsa", "openai"],
+        default="sentence-transformers",
+        help="Embedding backend to use (default: sentence-transformers)",
+    )
+    parser.add_argument(
         "--openai-api-key",
         default=os.environ.get("OPENAI_API_KEY", ""),
-        help="OpenAI API key for text-embedding-3-small",
+        help="[openai embedder only] OpenAI API key",
+    )
+    parser.add_argument(
+        "--lsa-model-path",
+        default="",
+        help="[lsa embedder only] Path to sfia_lsa_model.joblib (uses default if empty)",
     )
     args = parser.parse_args()
 
     if not args.database_url:
         raise SystemExit("DATABASE_URL is not set")
-    if not args.openai_api_key:
-        raise SystemExit("OPENAI_API_KEY is not set")
 
     asyncio.run(
         ingest_sfia_skills(
@@ -180,7 +225,9 @@ def main() -> None:
             framework_type=args.framework_type,
             framework_version=args.framework_version,
             database_url=args.database_url,
+            embedder_name=args.embedder,
             openai_api_key=args.openai_api_key,
+            lsa_model_path=args.lsa_model_path,
         )
     )
 
