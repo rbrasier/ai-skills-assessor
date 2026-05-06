@@ -1121,6 +1121,80 @@ async def upsert_framework_attribute_admin(
     return FrameworkAttributePayload(**row)
 
 
+@router.get(
+    "/api/v1/admin/frameworks/{framework_id}/sync-status",
+    response_model=dict[str, Any],
+    tags=["admin"],
+)
+async def get_framework_sync_status(
+    framework_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    """Return {total, embedded, stale} embedding counts for a framework."""
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    return await persistence.get_framework_sync_status(framework_id)
+
+
+class BulkImportSkillPayload(BaseModel):
+    skill_code: str = Field(..., min_length=1, max_length=50)
+    skill_name: str = Field(..., min_length=1, max_length=255)
+    category: str = Field(default="General", max_length=100)
+    subcategory: str | None = Field(default=None, max_length=100)
+    description: str = ""
+    guidance: str | None = None
+
+
+class BulkImportLevelPayload(BaseModel):
+    skill_code: str = Field(..., min_length=1, max_length=50)
+    level: int = Field(..., ge=1, le=7)
+    content: str = Field(..., min_length=1)
+
+
+class BulkImportAttributePayload(BaseModel):
+    attribute: str = Field(..., min_length=1, max_length=100)
+    level: int = Field(..., ge=1, le=7)
+    description: str = Field(..., min_length=1)
+
+
+class BulkImportPayload(BaseModel):
+    type: str = Field(..., min_length=1, max_length=50)
+    version: str = Field(..., min_length=1, max_length=20)
+    name: str = Field(..., min_length=1, max_length=255)
+    rubric: str = ""
+    skills: list[BulkImportSkillPayload] = []
+    skill_levels: list[BulkImportLevelPayload] = []
+    attributes: list[BulkImportAttributePayload] = []
+
+
+@router.post(
+    "/api/v1/admin/frameworks/bulk-import",
+    response_model=dict[str, Any],
+    tags=["admin"],
+)
+async def bulk_import_framework(
+    payload: BulkImportPayload,
+    request: Request,
+) -> dict[str, Any]:
+    """Import a complete framework from a parsed Excel upload.
+
+    Upserts the framework, all skills, all skill levels (clearing stale
+    embeddings when content changes), and all attributes in a single
+    operation. Safe to re-run — all inserts use ON CONFLICT DO UPDATE.
+    """
+    _require_admin_token(request)
+    persistence = _persistence(request)
+    return await persistence.bulk_import_framework(
+        type_=payload.type,
+        version=payload.version,
+        name=payload.name,
+        rubric=payload.rubric,
+        skills=[s.model_dump() for s in payload.skills],
+        skill_levels=[lv.model_dump() for lv in payload.skill_levels],
+        attributes=[a.model_dump() for a in payload.attributes],
+    )
+
+
 class AdminClaimPatchItem(BaseModel):
     id: str
     admin_decision: str | None = Field(

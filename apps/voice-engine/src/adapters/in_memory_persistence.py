@@ -775,6 +775,79 @@ class InMemoryPersistence(IPersistence):
             return {"id": a["id"], "attribute": a["attribute"],
                     "level": a["level"], "description": a["description"]}
 
+    async def get_framework_sync_status(self, framework_id: str) -> dict[str, Any]:
+        async with self._lock:
+            skill_ids = {
+                sk["id"] for sk in self._framework_skills.values()
+                if sk.get("framework_id") == framework_id
+            }
+            levels = [
+                lv for lv in self._framework_skill_levels.values()
+                if lv.get("framework_skill_id") in skill_ids
+            ]
+            embedded = sum(1 for lv in levels if lv.get("embedding") is not None)
+            return {
+                "total": len(levels),
+                "embedded": embedded,
+                "stale": len(levels) - embedded,
+            }
+
+    async def bulk_import_framework(
+        self,
+        *,
+        type_: str,
+        version: str,
+        name: str,
+        rubric: str,
+        skills: list[dict[str, Any]],
+        skill_levels: list[dict[str, Any]],
+        attributes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        fw = await self.upsert_framework(
+            framework_id=None, type_=type_, version=version,
+            name=name, rubric=rubric, is_active=True,
+        )
+        framework_id = fw["id"]
+        skill_id_map: dict[str, str] = {}
+        for sk in skills:
+            row = await self.upsert_framework_skill(
+                framework_id=framework_id,
+                skill_id=None,
+                skill_code=sk["skill_code"],
+                skill_name=sk["skill_name"],
+                category=sk.get("category", "General"),
+                subcategory=sk.get("subcategory"),
+                description=sk.get("description", ""),
+                guidance=sk.get("guidance"),
+            )
+            skill_id_map[sk["skill_code"]] = row["id"]
+        levels_upserted = 0
+        for lv in skill_levels:
+            if lv["skill_code"] not in skill_id_map:
+                continue
+            await self.upsert_framework_skill_level(
+                framework_skill_id=skill_id_map[lv["skill_code"]],
+                level_id=None,
+                level=lv["level"],
+                content=lv["content"],
+            )
+            levels_upserted += 1
+        for attr in attributes:
+            await self.upsert_framework_attribute(
+                framework_id=framework_id,
+                attribute_id=None,
+                attribute=attr["attribute"],
+                level=attr["level"],
+                description=attr["description"],
+            )
+        return {
+            "framework_id": framework_id,
+            "skills_upserted": len(skill_id_map),
+            "levels_upserted": levels_upserted,
+            "levels_stale": 0,
+            "attributes_upserted": len(attributes),
+        }
+
     # ─── Metadata ────────────────────────────────────────────────────
 
     async def merge_session_metadata(

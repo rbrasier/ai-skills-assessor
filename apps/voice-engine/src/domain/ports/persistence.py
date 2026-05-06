@@ -307,6 +307,26 @@ class IPersistence(ABC):
         ...
 
     @abstractmethod
+    async def get_framework_sync_status(self, framework_id: str) -> dict[str, Any]:
+        """Return {total, embedded, stale} counts for framework_skill_levels."""
+        ...
+
+    @abstractmethod
+    async def bulk_import_framework(
+        self,
+        *,
+        type_: str,
+        version: str,
+        name: str,
+        rubric: str,
+        skills: list[dict[str, Any]],
+        skill_levels: list[dict[str, Any]],
+        attributes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upsert a full framework (framework + skills + levels + attributes) atomically."""
+        ...
+
+    @abstractmethod
     async def save_admin_claim_flags(
         self,
         session_id: str,

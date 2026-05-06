@@ -940,8 +940,8 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, type, version, name, rubric, "isActive" AS is_active,
-                       "createdAt" AS created_at, "updatedAt" AS updated_at
+                SELECT id, type, version, name, rubric, is_active,
+                       created_at, updated_at
                 FROM frameworks
                 ORDER BY type, version
                 """
@@ -964,9 +964,10 @@ class PostgresPersistence(IPersistence):
                 row = await conn.fetchrow(
                     """
                     UPDATE frameworks
-                    SET type = $2, version = $3, name = $4, rubric = $5, "isActive" = $6
+                    SET type = $2, version = $3, name = $4, rubric = $5, is_active = $6,
+                        updated_at = now()
                     WHERE id = $1
-                    RETURNING id, type, version, name, rubric, "isActive" AS is_active
+                    RETURNING id, type, version, name, rubric, is_active
                     """,
                     framework_id,
                     type_,
@@ -981,12 +982,12 @@ class PostgresPersistence(IPersistence):
 
             row = await conn.fetchrow(
                 """
-                INSERT INTO frameworks (id, type, version, name, rubric, "isActive")
+                INSERT INTO frameworks (id, type, version, name, rubric, is_active)
                 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
                 ON CONFLICT (type, version)
                 DO UPDATE SET name = EXCLUDED.name, rubric = EXCLUDED.rubric,
-                              "isActive" = EXCLUDED."isActive"
-                RETURNING id, type, version, name, rubric, "isActive" AS is_active
+                              is_active = EXCLUDED.is_active, updated_at = now()
+                RETURNING id, type, version, name, rubric, is_active
                 """,
                 type_,
                 version,
@@ -1001,25 +1002,26 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT fs.id, fs."skillCode" AS skill_code, fs."skillName" AS skill_name,
+                SELECT fs.id, fs.skill_code, fs.skill_name,
                        fs.category, fs.subcategory, fs.description, fs.guidance,
-                       fs."createdAt" AS created_at, fs."updatedAt" AS updated_at,
+                       fs.created_at, fs.updated_at,
                        COALESCE(
                          json_agg(
                            json_build_object(
                              'id', fsl.id,
                              'level', fsl.level,
                              'content', fsl.content,
-                             'created_at', fsl."createdAt"
+                             'created_at', fsl.created_at,
+                             'has_embedding', (fsl.embedding IS NOT NULL)
                            ) ORDER BY fsl.level NULLS LAST
                          ) FILTER (WHERE fsl.id IS NOT NULL),
                          '[]'::json
                        ) AS levels
                 FROM framework_skills fs
-                LEFT JOIN framework_skill_levels fsl ON fsl."frameworkSkillId" = fs.id
-                WHERE fs."frameworkId" = $1
+                LEFT JOIN framework_skill_levels fsl ON fsl.framework_skill_id = fs.id
+                WHERE fs.framework_id = $1
                 GROUP BY fs.id
-                ORDER BY fs."skillCode"
+                ORDER BY fs.skill_code
                 """,
                 framework_id,
             )
@@ -1051,10 +1053,11 @@ class PostgresPersistence(IPersistence):
                 row = await conn.fetchrow(
                     """
                     UPDATE framework_skills
-                    SET "skillCode" = $3, "skillName" = $4, category = $5,
-                        subcategory = $6, description = $7, guidance = $8
-                    WHERE id = $1 AND "frameworkId" = $2
-                    RETURNING id, "skillCode" AS skill_code, "skillName" AS skill_name,
+                    SET skill_code = $3, skill_name = $4, category = $5,
+                        subcategory = $6, description = $7, guidance = $8,
+                        updated_at = now()
+                    WHERE id = $1 AND framework_id = $2
+                    RETURNING id, skill_code, skill_name,
                               category, subcategory, description, guidance
                     """,
                     skill_id,
@@ -1073,16 +1076,17 @@ class PostgresPersistence(IPersistence):
             row = await conn.fetchrow(
                 """
                 INSERT INTO framework_skills
-                    (id, "frameworkId", "skillCode", "skillName", category, subcategory, description, guidance)
+                    (id, framework_id, skill_code, skill_name, category, subcategory, description, guidance)
                 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT ("frameworkId", "skillCode")
+                ON CONFLICT (framework_id, skill_code)
                 DO UPDATE SET
-                    "skillName" = EXCLUDED."skillName",
-                    category = EXCLUDED.category,
+                    skill_name  = EXCLUDED.skill_name,
+                    category    = EXCLUDED.category,
                     subcategory = EXCLUDED.subcategory,
                     description = EXCLUDED.description,
-                    guidance = EXCLUDED.guidance
-                RETURNING id, "skillCode" AS skill_code, "skillName" AS skill_name,
+                    guidance    = EXCLUDED.guidance,
+                    updated_at  = now()
+                RETURNING id, skill_code, skill_name,
                           category, subcategory, description, guidance
                 """,
                 framework_id,
@@ -1109,9 +1113,10 @@ class PostgresPersistence(IPersistence):
                 row = await conn.fetchrow(
                     """
                     UPDATE framework_skill_levels
-                    SET level = $3, content = $4
-                    WHERE id = $1 AND "frameworkSkillId" = $2
-                    RETURNING id, level, content
+                    SET level = $3, content = $4,
+                        embedding = CASE WHEN content = $4 THEN embedding ELSE NULL END
+                    WHERE id = $1 AND framework_skill_id = $2
+                    RETURNING id, level, content, (embedding IS NOT NULL) AS has_embedding
                     """,
                     level_id,
                     framework_skill_id,
@@ -1124,11 +1129,15 @@ class PostgresPersistence(IPersistence):
 
             row = await conn.fetchrow(
                 """
-                INSERT INTO framework_skill_levels (id, "frameworkSkillId", level, content)
+                INSERT INTO framework_skill_levels (id, framework_skill_id, level, content)
                 VALUES (gen_random_uuid(), $1, $2, $3)
-                ON CONFLICT ("frameworkSkillId", level)
-                DO UPDATE SET content = EXCLUDED.content
-                RETURNING id, level, content
+                ON CONFLICT (framework_skill_id, level)
+                DO UPDATE SET
+                    content   = EXCLUDED.content,
+                    embedding = CASE WHEN framework_skill_levels.content = EXCLUDED.content
+                                     THEN framework_skill_levels.embedding
+                                     ELSE NULL END
+                RETURNING id, level, content, (embedding IS NOT NULL) AS has_embedding
                 """,
                 framework_skill_id,
                 level,
@@ -1141,9 +1150,9 @@ class PostgresPersistence(IPersistence):
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, attribute, level, description, "createdAt" AS created_at
+                SELECT id, attribute, level, description, created_at
                 FROM framework_attributes
-                WHERE "frameworkId" = $1
+                WHERE framework_id = $1
                 ORDER BY attribute, level
                 """,
                 framework_id,
@@ -1166,7 +1175,7 @@ class PostgresPersistence(IPersistence):
                     """
                     UPDATE framework_attributes
                     SET attribute = $3, level = $4, description = $5
-                    WHERE id = $1 AND "frameworkId" = $2
+                    WHERE id = $1 AND framework_id = $2
                     RETURNING id, attribute, level, description
                     """,
                     attribute_id,
@@ -1181,9 +1190,9 @@ class PostgresPersistence(IPersistence):
 
             row = await conn.fetchrow(
                 """
-                INSERT INTO framework_attributes (id, "frameworkId", attribute, level, description)
+                INSERT INTO framework_attributes (id, framework_id, attribute, level, description)
                 VALUES (gen_random_uuid(), $1, $2, $3, $4)
-                ON CONFLICT ("frameworkId", attribute, level)
+                ON CONFLICT (framework_id, attribute, level)
                 DO UPDATE SET description = EXCLUDED.description
                 RETURNING id, attribute, level, description
                 """,
@@ -1193,6 +1202,138 @@ class PostgresPersistence(IPersistence):
                 description,
             )
             return dict(row)
+
+    async def get_framework_sync_status(self, framework_id: str) -> dict[str, Any]:
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*)::int                       AS total,
+                    COUNT(fsl.embedding)::int           AS embedded,
+                    (COUNT(*) - COUNT(fsl.embedding))::int AS stale
+                FROM framework_skill_levels fsl
+                JOIN framework_skills fs ON fs.id = fsl.framework_skill_id
+                WHERE fs.framework_id = $1
+                """,
+                framework_id,
+            )
+        return dict(row) if row else {"total": 0, "embedded": 0, "stale": 0}
+
+    async def bulk_import_framework(
+        self,
+        *,
+        type_: str,
+        version: str,
+        name: str,
+        rubric: str,
+        skills: list[dict[str, Any]],
+        skill_levels: list[dict[str, Any]],
+        attributes: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upsert a complete framework in one operation.
+
+        ``skills`` items: skill_code, skill_name, category, subcategory, description, guidance.
+        ``skill_levels`` items: skill_code, level, content.
+        ``attributes`` items: attribute, level, description.
+
+        Returns summary counts.
+        """
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            framework_row = await conn.fetchrow(
+                """
+                INSERT INTO frameworks (id, type, version, name, rubric, is_active)
+                VALUES (gen_random_uuid(), $1, $2, $3, $4, true)
+                ON CONFLICT (type, version)
+                DO UPDATE SET name = EXCLUDED.name, rubric = EXCLUDED.rubric,
+                              is_active = true, updated_at = now()
+                RETURNING id
+                """,
+                type_,
+                version,
+                name,
+                rubric,
+            )
+            framework_id: str = str(framework_row["id"])
+
+            skill_id_map: dict[str, str] = {}
+            for sk in skills:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO framework_skills
+                        (id, framework_id, skill_code, skill_name, category,
+                         subcategory, description, guidance)
+                    VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (framework_id, skill_code)
+                    DO UPDATE SET
+                        skill_name  = EXCLUDED.skill_name,
+                        category    = EXCLUDED.category,
+                        subcategory = EXCLUDED.subcategory,
+                        description = EXCLUDED.description,
+                        guidance    = EXCLUDED.guidance,
+                        updated_at  = now()
+                    RETURNING id, skill_code
+                    """,
+                    framework_id,
+                    sk["skill_code"],
+                    sk["skill_name"],
+                    sk.get("category", "General"),
+                    sk.get("subcategory"),
+                    sk.get("description", ""),
+                    sk.get("guidance"),
+                )
+                skill_id_map[str(row["skill_code"])] = str(row["id"])
+
+            levels_upserted = 0
+            levels_stale = 0
+            for lv in skill_levels:
+                skill_id = skill_id_map.get(lv["skill_code"])
+                if not skill_id:
+                    continue
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO framework_skill_levels
+                        (id, framework_skill_id, level, content)
+                    VALUES (gen_random_uuid(), $1, $2, $3)
+                    ON CONFLICT (framework_skill_id, level)
+                    DO UPDATE SET
+                        content   = EXCLUDED.content,
+                        embedding = CASE WHEN framework_skill_levels.content = EXCLUDED.content
+                                         THEN framework_skill_levels.embedding
+                                         ELSE NULL END
+                    RETURNING (embedding IS NULL) AS embedding_cleared
+                    """,
+                    skill_id,
+                    lv["level"],
+                    lv["content"],
+                )
+                levels_upserted += 1
+                if row["embedding_cleared"]:
+                    levels_stale += 1
+
+            for attr in attributes:
+                await conn.execute(
+                    """
+                    INSERT INTO framework_attributes
+                        (id, framework_id, attribute, level, description)
+                    VALUES (gen_random_uuid(), $1, $2, $3, $4)
+                    ON CONFLICT (framework_id, attribute, level)
+                    DO UPDATE SET description = EXCLUDED.description
+                    """,
+                    framework_id,
+                    attr["attribute"],
+                    attr["level"],
+                    attr["description"],
+                )
+
+        return {
+            "framework_id": framework_id,
+            "skills_upserted": len(skill_id_map),
+            "levels_upserted": levels_upserted,
+            "levels_stale": levels_stale,
+            "attributes_upserted": len(attributes),
+        }
 
     # ─── Metadata ────────────────────────────────────────────────────
 

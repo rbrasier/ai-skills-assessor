@@ -1,7 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { FrameworkRecord, FrameworkSkillRecord } from "@ai-skills-assessor/shared-types";
+import { useEffect, useRef, useState } from "react";
+import type {
+  FrameworkRecord,
+  FrameworkSkillRecord,
+  FrameworkSyncStatus,
+} from "@ai-skills-assessor/shared-types";
 import AdminSidebar from "@/components/admin-shell/AdminSidebar";
 
 export default function SkillsLibraryPage() {
@@ -9,41 +13,83 @@ export default function SkillsLibraryPage() {
   const [fwId, setFwId] = useState<string>("");
   const [skills, setSkills] = useState<FrameworkSkillRecord[]>([]);
   const [attrs, setAttrs] = useState<Array<{ id: string; attribute: string; level: number; description: string }>>([]);
+  const [syncStatus, setSyncStatus] = useState<FrameworkSyncStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fwModal, setFwModal] = useState(false);
   const [skillModal, setSkillModal] = useState<FrameworkSkillRecord | "new" | null>(null);
   const [levelModal, setLevelModal] = useState<{ skillId: string; levelId?: string | null; level: number | null; content: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    void (async () => {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/admin/frameworks", { cache: "no-store" });
-        if (!res.ok) throw new Error(`Frameworks ${res.status}`);
-        const data = (await res.json()) as FrameworkRecord[];
-        setFrameworks(data);
-        setFwId((cur) => (cur || (data[0]?.id ?? "")));
-        setError(null);
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+  async function loadFrameworks() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/admin/frameworks", { cache: "no-store" });
+      if (!res.ok) throw new Error(`Frameworks ${res.status}`);
+      const data = (await res.json()) as FrameworkRecord[];
+      setFrameworks(data);
+      setFwId((cur) => (cur || (data[0]?.id ?? "")));
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { void loadFrameworks(); }, []);
 
   useEffect(() => {
     if (!fwId) return;
+    setSyncStatus(null);
     void (async () => {
-      const [sRes, aRes] = await Promise.all([
+      const [sRes, aRes, syncRes] = await Promise.all([
         fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/skills`, { cache: "no-store" }),
         fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/attributes`, { cache: "no-store" }),
+        fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/sync-status`, { cache: "no-store" }),
       ]);
       if (sRes.ok) setSkills((await sRes.json()) as FrameworkSkillRecord[]);
       if (aRes.ok) setAttrs((await aRes.json()) as typeof attrs);
+      if (syncRes.ok) setSyncStatus((await syncRes.json()) as FrameworkSyncStatus);
     })();
   }, [fwId]);
+
+  async function handleUpload(file: File) {
+    setUploading(true);
+    setUploadResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/admin/frameworks/import", { method: "POST", body: form });
+      const data = (await res.json()) as Record<string, unknown>;
+      if (!res.ok) {
+        setUploadResult({ ok: false, message: String(data.error ?? "Import failed") });
+      } else {
+        const { skills_upserted, levels_upserted, levels_stale, attributes_upserted } = data as {
+          skills_upserted: number;
+          levels_upserted: number;
+          levels_stale: number;
+          attributes_upserted: number;
+        };
+        setUploadResult({
+          ok: true,
+          message: `Imported: ${skills_upserted} skills, ${levels_upserted} levels` +
+            (levels_stale > 0 ? ` (${levels_stale} levels need re-vectorization)` : "") +
+            (attributes_upserted > 0 ? `, ${attributes_upserted} attributes` : ""),
+        });
+        await loadFrameworks();
+      }
+    } catch (e) {
+      setUploadResult({ ok: false, message: (e as Error).message });
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  const selectedFw = frameworks.find((f) => f.id === fwId);
 
   return (
     <div className="shell">
@@ -52,22 +98,78 @@ export default function SkillsLibraryPage() {
         <div className="topbar">
           <span className="topbar-title">Skills library</span>
           <div className="sp" />
+          {/* Template download */}
+          <a
+            href="/api/admin/frameworks/template"
+            download="framework-import-template.xlsx"
+            className="btn"
+            title="Download blank Excel template for importing a framework"
+          >
+            ↓ Download template
+          </a>
+          {/* Upload trigger */}
+          <label
+            style={{
+              cursor: uploading ? "not-allowed" : "pointer",
+              opacity: uploading ? 0.6 : 1,
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              style={{ display: "none" }}
+              disabled={uploading}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleUpload(f);
+              }}
+            />
+            <span className="btn btn-primary" aria-busy={uploading}>
+              {uploading ? "Uploading…" : "↑ Upload framework"}
+            </span>
+          </label>
           <a href="/dashboard" className="btn">← Dashboard</a>
         </div>
+
         <div className="page">
           <div className="page-head">
             <h1>Framework catalog</h1>
-            <p>Edit skill definitions and level text. Embeddings are loaded separately via ingestion scripts.</p>
+            <p>Import a framework via Excel, or edit skill definitions individually below.</p>
           </div>
 
-          <div style={{ background: "var(--warn-2)", border: "1px solid var(--warn)", borderRadius: 10, padding: "12px 14px", fontSize: 13, color: "var(--ink-2)", marginBottom: 18 }}>
-            <b>Vectors:</b> skill level embeddings are not editable here. Use the repository scripts (for example <span className="mono">python -m src.scripts.ingest_sfia_skills</span>) to populate <span className="mono">framework_skill_levels.embedding</span> after you add or change level content.
-          </div>
+          {/* Upload result feedback */}
+          {uploadResult && (
+            <div
+              style={{
+                background: uploadResult.ok ? "var(--success-2, #f0fdf4)" : "var(--danger-2)",
+                border: `1px solid ${uploadResult.ok ? "var(--success, #16a34a)" : "var(--danger)"}`,
+                borderRadius: 8,
+                padding: "10px 14px",
+                fontSize: 13,
+                marginBottom: 16,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <span>{uploadResult.message}</span>
+              <button
+                type="button"
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, lineHeight: 1 }}
+                onClick={() => setUploadResult(null)}
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
 
           {error && (
             <div style={{ background: "var(--danger-2)", borderRadius: 8, padding: 12, marginBottom: 16, color: "var(--danger)" }}>{error}</div>
           )}
 
+          {/* Framework selector */}
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
             <label style={{ fontSize: 13, color: "var(--ink-3)" }}>Framework</label>
             <select value={fwId} onChange={(e) => setFwId(e.target.value)} style={{ padding: 8, borderRadius: 6, border: "1px solid var(--line)", minWidth: 220 }}>
@@ -79,8 +181,17 @@ export default function SkillsLibraryPage() {
             <button type="button" className="btn" onClick={() => setSkillModal("new")}>Add skill</button>
           </div>
 
+          {/* Embedding sync status */}
+          {syncStatus && (
+            <SyncStatusBanner
+              syncStatus={syncStatus}
+              frameworkType={selectedFw?.type ?? ""}
+              frameworkVersion={selectedFw?.version ?? ""}
+            />
+          )}
+
           <div className="table-card">
-            <div className="table-toolbar"><b>Skills</b></div>
+            <div className="table-toolbar"><b>Skills</b> <span style={{ marginLeft: 8, fontSize: 12, color: "var(--ink-3)" }}>({skills.length})</span></div>
             <div className="thead" style={{ gridTemplateColumns: "1fr 1fr 2fr 100px" }}>
               <div>Code</div>
               <div>Name</div>
@@ -122,12 +233,7 @@ export default function SkillsLibraryPage() {
           onClose={() => setFwModal(false)}
           onSaved={async () => {
             setFwModal(false);
-            const res = await fetch("/api/admin/frameworks", { cache: "no-store" });
-            if (res.ok) {
-              const data = (await res.json()) as FrameworkRecord[];
-              setFrameworks(data);
-              if (data[0]) setFwId(data[0].id);
-            }
+            await loadFrameworks();
           }}
         />
       )}
@@ -141,10 +247,10 @@ export default function SkillsLibraryPage() {
           onSaved={async () => {
             setSkillModal(null);
             if (!fwId) return;
-            const [sRes] = await Promise.all([
-              fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/skills`, { cache: "no-store" }),
-            ]);
+            const sRes = await fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/skills`, { cache: "no-store" });
             if (sRes.ok) setSkills((await sRes.json()) as FrameworkSkillRecord[]);
+            const syncRes = await fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/sync-status`, { cache: "no-store" });
+            if (syncRes.ok) setSyncStatus((await syncRes.json()) as FrameworkSyncStatus);
           }}
           onAddLevel={(skillId) => setLevelModal({ skillId, levelId: null, level: 1, content: "" })}
           onEditLevel={(skillId, lv) => setLevelModal({ skillId, levelId: lv.id, level: lv.level, content: lv.content })}
@@ -161,9 +267,78 @@ export default function SkillsLibraryPage() {
             if (!fwId) return;
             const sRes = await fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/skills`, { cache: "no-store" });
             if (sRes.ok) setSkills((await sRes.json()) as FrameworkSkillRecord[]);
+            const syncRes = await fetch(`/api/admin/frameworks/${encodeURIComponent(fwId)}/sync-status`, { cache: "no-store" });
+            if (syncRes.ok) setSyncStatus((await syncRes.json()) as FrameworkSyncStatus);
           }}
         />
       )}
+    </div>
+  );
+}
+
+function SyncStatusBanner({
+  syncStatus,
+  frameworkType,
+  frameworkVersion,
+}: {
+  syncStatus: FrameworkSyncStatus;
+  frameworkType: string;
+  frameworkVersion: string;
+}) {
+  const { total, embedded, stale } = syncStatus;
+  const allGood = stale === 0 && total > 0;
+
+  if (total === 0) return null;
+
+  return (
+    <div
+      style={{
+        background: allGood ? "var(--success-2, #f0fdf4)" : "var(--warn-2)",
+        border: `1px solid ${allGood ? "var(--success, #16a34a)" : "var(--warn)"}`,
+        borderRadius: 10,
+        padding: "12px 14px",
+        fontSize: 13,
+        color: "var(--ink-2)",
+        marginBottom: 18,
+        display: "flex",
+        gap: 16,
+        alignItems: "flex-start",
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ flex: 1 }}>
+        <b>Embeddings:</b>{" "}
+        {allGood ? (
+          <>All {total} skill levels have up-to-date vectors. ✓</>
+        ) : (
+          <>
+            {embedded}/{total} levels have embeddings.{" "}
+            <b>{stale} level{stale !== 1 ? "s" : ""} need{stale === 1 ? "s" : ""} re-vectorization</b>
+            {stale > 0 && " — content has changed or embeddings were never generated."}{" "}
+            Run the vectorization script to regenerate:
+          </>
+        )}
+        {!allGood && (
+          <div
+            style={{
+              marginTop: 8,
+              background: "rgba(0,0,0,0.05)",
+              borderRadius: 6,
+              padding: "6px 10px",
+              fontFamily: "monospace",
+              fontSize: 12,
+              userSelect: "all",
+            }}
+          >
+            ./scripts/vectorize-framework.sh --framework-type {frameworkType} --framework-version {frameworkVersion}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 12, fontSize: 12, color: "var(--ink-3)", flexShrink: 0 }}>
+        <span>Total <b>{total}</b></span>
+        <span>Embedded <b style={{ color: "var(--success, #16a34a)" }}>{embedded}</b></span>
+        {stale > 0 && <span>Stale <b style={{ color: "var(--warn, #d97706)" }}>{stale}</b></span>}
+      </div>
     </div>
   );
 }
