@@ -73,7 +73,7 @@ export async function GET(): Promise<NextResponse> {
 
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
 
-  return new NextResponse(buf, {
+  return new NextResponse(new Uint8Array(buf), {
     status: 200,
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
