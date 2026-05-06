@@ -333,6 +333,12 @@ export interface FrameworkAttributeRecord {
   description: string;
 }
 
+export interface FrameworkSyncStatus {
+  total: number;
+  embedded: number;
+  stale: number;
+}
+
 // ─── Phase 7: Stats / chart aggregates ──────────────────────────────
 
 export interface DailyCallCount {
