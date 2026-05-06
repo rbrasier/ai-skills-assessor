@@ -7,7 +7,14 @@
 # You will be prompted for:
 #   - Candidate role / context
 #   - SFIA level (1–7)
-#   - Honesty scale (1–10)
+#   - Candidate behaviour / approach (free text)
+#   - Articulation (1–10)
+#   - Intelligence model (Haiku / Sonnet / Opus)
+#   - Target SFIA skills (3 codes)
+#
+# If DATABASE_URL is set and SFIA vectors exist in the database,
+# the interviewer bot will use live pgvector RAG context (same as
+# the regular voice-call flow). Otherwise falls back to stub definitions.
 #
 # Required environment variable:
 #   ANTHROPIC_API_KEY

@@ -31,13 +31,6 @@ _SFIA_LEVEL_DESCRIPTIONS = {
     7: "Set Strategy     — sets strategy at the highest organisational level",
 }
 
-_HONESTY_DESCRIPTIONS = [
-    ("1–2",  "Fabricate   — invents projects/outcomes, claims 2–3 levels above reality"),
-    ("3–5",  "Exaggerate  — claims others' work, overstates impact"),
-    ("6–8",  "Truthful    — mostly honest with minor embellishment"),
-    ("9–10", "Accurate    — fully honest and specific"),
-]
-
 _ARTICULATION_DESCRIPTIONS = [
     ("1–2",  "Very poor   — lots of um/uh, rambling, sentences trail off"),
     ("3–4",  "Below avg   — frequent fillers, loosely organised"),
@@ -181,7 +174,7 @@ def _model_label(model_id: str) -> str:
     return model_id
 
 
-def _collect_inputs() -> tuple[str, int, int, int, str, list[str]]:
+def _collect_inputs() -> tuple[str, int, str, int, str, list[str]]:
     print(f"\n{_hr('═')}")
     print("  AI Mock Interview Test")
     print(_hr("═"))
@@ -202,12 +195,16 @@ def _collect_inputs() -> tuple[str, int, int, int, str, list[str]]:
         hi=7,
     )
 
-    honesty = _prompt_int(
-        "Honesty  (how truthfully the candidate represents their capability)",
-        dict(_HONESTY_DESCRIPTIONS),
-        lo=1,
-        hi=10,
-    )
+    print("\nCandidate behaviour / approach")
+    print("  Describe how the candidate will approach the interview.")
+    print('  e.g. "honest and direct, gives accurate concrete examples at their real level"')
+    print('       "anxious and disruptive — loses track, gives vague rambling answers"')
+    print('       "will exaggerate skills and pretend to higher ability with high ego"')
+    while True:
+        approach = input("> ").strip()
+        if approach:
+            break
+        print("  (required — please enter a description)")
 
     articulation = _prompt_int(
         "Articulation  (how fluently the candidate speaks — 1=very inarticulate, 10=polished)",
@@ -220,7 +217,7 @@ def _collect_inputs() -> tuple[str, int, int, int, str, list[str]]:
 
     target_skills = _prompt_skills()
 
-    return role, sfia_level, honesty, articulation, model, target_skills
+    return role, sfia_level, approach, articulation, model, target_skills
 
 
 def _build_persistence() -> tuple[Any, bool]:
@@ -246,7 +243,7 @@ def _build_persistence() -> tuple[Any, bool]:
 async def _run(
     role: str,
     sfia_level: int,
-    honesty: int,
+    approach: str,
     articulation: int,
     model: str,
     target_skills: list[str],
@@ -268,7 +265,7 @@ async def _run(
     persona = CandidatePersona(
         role=role,
         sfia_level=sfia_level,
-        honesty=honesty,
+        approach=approach,
         articulation=articulation,
         target_skills=target_skills,
         model=model,
@@ -278,13 +275,14 @@ async def _run(
         f"{c} ({SFIA_SKILL_NAMES.get(c, c)})" for c in target_skills
     )
     level_label = _SFIA_LEVEL_DESCRIPTIONS[sfia_level].split("—")[1].strip()
+    approach_display = approach if len(approach) <= 60 else approach[:57] + "..."
 
     print(f"\n{_hr()}")
     print("  Running interview  (this takes 1–2 minutes)")
     print(_hr())
     print(f"  Role           : {persona.role}")
     print(f"  SFIA level     : {persona.sfia_level}  —  {level_label}")
-    print(f"  Honesty        : {persona.honesty}/10")
+    print(f"  Approach       : {approach_display}")
     print(f"  Articulation   : {persona.articulation}/10")
     print(f"  Intelligence   : {_model_label(model)} ({model})")
     print(f"  Target skills  : {skills_display}")
@@ -323,6 +321,7 @@ async def _run(
             "post_call_model": _POST_CALL_MODEL,
             "turn_count": result.turn_count,
             "elapsed_seconds": round(result.elapsed_seconds, 1),
+            "using_real_rag": result.using_real_rag,
         },
         "transcript": result.transcript,
         "report": _to_json_safe(result.report),
@@ -368,6 +367,7 @@ async def _run(
     print(_hr())
     print(f"  Turns            : {result.turn_count}")
     print(f"  Elapsed          : {result.elapsed_seconds:.1f}s")
+    print(f"  Knowledge base   : {'pgvector (live SFIA vectors)' if result.using_real_rag else 'stub (in-memory definitions)'}")
     print(f"  Claims found     : {score_result.total_claims}")
     print(f"  Configured level : {score_result.configured_level}")
     print(f"  Mean assessed    : {score_result.mean_assessed_level}")
@@ -390,7 +390,7 @@ def main() -> None:
     _setup_logging(verbose)
 
     try:
-        role, sfia_level, honesty, articulation, model, target_skills = _collect_inputs()
+        role, sfia_level, approach, articulation, model, target_skills = _collect_inputs()
     except (KeyboardInterrupt, EOFError):
         print("\n\nCancelled.")
         sys.exit(0)
@@ -406,7 +406,7 @@ def main() -> None:
         print("Cancelled.")
         sys.exit(0)
 
-    asyncio.run(_run(role, sfia_level, honesty, articulation, model, target_skills, output_dir, print_dialog=not verbose))
+    asyncio.run(_run(role, sfia_level, approach, articulation, model, target_skills, output_dir, print_dialog=not verbose))
 
 
 if __name__ == "__main__":

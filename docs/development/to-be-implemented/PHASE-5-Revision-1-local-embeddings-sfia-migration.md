@@ -136,6 +136,48 @@ the migration.
 
 ---
 
+## Mock Interview RAG Integration
+
+The AI mock interview runner (`scripts/mock-interview.sh`) now uses the same RAG
+context injection as a real voice call. When `DATABASE_URL` is set and the
+`framework_skill_levels` table contains non-null embeddings (i.e. after the
+v0_9_0 migration has been applied), the runner automatically uses
+`PgVectorKnowledgeBase` instead of the in-memory `StubKnowledgeBase`.
+
+### How it works
+
+1. `mock_interview_runner._build_knowledge_base()` checks whether `DATABASE_URL`
+   is set and whether `framework_skill_levels` has rows with non-null `embedding`
+   values.
+2. If vectors are present, it creates an asyncpg connection pool and passes a
+   `PgVectorKnowledgeBase(db_pool=pool)` to `SfiaFlowController`.
+3. During the `handle_skills_identified` transition, the controller calls
+   `knowledge_base.query_by_skill_code()` (no embedder required — this is a
+   direct SQL lookup). It retrieves all level definitions for each identified
+   skill code and injects them into the `evidence_gathering` node's
+   `task_messages` as a `>>> SKILL DEFINITIONS START / END` block.
+4. The pool is closed in a `finally` block after the interview completes.
+5. If the database is unavailable or the table is empty, the runner falls back
+   to `StubKnowledgeBase` with no error — the interview continues with
+   in-memory stub definitions.
+
+### Why this matters
+
+With live pgvector RAG the mock interview tests the exact same skill-definition
+context that a real candidate would face. This means:
+
+- Noa's depth-probing questions are grounded in the actual SFIA level descriptors,
+  not the simplified stub text.
+- A mock run with `DATABASE_URL` set and the v0_9_0 migration applied is an
+  integration test of the full RAG pipeline, not just the conversation flow.
+- Running with stub knowledge base is still useful for fast iteration (no DB
+  required) and CI environments.
+
+The result JSON includes `meta.using_real_rag: true/false` so test runs can be
+compared to see whether live definitions change assessment accuracy.
+
+---
+
 ## Running the Ingestion Scripts Manually
 
 If you need to re-embed after a model change (not required for a fresh database):

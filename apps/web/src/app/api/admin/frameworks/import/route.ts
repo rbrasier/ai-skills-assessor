@@ -57,7 +57,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 422 },
     );
   }
-  const fw = fwRows[0];
+  const fw = fwRows[0]!;
   const fwType = str(fw.type);
   const fwVersion = str(fw.version);
   const fwName = str(fw.name) || fwType;

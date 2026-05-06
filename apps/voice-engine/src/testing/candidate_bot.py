@@ -3,9 +3,9 @@
 The candidate is a Claude instance shaped by four parameters:
 - role: job title / persona context
 - sfia_level: genuine capability level (1–7)
-- honesty: how truthfully they represent that level (1=fabricates, 10=accurate)
+- approach: free-text description of how the candidate will behave
+  (e.g. "honest and direct", "anxious and disruptive", "exaggerates skills with high ego")
 - target_skills: 3 SFIA codes the candidate wants to be assessed on
-  (an honest candidate has real experience; a dishonest one fabricates it)
 - model: which Claude model to use — proxy for candidate intelligence/articulateness
 """
 
@@ -49,28 +49,6 @@ _ARTICULATION_INSTRUCTIONS: list[tuple[range, str]] = [
     )),
 ]
 
-_HONESTY_INSTRUCTIONS = {
-    (9, 10): (
-        "Answer honestly and accurately. Your examples genuinely reflect work at "
-        "your stated SFIA level in your target skill areas. Be specific and concrete."
-    ),
-    (6, 8): (
-        "Mostly honest, but occasionally present team achievements as primarily "
-        "your own. Slightly over-state your seniority in one or two examples."
-    ),
-    (3, 5): (
-        "Moderately exaggerate. Claim credit for work you observed or partially "
-        "contributed to. Present outcomes as more impactful than they were. "
-        "Avoid outright lies but stretch the truth significantly."
-    ),
-    (1, 2): (
-        "Heavily fabricate. You have the role described but little real expertise in "
-        "your target skills. Invent plausible-sounding project names and outcomes. "
-        "Claim to have led initiatives that were actually run by others. Present "
-        "yourself as operating 2–3 SFIA levels above your actual capability."
-    ),
-}
-
 # Skill names for readable persona prompts — mirrors StubKnowledgeBase
 SFIA_SKILL_NAMES: dict[str, str] = {
     "PROG": "Programming/software development",
@@ -97,13 +75,6 @@ CANDIDATE_MODELS: dict[str, str] = {
 }
 
 
-def _honesty_instruction(honesty: int) -> str:
-    for (lo, hi), text in _HONESTY_INSTRUCTIONS.items():
-        if lo <= honesty <= hi:
-            return text
-    return _HONESTY_INSTRUCTIONS[(9, 10)]
-
-
 def _articulation_instruction(articulation: int) -> str:
     for r, text in _ARTICULATION_INSTRUCTIONS:
         if articulation in r:
@@ -115,7 +86,7 @@ def _articulation_instruction(articulation: int) -> str:
 class CandidatePersona:
     role: str
     sfia_level: int
-    honesty: int
+    approach: str
     target_skills: list[str] = field(default_factory=list)
     model: str = CANDIDATE_MODELS["haiku"]
     articulation: int = 10
@@ -123,14 +94,13 @@ class CandidatePersona:
     def __post_init__(self) -> None:
         if not 1 <= self.sfia_level <= 7:
             raise ValueError(f"sfia_level must be 1–7, got {self.sfia_level}")
-        if not 1 <= self.honesty <= 10:
-            raise ValueError(f"honesty must be 1–10, got {self.honesty}")
+        if not self.approach:
+            raise ValueError("approach must be a non-empty string")
         if not 1 <= self.articulation <= 10:
             raise ValueError(f"articulation must be 1–10, got {self.articulation}")
 
     def system_prompt(self) -> str:
         level_desc = _LEVEL_DESCRIPTORS[self.sfia_level]
-        honesty_inst = _honesty_instruction(self.honesty)
         articulation_inst = _articulation_instruction(self.articulation)
 
         skills_block = ""
@@ -151,7 +121,7 @@ class CandidatePersona:
             f"Your role: {self.role}\n"
             f"Your genuine SFIA responsibility level: {self.sfia_level} — {level_desc}"
             f"{skills_block}\n\n"
-            f"Behaviour: {honesty_inst}\n\n"
+            f"Behaviour: {self.approach}\n\n"
             f"Speech style: {articulation_inst}\n\n"
             "Do NOT mention SFIA levels, SFIA codes, or framework names explicitly — "
             "talk naturally about your work. "
