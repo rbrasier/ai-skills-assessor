@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { AdminSessionSummary, AssessmentReport } from "@ai-skills-assessor/shared-types";
 import AssessmentReviewModal from "@/components/review-modal/AssessmentReviewModal";
-import { mapVoiceEngineClaim, mapVoiceEngineReport } from "@/lib/map-assessment-report";
+import { mapVoiceEngineClaim } from "@/lib/map-assessment-report";
 
 type Filter = "all" | "complete" | "review" | "incomplete";
 
@@ -121,8 +121,7 @@ export default function AssessmentsTable({
         cache: "no-store",
       });
       if (adminRes.ok) {
-        const raw = (await adminRes.json()) as Record<string, unknown>;
-        setReportData(mapVoiceEngineReport(raw));
+        setReportData((await adminRes.json()) as AssessmentReport);
         return;
       }
       if (s.expertReviewToken) {
