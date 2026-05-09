@@ -44,7 +44,7 @@ EOF
 RUN python - <<'EOF'
 import torch, os
 print("Pre-downloading Silero VAD model")
-torch.hub.load("snakers4/silero-vad", model="silero_vad", force_reload=False, onnx=False)
+torch.hub.load("snakers4/silero-vad", model="silero_vad", force_reload=False, onnx=False, trust_repo=True)
 print("Silero VAD cached.")
 EOF
 

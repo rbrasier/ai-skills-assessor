@@ -48,6 +48,9 @@ fi
 
 CONTAINER_NAME="ai-skills-pg"
 LIVEKIT_CONTAINER_NAME="${LIVEKIT_CONTAINER_NAME:-ai-skills-livekit}"
+WHISPER_CONTAINER_NAME="${WHISPER_CONTAINER_NAME:-ai-skills-whisper}"
+WHISPER_IMAGE_NAME="${WHISPER_IMAGE_NAME:-ai-skills-whisper-stt}"
+KOKORO_CONTAINER_NAME="${KOKORO_CONTAINER_NAME:-ai-skills-kokoro}"
 LOCAL_DB_URL="postgresql://postgres:postgres@localhost:5432/ai_skills_assessor"
 LOG_DIR="/tmp/ai-skills-logs"
 mkdir -p "$LOG_DIR"
@@ -85,6 +88,13 @@ wait_http() {
     [ "$i" -eq "$retries" ] && return 1
     sleep 2
   done
+}
+
+# Read a single value from apps/voice-engine/.env (last match wins, strips quotes)
+read_env_var() {
+  local key=$1 envfile="$REPO_ROOT/apps/voice-engine/.env"
+  [ -f "$envfile" ] || { echo ""; return; }
+  grep -E "^${key}=" "$envfile" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || echo ""
 }
 
 ensure_postgres() {
@@ -137,6 +147,97 @@ ensure_livekit() {
     warn "LiveKit :7880 not ready in time — check: docker logs $LIVEKIT_CONTAINER_NAME"
   else
     ok "LiveKit ready (WebSocket: ws://127.0.0.1:7880)"
+  fi
+}
+
+ensure_whisper() {
+  if [ "${DOCKER_WHISPER_SKIP:-0}" = "1" ]; then
+    return 0
+  fi
+  local stt_provider
+  stt_provider=$(read_env_var STT_PROVIDER)
+  if [ "$stt_provider" != "whisper" ]; then
+    return 0
+  fi
+  if ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+    warn "Docker unavailable — assuming Whisper STT is already running on :8001"
+    return
+  fi
+
+  # Build the image if it has never been built locally
+  if ! docker image inspect "$WHISPER_IMAGE_NAME" &>/dev/null 2>&1; then
+    info "Building Whisper STT image '$WHISPER_IMAGE_NAME' (first run — downloads model, allow a few minutes)..."
+    docker build \
+      -f "$REPO_ROOT/apps/whisper-stt/Dockerfile" \
+      -t "$WHISPER_IMAGE_NAME" \
+      "$REPO_ROOT"
+    ok "Whisper STT image built"
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -q "^${WHISPER_CONTAINER_NAME}$"; then
+    if ! docker ps --format '{{.Names}}' | grep -q "^${WHISPER_CONTAINER_NAME}$"; then
+      info "Starting existing Whisper STT container '$WHISPER_CONTAINER_NAME'..."
+      docker start "$WHISPER_CONTAINER_NAME"
+    fi
+    ok "Whisper STT container '$WHISPER_CONTAINER_NAME' is running"
+  else
+    info "Creating Whisper STT container..."
+    docker run --name "$WHISPER_CONTAINER_NAME" \
+      -e PORT=8001 \
+      -e WHISPER_MODEL="${WHISPER_MODEL:-tiny.en}" \
+      -e VAD_THRESHOLD="${VAD_THRESHOLD:-0.5}" \
+      -e SILENCE_DURATION_MS="${SILENCE_DURATION_MS:-700}" \
+      --memory 4g \
+      -p 8001:8001 \
+      -d "$WHISPER_IMAGE_NAME"
+    ok "Whisper STT container created and started"
+  fi
+
+  info "Waiting for Whisper STT (:8001)..."
+  # generous retries — model loads on startup (~10 s on first boot)
+  if wait_http "http://localhost:8001/health" "whisper-stt" 30; then
+    ok "Whisper STT ready"
+  else
+    warn "Whisper STT did not become ready in time — check: docker logs $WHISPER_CONTAINER_NAME"
+  fi
+}
+
+ensure_kokoro() {
+  if [ "${DOCKER_KOKORO_SKIP:-0}" = "1" ]; then
+    return 0
+  fi
+  local tts_provider
+  tts_provider=$(read_env_var TTS_PROVIDER)
+  if [ "$tts_provider" != "kokoro" ]; then
+    return 0
+  fi
+  if ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+    warn "Docker unavailable — assuming Kokoro TTS is already running on :8880"
+    return
+  fi
+
+  if docker ps -a --format '{{.Names}}' | grep -q "^${KOKORO_CONTAINER_NAME}$"; then
+    if ! docker ps --format '{{.Names}}' | grep -q "^${KOKORO_CONTAINER_NAME}$"; then
+      info "Starting existing Kokoro TTS container '$KOKORO_CONTAINER_NAME'..."
+      docker start "$KOKORO_CONTAINER_NAME"
+    fi
+    ok "Kokoro TTS container '$KOKORO_CONTAINER_NAME' is running"
+  else
+    info "Creating Kokoro TTS container (ghcr.io/remsky/kokoro-fastapi-cpu:latest)..."
+    docker run --name "$KOKORO_CONTAINER_NAME" \
+      -e PORT=8880 \
+      --memory 2g \
+      -p 8880:8880 \
+      -d ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    ok "Kokoro TTS container created and started"
+  fi
+
+  info "Waiting for Kokoro TTS (:8880)..."
+  # generous retries — model loads on first boot (~20 s)
+  if wait_http "http://localhost:8880/health" "kokoro-tts" 40; then
+    ok "Kokoro TTS ready"
+  else
+    warn "Kokoro TTS did not become ready in time — check: docker logs $KOKORO_CONTAINER_NAME"
   fi
 }
 
@@ -216,6 +317,12 @@ ensure_postgres
 
 # Self-hosted LiveKit (same as setup-local; docs/guides/ensure-docker-livekit.sh)
 ensure_livekit
+
+# Self-hosted STT (only when STT_PROVIDER=whisper in apps/voice-engine/.env)
+ensure_whisper
+
+# Self-hosted TTS (only when TTS_PROVIDER=kokoro in apps/voice-engine/.env)
+ensure_kokoro
 
 # Prisma migrate (apply any pending migrations; safe to run on every restart)
 if [ -f "packages/database/prisma/schema.prisma" ]; then

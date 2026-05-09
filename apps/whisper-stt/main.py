@@ -83,6 +83,7 @@ def _load_models() -> None:
         model="silero_vad",
         force_reload=False,
         onnx=False,
+        trust_repo=True,
     )
     _vad_utils = utils
     logger.info("Silero VAD model loaded")
