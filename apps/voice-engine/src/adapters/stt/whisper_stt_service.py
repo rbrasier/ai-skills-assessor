@@ -48,6 +48,7 @@ def _build_processor(url: str) -> Any:
     """Construct and return the actual Pipecat FrameProcessor instance."""
     from pipecat.frames.frames import (
         AudioRawFrame,
+        CancelFrame,
         EndFrame,
         Frame,
         StartFrame,
@@ -70,6 +71,13 @@ def _build_processor(url: str) -> Any:
             super().__init__()
             self._ws: Any | None = None
             self._recv_task: asyncio.Task[None] | None = None
+
+        # ── Pipecat lifecycle ────────────────────────────────────────
+
+        async def cleanup(self) -> None:
+            """Called by Pipecat's pipeline runner on cancel/shutdown."""
+            await self._disconnect()
+            await super().cleanup()
 
         # ── connection management ────────────────────────────────────
 
@@ -141,7 +149,7 @@ def _build_processor(url: str) -> Any:
                 await self._connect()
                 await self.push_frame(frame, direction)
 
-            elif isinstance(frame, EndFrame):
+            elif isinstance(frame, (EndFrame, CancelFrame)):
                 await self._disconnect()
                 await self.push_frame(frame, direction)
 
