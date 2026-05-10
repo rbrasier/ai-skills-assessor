@@ -201,7 +201,7 @@ ensure_whisper() {
       info "Starting existing Whisper STT container '$WHISPER_CONTAINER_NAME'..."
       docker start "$WHISPER_CONTAINER_NAME"
     fi
-    ok "Whisper STT container '$WHISPER_CONTAINER_NAME' is running"
+    info "Whisper STT container '$WHISPER_CONTAINER_NAME' is up — checking readiness..."
   else
     info "Creating Whisper STT container..."
     docker run --name "$WHISPER_CONTAINER_NAME" \
@@ -212,15 +212,38 @@ ensure_whisper() {
       --memory 4g \
       -p 8001:8001 \
       -d "$WHISPER_IMAGE_NAME"
-    ok "Whisper STT container created and started"
+    info "Whisper STT container created — checking readiness..."
   fi
 
-  info "Waiting for Whisper STT (:8001)..."
-  # generous retries — model loads on startup (~10 s on first boot)
-  if wait_http "http://localhost:8001/health" "whisper-stt" 30; then
-    ok "Whisper STT ready"
+  # Poll /health until the model finishes loading (503 → 200).
+  # The server responds immediately but returns 503 {"status":"loading"} until
+  # faster-whisper + Silero VAD are both in memory (~10–30 s).
+  info "Waiting for Whisper STT model to load (http://localhost:8001/health)..."
+  local whisper_ready=false
+  for i in $(seq 1 45); do
+    http_code=$(curl -s -o /tmp/whisper_health.json -w "%{http_code}" http://localhost:8001/health 2>/dev/null || true)
+    if [ "$http_code" = "200" ]; then
+      whisper_ready=true
+      break
+    elif [ "$http_code" = "503" ]; then
+      status=$(python3 -c "import json,sys; d=json.load(open('/tmp/whisper_health.json')); print(d.get('status','?'))" 2>/dev/null || echo "loading")
+      printf "\r  → Whisper STT: %s (attempt %d/45)..." "$status" "$i"
+    elif [ "$http_code" = "000" ]; then
+      printf "\r  → Whisper STT: server not yet responding (attempt %d/45)..." "$i"
+    else
+      printf "\r  → Whisper STT: HTTP %s (attempt %d/45)..." "$http_code" "$i"
+    fi
+    sleep 2
+  done
+  echo  # newline after the progress line
+  rm -f /tmp/whisper_health.json
+
+  if [ "$whisper_ready" = true ]; then
+    ok "Whisper STT ready (model loaded)"
   else
-    warn "Whisper STT did not become ready in time — check: docker logs $WHISPER_CONTAINER_NAME"
+    warn "Whisper STT did not become ready in time"
+    warn "  Health check: curl http://localhost:8001/health"
+    warn "  Container logs: docker logs $WHISPER_CONTAINER_NAME"
   fi
 }
 
