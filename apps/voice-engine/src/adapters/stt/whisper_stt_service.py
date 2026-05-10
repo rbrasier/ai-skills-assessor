@@ -12,6 +12,15 @@ emits TranscriptionFrame / InterimTranscriptionFrame objects downstream.
 
 Connection is established lazily on the first StartFrame so the process-level
 asyncio event loop is available.
+
+Pipecat 1.0.0 notes
+-------------------
+- ``InputAudioRawFrame`` is now a ``SystemFrame`` that also inherits from
+  ``AudioRawFrame``. ``isinstance(frame, AudioRawFrame)`` still returns True.
+- ``audio_in_passthrough=True`` by default in ``TransportParams``, so
+  ``InputAudioRawFrame`` always flows DOWNSTREAM through the pipeline.
+- ``cleanup()`` is the proper teardown hook in Pipecat 1.0; ``EndFrame`` and
+  ``CancelFrame`` are handled in-band as a belt-and-suspenders measure.
 """
 
 from __future__ import annotations
@@ -25,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 # faster-whisper and Silero VAD both require 16 kHz input.
 _WHISPER_SAMPLE_RATE = 16_000
+
+# Warn at most once every N dropped audio frames so logs aren't flooded.
+_DROP_WARN_INTERVAL = 200
 
 
 def _resample_pcm(audio: bytes, from_rate: int, to_rate: int) -> bytes:
@@ -90,6 +102,8 @@ def _build_processor(url: str) -> Any:
             super().__init__()
             self._ws: Any | None = None
             self._recv_task: asyncio.Task[None] | None = None
+            self._audio_frames_received: int = 0
+            self._audio_frames_dropped: int = 0
 
         # ── Pipecat lifecycle ────────────────────────────────────────
 
@@ -125,7 +139,11 @@ def _build_processor(url: str) -> Any:
                 except Exception:
                     pass
                 self._ws = None
-            logger.info("WhisperSTT: disconnected from %s", url)
+            logger.info(
+                "WhisperSTT: disconnected (frames received=%d, dropped=%d)",
+                self._audio_frames_received,
+                self._audio_frames_dropped,
+            )
 
         async def _receive_loop(self) -> None:
             try:
@@ -139,6 +157,10 @@ def _build_processor(url: str) -> Any:
                     is_final: bool = bool(data.get("is_final", True))
                     if not text:
                         continue
+                    logger.info(
+                        "WhisperSTT: transcription received (final=%s): %s",
+                        is_final, text[:120],
+                    )
                     if is_final:
                         frame: Frame = TranscriptionFrame(
                             text=text, user_id="", timestamp="", language="en"
@@ -148,8 +170,6 @@ def _build_processor(url: str) -> Any:
                             text=text, user_id="", timestamp="", language="en"
                         )
                     else:
-                        # Older Pipecat: treat interim as final so the
-                        # conversation buffer still receives something.
                         frame = TranscriptionFrame(
                             text=text, user_id="", timestamp="", language="en"
                         )
@@ -175,6 +195,15 @@ def _build_processor(url: str) -> Any:
             elif isinstance(frame, AudioRawFrame) and direction == FrameDirection.DOWNSTREAM:
                 # Consume the audio frame — send bytes to Whisper; do NOT
                 # push it further so the conversation processor isn't flooded.
+                self._audio_frames_received += 1
+
+                if self._audio_frames_received == 1:
+                    sr = getattr(frame, "sample_rate", "unknown")
+                    logger.info(
+                        "WhisperSTT: first audio frame received (sample_rate=%s, bytes=%d)",
+                        sr, len(frame.audio),
+                    )
+
                 if self._ws is not None:
                     try:
                         audio = _resample_pcm(
@@ -185,8 +214,16 @@ def _build_processor(url: str) -> Any:
                         await self._ws.send(audio)
                     except Exception as exc:
                         logger.warning("WhisperSTT: send failed: %s", exc)
-                        # Reconnect on next audio frame if the socket broke.
                         self._ws = None
+                else:
+                    self._audio_frames_dropped += 1
+                    if self._audio_frames_dropped % _DROP_WARN_INTERVAL == 1:
+                        logger.warning(
+                            "WhisperSTT: no connection — audio dropped "
+                            "(dropped=%d so far). Check WHISPER_STT_URL and "
+                            "that the whisper server is running.",
+                            self._audio_frames_dropped,
+                        )
             else:
                 await self.push_frame(frame, direction)
 
