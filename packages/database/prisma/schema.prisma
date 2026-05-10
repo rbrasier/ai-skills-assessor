@@ -193,10 +193,13 @@ model FrameworkSkillLevels {
 /// Singleton row holding platform-wide admin configuration.
 /// Created on first write; read back with id = 'default'.
 model AdminSettings {
-  id          String   @id @default("default")
-  cooldownDays Int     @default(90)
-  updatedAt   DateTime @updatedAt
-  updatedBy   String?  @db.VarChar(255)
+  id           String   @id @default("default")
+  cooldownDays Int      @default(90)
+  /// Extensible JSON bag for runtime-mutable site settings (e.g. enable_sfia_flow).
+  /// Stored as JSONB so new keys can be added without schema migrations.
+  siteConfig   Json     @default("{}")
+  updatedAt    DateTime @updatedAt
+  updatedBy    String?  @db.VarChar(255)
 
   @@map("admin_settings")
 }

@@ -1625,6 +1625,40 @@ class PostgresPersistence(IPersistence):
                 updated_by,
             )
 
+    async def get_site_config(self) -> dict[str, Any]:
+        import json as _json
+
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                'SELECT "siteConfig" FROM admin_settings WHERE id = \'default\''
+            )
+        if row is None:
+            return {}
+        raw = row["siteConfig"]
+        if isinstance(raw, str):
+            return _json.loads(raw)
+        return dict(raw) if raw else {}
+
+    async def save_site_config(self, config: dict[str, Any]) -> None:
+        import json as _json
+
+        pool = await self._get_pool()
+        now = _to_naive(datetime.now(UTC))
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO admin_settings ("id", "cooldownDays", "siteConfig", "updatedAt")
+                VALUES ('default', $1, $2::jsonb, $3)
+                ON CONFLICT ("id") DO UPDATE
+                    SET "siteConfig" = admin_settings."siteConfig" || EXCLUDED."siteConfig",
+                        "updatedAt"  = EXCLUDED."updatedAt"
+                """,
+                _DEFAULT_COOLDOWN_DAYS,
+                _json.dumps(config),
+                now,
+            )
+
     # ─── Monitoring: eligibility ──────────────────────────────────────
 
     async def check_assessment_eligibility(

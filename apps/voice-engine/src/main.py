@@ -314,6 +314,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # CallManager needs the transport to place the call.
     transport.set_listener(call_manager)
 
+    # Load persisted site config and apply it over the .env defaults so
+    # runtime changes to enable_sfia_flow survive restarts.
+    try:
+        site_cfg = await persistence.get_site_config()
+        if "enable_sfia_flow" in site_cfg:
+            settings.enable_sfia_flow = bool(site_cfg["enable_sfia_flow"])
+            logger.info("Loaded site_config from DB: enable_sfia_flow=%s", settings.enable_sfia_flow)
+    except Exception as exc:  # noqa: BLE001 — best-effort; .env default is fine
+        logger.warning("Could not load site_config from DB (using .env default): %s", exc)
+
     app.state.settings = settings
     app.state.persistence = persistence
     app.state.voice_transport = transport

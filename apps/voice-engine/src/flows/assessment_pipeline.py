@@ -60,8 +60,6 @@ async def build_sfia_pipeline(
     try:
         from pipecat.pipeline.pipeline import Pipeline
         from pipecat.pipeline.task import PipelineParams, PipelineTask
-        from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-        from pipecat.services.anthropic import AnthropicLLMService
         from pipecat_flows import FlowManager
     except ImportError as exc:
         raise RuntimeError(
@@ -69,19 +67,52 @@ async def build_sfia_pipeline(
             "Install with `pip install -e .[voice]`."
         ) from exc
 
+    # pipecat >= 0.0.99 moved to a universal LLMContext + LLMContextAggregatorPair;
+    # fall back to the legacy OpenAILLMContext + create_context_aggregator() for
+    # older installs so the error message stays actionable rather than cryptic.
+    try:
+        from pipecat.processors.aggregators.llm_context import LLMContext
+        from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+        _new_context_api = True
+    except ImportError:
+        try:
+            from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext as LLMContext  # type: ignore[no-redef]
+            _new_context_api = False
+        except ImportError as exc:
+            raise RuntimeError(
+                "Cannot import LLMContext or OpenAILLMContext from pipecat. "
+                "Ensure pipecat-ai>=0.0.105 is installed (`pip install -e .[voice]`)."
+            ) from exc
+
+    # pipecat >= 0.0.99 moved AnthropicLLMService into a submodule.
+    try:
+        from pipecat.services.anthropic.llm import AnthropicLLMService
+    except ImportError:
+        from pipecat.services.anthropic import AnthropicLLMService  # type: ignore[no-redef]
+
     from src.adapters.stt import create_stt_service
     from src.adapters.tts import create_tts_service
 
     stt = create_stt_service(settings)
     tts = create_tts_service(settings)
 
-    llm = AnthropicLLMService(
-        api_key=settings.anthropic_api_key,
-        model=settings.anthropic_in_call_model,
-    )
+    # pipecat >= 0.0.105 prefers settings= over top-level model= kwarg.
+    try:
+        llm = AnthropicLLMService(
+            api_key=settings.anthropic_api_key,
+            settings=AnthropicLLMService.Settings(model=settings.anthropic_in_call_model),
+        )
+    except (TypeError, AttributeError):
+        llm = AnthropicLLMService(
+            api_key=settings.anthropic_api_key,
+            model=settings.anthropic_in_call_model,
+        )
 
-    context = OpenAILLMContext()
-    context_aggregator = llm.create_context_aggregator(context)
+    context = LLMContext()
+    if _new_context_api:
+        context_aggregator = LLMContextAggregatorPair(context)
+    else:
+        context_aggregator = llm.create_context_aggregator(context)  # type: ignore[attr-defined]
 
     observer = _TranscriptFrameObserver(recorder=recorder)
 

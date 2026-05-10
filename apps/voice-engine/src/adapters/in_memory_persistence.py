@@ -83,6 +83,7 @@ class InMemoryPersistence(IPersistence):
             "updated_at": None,
             "updated_by": None,
         }
+        self._site_config: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         # Admin UI: in-memory framework catalog (tests / dev without Postgres)
         self._frameworks: dict[str, dict[str, Any]] = {}
@@ -1035,6 +1036,14 @@ class InMemoryPersistence(IPersistence):
                 "updated_at": datetime.now(UTC).isoformat(),
                 "updated_by": updated_by,
             }
+
+    async def get_site_config(self) -> dict[str, Any]:
+        async with self._lock:
+            return dict(self._site_config)
+
+    async def save_site_config(self, config: dict[str, Any]) -> None:
+        async with self._lock:
+            self._site_config = {**self._site_config, **config}
 
     # ─── Monitoring: eligibility ──────────────────────────────────────
 
