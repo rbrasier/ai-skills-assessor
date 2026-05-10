@@ -866,6 +866,69 @@ async def update_admin_settings(
     return AdminSettingsPayload(**data)
 
 
+# ─── Admin: site config (runtime-mutable bot/provider settings) ────
+
+
+class SiteConfigPayload(BaseModel):
+    enable_sfia_flow: bool
+    dialing_method: str
+    stt_provider: str
+    tts_provider: str
+    bot_name: str
+    bot_org_name: str
+
+
+class SiteConfigPatchPayload(BaseModel):
+    enable_sfia_flow: bool
+
+
+@router.get(
+    "/api/v1/admin/site-config",
+    response_model=SiteConfigPayload,
+    tags=["admin"],
+)
+async def get_site_config(request: Request) -> SiteConfigPayload:
+    """Return runtime-readable site configuration."""
+    _require_admin_token(request)
+    s = request.app.state.settings
+    return SiteConfigPayload(
+        enable_sfia_flow=s.enable_sfia_flow,
+        dialing_method=s.dialing_method,
+        stt_provider=s.stt_provider,
+        tts_provider=s.tts_provider,
+        bot_name=s.bot_name,
+        bot_org_name=s.bot_org_name,
+    )
+
+
+@router.patch(
+    "/api/v1/admin/site-config",
+    response_model=SiteConfigPayload,
+    tags=["admin"],
+)
+async def patch_site_config(
+    payload: SiteConfigPatchPayload,
+    request: Request,
+) -> SiteConfigPayload:
+    """Toggle the active call bot at runtime.
+
+    Updates the in-process Settings object so the change takes effect for
+    all subsequent calls without a restart. Not persisted — reverts to the
+    .env value on next deploy/restart.
+    """
+    _require_admin_token(request)
+    s = request.app.state.settings
+    s.enable_sfia_flow = payload.enable_sfia_flow
+    return SiteConfigPayload(
+        enable_sfia_flow=s.enable_sfia_flow,
+        dialing_method=s.dialing_method,
+        stt_provider=s.stt_provider,
+        tts_provider=s.tts_provider,
+        bot_name=s.bot_name,
+        bot_org_name=s.bot_org_name,
+    )
+
+
 # ─── Admin: candidates directory & skill library ───────────────────
 
 
