@@ -370,7 +370,18 @@ class BasicCallBot:
             except Exception:  # pragma: no cover — defensive
                 logger.exception("BasicCallBot.cancel task.cancel failed")
         if self._runner_task is not None and not self._runner_task.done():
-            self._runner_task.cancel()
+            # Give the pipeline runner up to 5 s to propagate the CancelFrame
+            # and close transport sessions before force-cancelling the task.
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._runner_task), timeout=5.0
+                )
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._runner_task.cancel()
+                try:
+                    await self._runner_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
 
 class SFIACallBot:
@@ -665,7 +676,18 @@ class SFIACallBot:
             except Exception:
                 logger.exception("SFIACallBot.cancel task.cancel failed")
         if self._runner_task is not None and not self._runner_task.done():
-            self._runner_task.cancel()
+            # Give the pipeline runner up to 5 s to propagate the CancelFrame
+            # and close transport sessions before force-cancelling the task.
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._runner_task), timeout=5.0
+                )
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                self._runner_task.cancel()
+                try:
+                    await self._runner_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
 
 __all__ = ["BasicCallBot", "SFIACallBot"]

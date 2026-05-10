@@ -32,9 +32,26 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+
+# Suppress ResourceWarning noise from aiohttp sessions that pipecat's
+# internal transports (LiveKit, Daily) create and close asynchronously.
+# These sessions are not actually leaked — they are cleaned up by the event
+# loop after the pipeline tears down — but Python's GC emits the warning
+# before async finalisation completes.
+warnings.filterwarnings(
+    "ignore",
+    message="Unclosed client session",
+    category=ResourceWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="Unclosed connector",
+    category=ResourceWarning,
+)
 
 from fastapi import FastAPI
 
