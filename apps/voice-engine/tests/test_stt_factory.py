@@ -22,6 +22,7 @@ def test_default_stt_provider_is_deepgram() -> None:
     s = Settings(
         daily_api_key="x",
         daily_domain="x.daily.co",
+        _env_file=None,
     )
     assert s.stt_provider == "deepgram"
 
@@ -38,7 +39,7 @@ def test_stt_provider_whisper_accepted() -> None:
 
 
 def test_whisper_stt_url_defaults_empty() -> None:
-    s = Settings(daily_api_key="x", daily_domain="x.daily.co")
+    s = Settings(daily_api_key="x", daily_domain="x.daily.co", _env_file=None)
     assert s.whisper_stt_url == ""
 
 

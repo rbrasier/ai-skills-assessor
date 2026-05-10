@@ -76,7 +76,9 @@ async def build_sfia_pipeline(
         _new_context_api = True
     except ImportError:
         try:
-            from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext as LLMContext  # type: ignore[no-redef]
+            from pipecat.processors.aggregators.openai_llm_context import (
+                OpenAILLMContext as LLMContext,  # type: ignore[no-redef]
+            )
             _new_context_api = False
         except ImportError as exc:
             raise RuntimeError(
