@@ -1,4 +1,4 @@
-"""SFIA assessment flow controller — Pipecat Flows 5-state machine.
+"""Skill Framework assessment flow controller — Pipecat Flows 5-state machine.
 
 Implements the full Introduction → SkillDiscovery → EvidenceGathering →
 Summary → Closing flow using pipecat-ai-flows ``FlowsFunctionSchema`` and
@@ -50,10 +50,10 @@ logger = logging.getLogger(__name__)
 # (e.g. frameworks table not yet seeded). Keeps the bot functional.
 _FALLBACK_SYSTEM_PROMPT = (
     "You are Noa, a warm and professional AI skills assessor from Resonant. "
-    "You conduct structured SFIA-based skills assessments over the phone. "
+    "You conduct structured SFIA-style based skills assessments over the phone. "
     "Keep your language conversational, concise, and encouraging. "
-    "Never mention SFIA skill codes or numerical levels to the candidate — "
-    "keep the conversation natural. "
+    "Never mention SFIA or other framework skill codes or numerical levels to the candidate — "
+    "keep the conversation natural. Never provide the candidate with feedback or assessment results during the call. "
     "When you have enough information to call a transition function, do so promptly.\n\n"
     "## Technical Challenge\n\n"
     "Occasionally — but not on every turn — introduce polite technical tension by "
@@ -69,7 +69,7 @@ _FALLBACK_SYSTEM_PROMPT = (
 
 
 class SfiaFlowController:
-    """Stateful controller for the 5-node SFIA assessment conversation flow.
+    """Stateful controller for the 5-node skills assessment conversation flow.
 
     Owns the flow configuration and function handlers. Wired into the Pipecat
     pipeline by :func:`~src.flows.assessment_pipeline.build_sfia_pipeline`.
@@ -215,13 +215,13 @@ class SfiaFlowController:
                 {
                     "role": "user",
                     "content": (
-                        "Introduce yourself as Noa, an AI skills assessor from Resonant. "
+                        "Introduce yourself as Noa, an AI skills assessor. "
                         "Explain briefly that you are conducting a structured skills "
-                        "assessment based on the SFIA framework and that the call will "
+                        "assessment based on the skills framework and that the call will "
                         "be recorded. "
-                        "Let the candidate know two things: first, that focus changes on "
-                        "their browser window will be logged during the call; second, that "
-                        "all claims they make will be verified by their management and a "
+                        "Let the candidate know two things: first, ask that the user keep"
+                        "the focus on this browser window to maintain the integrity of the test; second, that "
+                        "all claims they make will be verified by a supervisor and a "
                         "qualified SME reviewer. "
                         "Ask for their verbal consent to proceed on those terms. "
                         "If they agree, call consent_given. "
@@ -262,9 +262,9 @@ class SfiaFlowController:
                     "role": "user",
                     "content": (
                         "Ask the candidate to describe their current role, key "
-                        "responsibilities, and areas of IT expertise. "
+                        "responsibilities, and areas of  expertise. "
                         "Keep the conversation natural and curious — do not name or "
-                        "reference SFIA codes. "
+                        "reference SFIA or other skill codes. "
                         "Listen for mentions of 2-5 distinct skill areas "
                         "(e.g. software development, data engineering, cloud infrastructure, "
                         "project management, security). "
