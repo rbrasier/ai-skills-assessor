@@ -23,6 +23,25 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# faster-whisper and Silero VAD both require 16 kHz input.
+_WHISPER_SAMPLE_RATE = 16_000
+
+
+def _resample_pcm(audio: bytes, from_rate: int, to_rate: int) -> bytes:
+    """Resample 16-bit mono PCM from from_rate to to_rate using linear interpolation."""
+    if from_rate == to_rate or not audio:
+        return audio
+    import numpy as np
+
+    samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32)
+    new_length = max(1, int(round(len(samples) * to_rate / from_rate)))
+    resampled = np.interp(
+        np.linspace(0, len(samples) - 1, new_length),
+        np.arange(len(samples)),
+        samples,
+    ).astype(np.int16)
+    return resampled.tobytes()
+
 
 class WhisperSTTService:
     """Pipecat FrameProcessor wrapping a faster-whisper WebSocket STT server.
@@ -158,7 +177,12 @@ def _build_processor(url: str) -> Any:
                 # push it further so the conversation processor isn't flooded.
                 if self._ws is not None:
                     try:
-                        await self._ws.send(frame.audio)
+                        audio = _resample_pcm(
+                            frame.audio,
+                            getattr(frame, "sample_rate", _WHISPER_SAMPLE_RATE),
+                            _WHISPER_SAMPLE_RATE,
+                        )
+                        await self._ws.send(audio)
                     except Exception as exc:
                         logger.warning("WhisperSTT: send failed: %s", exc)
                         # Reconnect on next audio frame if the socket broke.
