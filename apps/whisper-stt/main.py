@@ -127,7 +127,7 @@ async def ws_transcribe(ws: WebSocket) -> None:
 
     import torch  # type: ignore[import]
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     async def _flush_and_send(is_final: bool) -> None:
         nonlocal buffer_samples, in_speech, silence_start
@@ -204,6 +204,9 @@ async def ws_transcribe(ws: WebSocket) -> None:
 
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
+    except asyncio.CancelledError:
+        logger.warning("WebSocket handler cancelled (server shutting down?)")
+        raise
     except Exception as exc:
         logger.exception("WebSocket handler error: %s", exc)
         try:

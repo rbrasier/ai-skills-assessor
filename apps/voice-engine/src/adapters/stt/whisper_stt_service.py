@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,9 @@ _WHISPER_SAMPLE_RATE = 16_000
 
 # Warn at most once every N dropped audio frames so logs aren't flooded.
 _DROP_WARN_INTERVAL = 200
+
+# Minimum seconds between reconnection attempts (avoids hammering a dead server).
+_RECONNECT_COOLDOWN_S = 2.0
 
 
 def _resample_pcm(audio: bytes, from_rate: int, to_rate: int) -> bytes:
@@ -104,6 +108,7 @@ def _build_processor(url: str) -> Any:
             self._recv_task: asyncio.Task[None] | None = None
             self._audio_frames_received: int = 0
             self._audio_frames_dropped: int = 0
+            self._last_connect_attempt: float = 0.0
 
         # ── Pipecat lifecycle ────────────────────────────────────────
 
@@ -115,6 +120,7 @@ def _build_processor(url: str) -> Any:
         # ── connection management ────────────────────────────────────
 
         async def _connect(self) -> bool:
+            self._last_connect_attempt = time.monotonic()
             try:
                 import websockets
                 self._ws = await websockets.connect(url, ping_interval=20, ping_timeout=10)
@@ -174,10 +180,15 @@ def _build_processor(url: str) -> Any:
                             text=text, user_id="", timestamp="", language="en"
                         )
                     await self.push_frame(frame, FrameDirection.DOWNSTREAM)
+                # async-for exited normally: server sent a clean close frame.
+                logger.warning("WhisperSTT: server closed the connection — will reconnect on next audio frame")
+                self._ws = None
             except asyncio.CancelledError:
-                pass
+                # Local shutdown via _disconnect() — let _disconnect() close the WebSocket.
+                return
             except Exception as exc:
                 logger.error("WhisperSTT: receive loop error: %s", exc)
+                self._ws = None
 
         # ── FrameProcessor contract ──────────────────────────────────
 
@@ -203,6 +214,12 @@ def _build_processor(url: str) -> Any:
                         "WhisperSTT: first audio frame received (sample_rate=%s, bytes=%d)",
                         sr, len(frame.audio),
                     )
+
+                if self._ws is None:
+                    elapsed = time.monotonic() - self._last_connect_attempt
+                    if elapsed >= _RECONNECT_COOLDOWN_S:
+                        logger.info("WhisperSTT: attempting reconnect...")
+                        await self._connect()
 
                 if self._ws is not None:
                     try:
