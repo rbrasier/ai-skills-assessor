@@ -61,6 +61,28 @@ echo
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+# docker info can hang indefinitely if Docker Desktop is starting or unresponsive.
+# This wrapper enforces a 5-second timeout using a portable background-kill approach.
+docker_available() {
+  command -v docker &>/dev/null || return 1
+  # Check the socket before invoking docker.  On macOS, running any docker
+  # command when Docker Desktop is stopped triggers its auto-start sequence
+  # (30–90 s), even after the child process is killed.
+  local sock="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+  sock="${sock#unix://}"
+  [ -S "$sock" ] || return 1
+  # Socket is present; confirm the daemon responds within 5 s
+  docker info &>/dev/null 2>&1 &
+  local dpid=$!
+  ( sleep 5; kill "$dpid" 2>/dev/null ) &
+  local killer=$!
+  wait "$dpid" 2>/dev/null
+  local status=$?
+  kill "$killer" 2>/dev/null
+  wait "$killer" 2>/dev/null
+  return $status
+}
+
 kill_port() {
   local port=$1
   local pids=""
@@ -98,7 +120,7 @@ read_env_var() {
 }
 
 ensure_postgres() {
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+  if ! docker_available; then
     warn "Docker unavailable — assuming Postgres is already running on :5432"
     return
   fi
@@ -159,7 +181,7 @@ ensure_whisper() {
   if [ "$stt_provider" != "whisper" ]; then
     return 0
   fi
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+  if ! docker_available; then
     warn "Docker unavailable — assuming Whisper STT is already running on :8001"
     return
   fi
@@ -211,7 +233,7 @@ ensure_kokoro() {
   if [ "$tts_provider" != "kokoro" ]; then
     return 0
   fi
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+  if ! docker_available; then
     warn "Docker unavailable — assuming Kokoro TTS is already running on :8880"
     return
   fi
@@ -248,7 +270,7 @@ ensure_kokoro() {
 info "Stopping existing services..."
 
 # Stop docker compose stack if it is running
-if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
+if docker_available; then
   if docker compose ps -q 2>/dev/null | grep -q .; then
     info "Stopping docker compose stack..."
     docker compose down --remove-orphans 2>/dev/null || true

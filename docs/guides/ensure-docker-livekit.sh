@@ -39,7 +39,11 @@ ensure_docker_livekit() {
     echo "  (DOCKER_LIVEKIT_SKIP=1 — not starting LiveKit container)" 2>/dev/null || true
     return 0
   fi
-  if ! command -v docker &>/dev/null || ! docker info &>/dev/null 2>&1; then
+  # Check the socket before invoking docker — calling docker when Docker Desktop
+  # is stopped triggers its auto-start on macOS (causes multi-minute hangs).
+  local _lk_sock="${DOCKER_HOST:-unix:///var/run/docker.sock}"
+  _lk_sock="${_lk_sock#unix://}"
+  if ! command -v docker &>/dev/null || [ ! -S "$_lk_sock" ]; then
     return 0
   fi
 
