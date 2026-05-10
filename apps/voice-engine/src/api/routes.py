@@ -912,13 +912,16 @@ async def patch_site_config(
 ) -> SiteConfigPayload:
     """Toggle the active call bot at runtime.
 
-    Updates the in-process Settings object so the change takes effect for
-    all subsequent calls without a restart. Not persisted — reverts to the
-    .env value on next deploy/restart.
+    Updates the in-process Settings object immediately and persists the
+    change to the database so it survives service restarts.
     """
     _require_admin_token(request)
     s = request.app.state.settings
     s.enable_sfia_flow = payload.enable_sfia_flow
+
+    persistence = _persistence(request)
+    await persistence.save_site_config({"enable_sfia_flow": payload.enable_sfia_flow})
+
     return SiteConfigPayload(
         enable_sfia_flow=s.enable_sfia_flow,
         dialing_method=s.dialing_method,

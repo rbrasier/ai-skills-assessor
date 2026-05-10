@@ -461,6 +461,24 @@ class IPersistence(ABC):
         """Upsert the singleton admin-settings row."""
         ...
 
+    @abstractmethod
+    async def get_site_config(self) -> dict[str, Any]:
+        """Return the persisted site configuration JSON bag.
+
+        Returns an empty dict when the singleton row has not been written yet
+        or the column has no data.  Callers must supply their own defaults.
+        """
+        ...
+
+    @abstractmethod
+    async def save_site_config(self, config: dict[str, Any]) -> None:
+        """Merge *config* into the persisted siteConfig JSON bag.
+
+        Performs a shallow merge so callers need only supply the keys they
+        want to change; existing keys not present in *config* are preserved.
+        """
+        ...
+
     # ─── Monitoring: eligibility ──────────────────────────────────────
 
     @abstractmethod
