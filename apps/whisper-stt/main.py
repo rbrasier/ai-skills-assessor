@@ -47,6 +47,8 @@ MODEL_SIZE: str = os.getenv("WHISPER_MODEL", "tiny.en")
 SAMPLE_RATE: int = 16_000
 # Silero VAD threshold (0–1). Lower = more sensitive to quiet speech.
 VAD_THRESHOLD: float = float(os.getenv("VAD_THRESHOLD", "0.5"))
+# Silero VAD requires exactly this many samples per chunk at 16 kHz.
+VAD_CHUNK_SIZE: int = 512
 # Minimum silence duration (ms) after speech before emitting a final transcript.
 SILENCE_DURATION_MS: int = int(os.getenv("SILENCE_DURATION_MS", "700"))
 # Maximum audio buffer size (seconds) before forcing a transcription flush.
@@ -164,8 +166,15 @@ async def ws_transcribe(ws: WebSocket) -> None:
                 continue
             waveform = torch.from_numpy(pcm_int16.astype(np.float32) / 32768.0)
 
-            # Silero VAD expects 512-sample chunks at 16 kHz
-            speech_prob: float = _vad_model(waveform, SAMPLE_RATE).item()
+            # Silero VAD requires exactly 512 samples per chunk at 16 kHz.
+            # Split the frame into windows and take the max speech probability.
+            speech_prob: float = 0.0
+            for chunk in waveform.split(VAD_CHUNK_SIZE):
+                if chunk.shape[-1] < VAD_CHUNK_SIZE:
+                    chunk = torch.nn.functional.pad(chunk, (0, VAD_CHUNK_SIZE - chunk.shape[-1]))
+                prob: float = _vad_model(chunk, SAMPLE_RATE).item()
+                if prob > speech_prob:
+                    speech_prob = prob
             is_speech_chunk = speech_prob >= VAD_THRESHOLD
 
             now = time.monotonic()
