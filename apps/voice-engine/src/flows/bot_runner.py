@@ -376,7 +376,7 @@ class BasicCallBot:
                 await asyncio.wait_for(
                     asyncio.shield(self._runner_task), timeout=5.0
                 )
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+            except (TimeoutError, asyncio.CancelledError):
                 self._runner_task.cancel()
                 try:
                     await self._runner_task
@@ -682,7 +682,7 @@ class SFIACallBot:
                 await asyncio.wait_for(
                     asyncio.shield(self._runner_task), timeout=5.0
                 )
-            except (asyncio.CancelledError, asyncio.TimeoutError):
+            except (TimeoutError, asyncio.CancelledError):
                 self._runner_task.cancel()
                 try:
                     await self._runner_task
