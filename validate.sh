@@ -354,9 +354,7 @@ REQUIRED_PROVIDER_FILES=(
   "$VOICE_ENGINE_DIR/src/adapters/tts/__init__.py"
   "$VOICE_ENGINE_DIR/src/adapters/tts/factory.py"
   "$VOICE_ENGINE_DIR/src/adapters/tts/kokoro_tts_service.py"
-  "apps/whisper-stt/main.py"
-  "apps/whisper-stt/Dockerfile"
-  "apps/whisper-stt/railway.json"
+  # apps/whisper-stt removed — replaced by ghcr.io/collabora/whisperlive-cpu (ADR-007)
 )
 
 MISSING_PROVIDER_FILES=()

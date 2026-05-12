@@ -5,7 +5,7 @@
 #   postgres (pgvector/pgvector:pg16) ─┬─► voice-engine (FastAPI :8000)
 #                                      └─► web (Next.js :3000) ─► voice-engine
 #
-#   whisper-stt (optional, :8001) ─► voice-engine  [STT_PROVIDER=whisper]
+#   whisper-stt (optional, :9090) ─► voice-engine  [STT_PROVIDER=whisper]
 #   kokoro-tts  (optional, :8880) ─► voice-engine  [TTS_PROVIDER=kokoro]
 #
 # Usage (default — cloud providers):
@@ -42,28 +42,27 @@ services:
       timeout: 3s
       retries: 10
 
-  # ── Optional: self-hosted Whisper STT (CPU, faster-whisper tiny.en) ────────
+  # ── Optional: self-hosted Whisper STT (WhisperLive CPU, pre-built image) ────
+  # Image: ghcr.io/collabora/whisperlive-cpu (collabora/WhisperLive on GitHub)
   # Activate with: docker compose --profile stt up  OR  --profile selfhosted up
   # Memory recommendation: 4 GB (Railway: set service memory limit to 4096 MB)
+  # WhisperLive has no HTTP health endpoint — healthcheck uses a TCP port probe.
   whisper-stt:
     profiles: ["stt", "selfhosted"]
-    build:
-      context: .
-      dockerfile: apps/whisper-stt/Dockerfile
-    environment:
-      PORT: "8001"
-      WHISPER_MODEL: "${WHISPER_MODEL:-tiny.en}"
-      VAD_THRESHOLD: "${VAD_THRESHOLD:-0.5}"
-      SILENCE_DURATION_MS: "${SILENCE_DURATION_MS:-700}"
+    image: ghcr.io/collabora/whisperlive-cpu:latest
     ports:
-      - "8001:8001"
+      - "9090:9090"
+    environment:
+      # Tune CPU parallelism. Defaults to all available cores; reduce on shared hosts.
+      OMP_NUM_THREADS: "${OMP_NUM_THREADS:-4}"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8001/health"]
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 9090)); s.close()\""]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 60s
+      retries: 18
+      start_period: 90s
     mem_limit: 4g
+    restart: on-failure:3
 
   # ── Optional: self-hosted Kokoro TTS (CPU) ─────────────────────────────────
   # Pre-built image from ghcr.io/remsky/kokoro-fastapi-cpu
@@ -100,7 +99,7 @@ services:
       STT_PROVIDER: "${STT_PROVIDER:-deepgram}"
       DEEPGRAM_API_KEY: "${DEEPGRAM_API_KEY:-}"
       DEEPGRAM_MODEL: "${DEEPGRAM_MODEL:-nova-2-phonecall}"
-      WHISPER_STT_URL: "${WHISPER_STT_URL:-ws://whisper-stt:8001/ws/transcribe}"
+      WHISPER_STT_URL: "${WHISPER_STT_URL:-ws://whisper-stt:9090}"
       # TTS provider — set to "kokoro" to use the local kokoro-tts service
       TTS_PROVIDER: "${TTS_PROVIDER:-elevenlabs}"
       ELEVENLABS_API_KEY: "${ELEVENLABS_API_KEY:-}"

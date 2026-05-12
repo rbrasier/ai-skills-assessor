@@ -5,8 +5,8 @@ extras are on sys.path) because it imports pipecat internals.
 
 Graceful fallback: if ``stt_provider == "whisper"`` but ``WHISPER_STT_URL``
 is empty or the service is unreachable, a warning is logged and Deepgram is
-used instead.  Reachability is tested by a lightweight HTTP health-check
-before handing the processor to the pipeline.
+used instead. Reachability is tested by a TCP connect to the WhisperLive port
+(WhisperLive has no HTTP health endpoint — it is a WebSocket-only server).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from src.config import Settings
 
@@ -21,20 +22,22 @@ logger = logging.getLogger(__name__)
 
 
 async def _whisper_reachable(url: str) -> bool:
-    """Return True if the Whisper health endpoint responds within 3 s."""
-    import httpx
-
-    # Convert ws(s):// → http(s):// for the health probe.
-    http_url = url.replace("wss://", "https://").replace("ws://", "http://")
-    # Strip any path suffix so we hit the root health endpoint.
-    base = http_url.split("/ws/")[0].split("/transcribe")[0]
-    health_url = base.rstrip("/") + "/health"
+    """Return True if the WhisperLive WebSocket port accepts a TCP connection within 3 s."""
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 9090
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(health_url)
-            return r.status_code < 500
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=3.0
+        )
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        return True
     except Exception as exc:
-        logger.warning("WhisperSTT reachability check failed (%s): %s", health_url, exc)
+        logger.warning("WhisperLive reachability check failed (%s:%s): %s", host, port, exc)
         return False
 
 
@@ -63,8 +66,8 @@ def create_stt_service(settings: Settings) -> Any:
 
         if not reachable:
             logger.error(
-                "STT_PROVIDER=whisper but WHISPER_STT_URL=%s is unreachable — "
-                "falling back to Deepgram",
+                "STT_PROVIDER=whisper but WHISPER_STT_URL=%s is unreachable (TCP connect failed) — "
+                "falling back to Deepgram. Is the whisper-stt container running on port 9090?",
                 url,
             )
             return _create_deepgram(settings)

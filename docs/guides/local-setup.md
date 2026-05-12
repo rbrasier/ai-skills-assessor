@@ -170,8 +170,8 @@ ELEVENLABS_API_KEY=          # required when TTS_PROVIDER=elevenlabs (default)
 ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
 
 # STT provider (Phase 3 Revision 3)  — default: deepgram
-STT_PROVIDER=deepgram        # or "whisper" for self-hosted faster-whisper
-WHISPER_STT_URL=             # ws://localhost:8001/ws/transcribe (when STT_PROVIDER=whisper)
+STT_PROVIDER=deepgram        # or "whisper" for self-hosted WhisperLive
+WHISPER_STT_URL=             # ws://localhost:9090 (when STT_PROVIDER=whisper)
 
 # TTS provider (Phase 3 Revision 3)  — default: elevenlabs
 TTS_PROVIDER=elevenlabs      # or "kokoro" for self-hosted Kokoro-FastAPI
@@ -245,7 +245,7 @@ via Docker Compose profiles.
 # ── Default (cloud providers — Deepgram + ElevenLabs) ──
 docker compose up --build
 
-# ── Self-hosted STT only (faster-whisper on port 8001) ──
+# ── Self-hosted STT only (WhisperLive on port 9090) ──
 STT_PROVIDER=whisper docker compose --profile stt up --build
 
 # ── Self-hosted TTS only (Kokoro on port 8880) ──
@@ -258,8 +258,8 @@ STT_PROVIDER=whisper TTS_PROVIDER=kokoro \
 # Health probes
 curl http://localhost:8000/health
 # {"status":"ok","version":"0.5.0","database":"ok"}
-curl http://localhost:8001/health
-# {"status":"ok","model":"tiny.en"}  ← Whisper (if running)
+# WhisperLive has no HTTP health endpoint — check TCP port instead:
+# nc -z localhost 9090 && echo "WhisperLive up" || echo "not ready"
 curl http://localhost:8880/health
 # Kokoro health response              ← Kokoro (if running)
 

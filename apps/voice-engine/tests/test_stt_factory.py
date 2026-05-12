@@ -32,10 +32,10 @@ def test_stt_provider_whisper_accepted() -> None:
         daily_api_key="x",
         daily_domain="x.daily.co",
         stt_provider="whisper",
-        whisper_stt_url="ws://localhost:8001/ws/transcribe",
+        whisper_stt_url="ws://localhost:9090",
     )
     assert s.stt_provider == "whisper"
-    assert s.whisper_stt_url == "ws://localhost:8001/ws/transcribe"
+    assert s.whisper_stt_url == "ws://localhost:9090"
 
 
 def test_whisper_stt_url_defaults_empty() -> None:
@@ -104,7 +104,7 @@ def test_factory_falls_back_when_whisper_unreachable() -> None:
         daily_api_key="x",
         daily_domain="x.daily.co",
         stt_provider="whisper",
-        whisper_stt_url="ws://unreachable-host:8001/ws/transcribe",
+        whisper_stt_url="ws://unreachable-host:9090",
         deepgram_api_key="dg-key",
     )
 
@@ -136,7 +136,7 @@ def test_factory_selects_whisper_when_reachable() -> None:
         daily_api_key="x",
         daily_domain="x.daily.co",
         stt_provider="whisper",
-        whisper_stt_url="ws://localhost:8001/ws/transcribe",
+        whisper_stt_url="ws://localhost:9090",
     )
 
     fake_processor = MagicMock(name="WhisperProcessor")
@@ -157,7 +157,7 @@ def test_factory_selects_whisper_when_reachable() -> None:
 
         result = create_stt_service(settings)
 
-    mock_cls.assert_called_once_with(url="ws://localhost:8001/ws/transcribe")
+    mock_cls.assert_called_once_with(url="ws://localhost:9090")
     assert result is fake_processor
 
 

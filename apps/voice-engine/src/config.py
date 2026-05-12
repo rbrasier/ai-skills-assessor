@@ -75,12 +75,14 @@ class Settings(BaseSettings):
 
     # ─── STT provider selection (Phase 3 Revision 3) ──────────────
     # ``deepgram`` — Deepgram cloud STT (default, requires DEEPGRAM_API_KEY).
-    # ``whisper``  — Self-hosted faster-whisper via WebSocket (requires
+    # ``whisper``  — Self-hosted WhisperLive via WebSocket (requires
     #                WHISPER_STT_URL). Falls back to deepgram if URL is unset
     #                or the service is unreachable at pipeline start.
     stt_provider: SttProvider = "deepgram"
-    # WebSocket URL of your self-hosted Whisper STT service.
-    # Example: wss://whisper-stt.up.railway.app/ws/transcribe
+    # WebSocket URL of your self-hosted WhisperLive STT service (port 9090).
+    # Local: ws://localhost:9090
+    # Docker compose: ws://whisper-stt:9090
+    # Railway: wss://whisper-stt.up.railway.app:9090
     whisper_stt_url: str = ""
 
     # ─── TTS provider selection (Phase 3 Revision 3) ──────────────

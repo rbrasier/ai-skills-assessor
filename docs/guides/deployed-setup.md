@@ -3,7 +3,7 @@
 Phase 3 promotes the Phase 2 voice engine + Next.js web app to a
 production Railway (Singapore) deployment. v0.5.0 (Phase 3 Revision 3)
 adds swappable self-hosted STT and TTS providers — run Deepgram +
-ElevenLabs (cloud, default) or faster-whisper + Kokoro-FastAPI
+ElevenLabs (cloud, default) or WhisperLive + Kokoro-FastAPI
 (CPU-only Railway services) controlled entirely by environment
 variables. This guide is the source-of-truth walkthrough: env vars,
 service layout, optional self-hosted provider services, migrations,
@@ -59,23 +59,22 @@ Directory):
 Add these when `STT_PROVIDER=whisper` or `TTS_PROVIDER=kokoro` is set on
 the `voice-engine` service. Both are CPU-only and require no GPU.
 
-| Service       | Source / image                                     | Builder    | Memory limit | railway.json |
-|---------------|----------------------------------------------------|------------|--------------|--------------|
-| `whisper-stt` | `apps/whisper-stt/` (this repo)                    | Dockerfile | **4 GB**     | `apps/whisper-stt/railway.json` |
-| `kokoro-tts`  | `ghcr.io/remsky/kokoro-fastapi-cpu:latest` (Docker) | Image      | **2 GB**     | (not needed — image-based deploy) |
+| Service       | Source / image                                          | Builder | Memory limit | railway.json |
+|---------------|---------------------------------------------------------|---------|--------------|--------------|
+| `whisper-stt` | `ghcr.io/collabora/whisperlive-cpu:latest` (Docker)     | Image   | **4 GB**     | (not needed — image-based deploy) |
+| `kokoro-tts`  | `ghcr.io/remsky/kokoro-fastapi-cpu:latest` (Docker)     | Image   | **2 GB**     | (not needed — image-based deploy) |
 
-**whisper-stt root directory:** `apps/whisper-stt` — Railway picks up
-`apps/whisper-stt/railway.json` automatically.
+**whisper-stt:** create via Railway → New Service → Docker Image →
+`ghcr.io/collabora/whisperlive-cpu:latest`. No root directory or
+Dockerfile needed — the image is pre-built. Set port to **9090**.
 
 **kokoro-tts:** create via Railway → New Service → Docker Image →
 `ghcr.io/remsky/kokoro-fastapi-cpu:latest`. No root directory or
 Dockerfile needed — the image is pre-built.
 
-> **Health check timeout.** Set `whisper-stt` health check timeout to
-> **300 s** in Settings → Deploy (or via `railway.json` — already
-> configured). Silero VAD downloads from `torch.hub` on the very first
-> cold start (~2 min). Docker layer caching means subsequent restarts
-> finish in < 30 s.
+> **Health check.** WhisperLive has no HTTP health endpoint. Configure
+> the Railway health check as a TCP check on port **9090** with a
+> timeout of **120 s** (the model loads in ~30–60 s on Railway's 4 GB tier).
 
 ---
 
@@ -168,7 +167,7 @@ with `${{…}}` are Railway variable references.
 | `STT_PROVIDER`    | `deepgram` (default) or `whisper` (self-hosted)                                         |
 | `DEEPGRAM_API_KEY`| When `STT_PROVIDER=deepgram` — Deepgram dashboard → Projects → API keys                 |
 | `DEEPGRAM_MODEL`  | `nova-2-phonecall` (tuned for 8 kHz PSTN audio — recommended)                           |
-| `WHISPER_STT_URL` | When `STT_PROVIDER=whisper` — `wss://<whisper-stt-service>.up.railway.app/ws/transcribe` |
+| `WHISPER_STT_URL` | When `STT_PROVIDER=whisper` — `wss://<whisper-stt-service>.up.railway.app:9090` |
 
 > If `WHISPER_STT_URL` is unset or the service is unreachable when a call
 > pipeline starts, a warning is logged and the pipeline automatically falls
@@ -211,12 +210,12 @@ with `${{…}}` are Railway variable references.
 
 ### `whisper-stt` (optional — when `STT_PROVIDER=whisper`)
 
-| Key              | Value                                                               |
-|------------------|---------------------------------------------------------------------|
-| `WHISPER_MODEL`  | `tiny.en` (default — baked into Docker image; change = rebuild)    |
-| `VAD_THRESHOLD`  | `0.5` (Silero speech probability threshold, 0–1)                   |
-| `SILENCE_DURATION_MS` | `700` (ms of silence before emitting a final transcript)      |
-| `PORT`           | Railway injects this                                                |
+Pre-built image: `ghcr.io/collabora/whisperlive-cpu:latest` (ADR-007).
+
+| Key                | Value                                                             |
+|--------------------|-------------------------------------------------------------------|
+| `OMP_NUM_THREADS`  | CPU thread count. Default: all cores. Reduce on shared hosts.    |
+| `PORT`             | Set to `9090` (WhisperLive's fixed WebSocket port)               |
 
 ### `kokoro-tts` (optional — when `TTS_PROVIDER=kokoro`)
 

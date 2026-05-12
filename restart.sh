@@ -49,7 +49,7 @@ fi
 CONTAINER_NAME="ai-skills-pg"
 LIVEKIT_CONTAINER_NAME="${LIVEKIT_CONTAINER_NAME:-ai-skills-livekit}"
 WHISPER_CONTAINER_NAME="${WHISPER_CONTAINER_NAME:-ai-skills-whisper}"
-WHISPER_IMAGE_NAME="${WHISPER_IMAGE_NAME:-ai-skills-whisper-stt}"
+WHISPER_IMAGE_NAME="${WHISPER_IMAGE_NAME:-ghcr.io/collabora/whisperlive-cpu:latest}"
 KOKORO_CONTAINER_NAME="${KOKORO_CONTAINER_NAME:-ai-skills-kokoro}"
 LOCAL_DB_URL="postgresql://postgres:postgres@localhost:5432/ai_skills_assessor"
 LOG_DIR="/tmp/ai-skills-logs"
@@ -182,67 +182,53 @@ ensure_whisper() {
     return 0
   fi
   if ! docker_available; then
-    warn "Docker unavailable — assuming Whisper STT is already running on :8001"
+    warn "Docker unavailable — assuming WhisperLive is already running on :9090"
     return
   fi
 
-  # Build the image if it has never been built locally
+  # Pull the pre-built WhisperLive CPU image if not already present locally.
+  # This replaces the former custom docker build step (apps/whisper-stt/Dockerfile).
   if ! docker image inspect "$WHISPER_IMAGE_NAME" &>/dev/null 2>&1; then
-    info "Building Whisper STT image '$WHISPER_IMAGE_NAME' (first run — downloads model, allow a few minutes)..."
-    docker build \
-      -f "$REPO_ROOT/apps/whisper-stt/Dockerfile" \
-      -t "$WHISPER_IMAGE_NAME" \
-      "$REPO_ROOT"
-    ok "Whisper STT image built"
+    info "Pulling WhisperLive image '$WHISPER_IMAGE_NAME' (first run — downloads model layers, allow a few minutes)..."
+    docker pull "$WHISPER_IMAGE_NAME"
+    ok "WhisperLive image pulled"
   fi
 
   if docker ps -a --format '{{.Names}}' | grep -q "^${WHISPER_CONTAINER_NAME}$"; then
     if ! docker ps --format '{{.Names}}' | grep -q "^${WHISPER_CONTAINER_NAME}$"; then
-      info "Starting existing Whisper STT container '$WHISPER_CONTAINER_NAME'..."
+      info "Starting existing WhisperLive container '$WHISPER_CONTAINER_NAME'..."
       docker start "$WHISPER_CONTAINER_NAME"
     fi
-    info "Whisper STT container '$WHISPER_CONTAINER_NAME' is up — checking readiness..."
+    info "WhisperLive container '$WHISPER_CONTAINER_NAME' is up — checking readiness..."
   else
-    info "Creating Whisper STT container..."
+    info "Creating WhisperLive container (port 9090)..."
     docker run --name "$WHISPER_CONTAINER_NAME" \
-      -e PORT=8001 \
-      -e WHISPER_MODEL="${WHISPER_MODEL:-tiny.en}" \
-      -e VAD_THRESHOLD="${VAD_THRESHOLD:-0.5}" \
-      -e SILENCE_DURATION_MS="${SILENCE_DURATION_MS:-700}" \
+      -e OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
       --memory 4g \
-      -p 8001:8001 \
+      --restart on-failure:3 \
+      -p 9090:9090 \
       -d "$WHISPER_IMAGE_NAME"
-    info "Whisper STT container created — checking readiness..."
+    info "WhisperLive container created — checking readiness..."
   fi
 
-  # Poll /health until the model finishes loading (503 → 200).
-  # The server responds immediately but returns 503 {"status":"loading"} until
-  # faster-whisper + Silero VAD are both in memory (~10–30 s).
-  info "Waiting for Whisper STT model to load (http://localhost:8001/health)..."
+  # WhisperLive has no HTTP health endpoint; poll the WebSocket port via TCP.
+  # The server accepts TCP connections once the model is loaded (~15–60 s on CPU).
+  info "Waiting for WhisperLive to load (TCP :9090)..."
   local whisper_ready=false
-  for i in $(seq 1 45); do
-    http_code=$(curl -s -o /tmp/whisper_health.json -w "%{http_code}" http://localhost:8001/health 2>/dev/null || true)
-    if [ "$http_code" = "200" ]; then
+  for i in $(seq 1 60); do
+    if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 9090)); s.close()" &>/dev/null 2>&1; then
       whisper_ready=true
       break
-    elif [ "$http_code" = "503" ]; then
-      status=$(python3 -c "import json,sys; d=json.load(open('/tmp/whisper_health.json')); print(d.get('status','?'))" 2>/dev/null || echo "loading")
-      printf "\r  → Whisper STT: %s (attempt %d/45)..." "$status" "$i"
-    elif [ "$http_code" = "000" ]; then
-      printf "\r  → Whisper STT: server not yet responding (attempt %d/45)..." "$i"
-    else
-      printf "\r  → Whisper STT: HTTP %s (attempt %d/45)..." "$http_code" "$i"
     fi
+    printf "\r  → WhisperLive: waiting for port 9090 (attempt %d/60)..." "$i"
     sleep 2
   done
   echo  # newline after the progress line
-  rm -f /tmp/whisper_health.json
 
   if [ "$whisper_ready" = true ]; then
-    ok "Whisper STT ready (model loaded)"
+    ok "WhisperLive ready (port 9090 accepting connections)"
   else
-    warn "Whisper STT did not become ready in time"
-    warn "  Health check: curl http://localhost:8001/health"
+    warn "WhisperLive did not become ready in time"
     warn "  Container logs: docker logs $WHISPER_CONTAINER_NAME"
   fi
 }
