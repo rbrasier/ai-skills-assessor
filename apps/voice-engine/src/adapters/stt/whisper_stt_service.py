@@ -142,7 +142,7 @@ def _build_processor(url: str) -> Any:
                 try:
                     await asyncio.wait_for(self._server_ready.wait(), timeout=15.0)
                     logger.info("WhisperSTT: server ready")
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("WhisperSTT: SERVER_READY not received within 15 s — proceeding anyway")
                 return True
             except Exception as exc:
