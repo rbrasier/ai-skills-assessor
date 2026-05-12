@@ -22,8 +22,8 @@
 #
 # STT providers:
 #   deepgram (default) — Deepgram cloud API (requires DEEPGRAM_API_KEY)
-#   whisper            — Self-hosted faster-whisper on Railway (CPU, tiny.en model)
-#                        Set WHISPER_STT_URL to wss://your-whisper-stt.up.railway.app/ws/transcribe
+#   whisper            — Self-hosted WhisperLive on Railway (CPU, ghcr.io/collabora/whisperlive-cpu)
+#                        Set WHISPER_STT_URL to wss://your-whisper-stt.up.railway.app:9090
 #
 # TTS providers:
 #   elevenlabs (default) — ElevenLabs cloud API (requires ELEVENLABS_API_KEY)
@@ -195,13 +195,13 @@ STT_PROVIDER=$(prompt_plain "STT_PROVIDER" "deepgram | whisper" "deepgram")
 DEEPGRAM_API_KEY=""
 WHISPER_STT_URL=""
 if [[ "$STT_PROVIDER" == "whisper" ]]; then
-  warn "Self-hosted Whisper STT selected."
+  warn "Self-hosted WhisperLive STT selected."
   echo "  You will need to deploy the whisper-stt service on Railway separately."
-  echo "  Dockerfile: apps/whisper-stt/Dockerfile | Memory: 4 GB recommended"
-  WHISPER_STT_URL=$(prompt_plain "WHISPER_STT_URL" "wss://your-whisper.up.railway.app/ws/transcribe")
+  echo "  Image: ghcr.io/collabora/whisperlive-cpu:latest | Port: 9090 | Memory: 4 GB recommended"
+  WHISPER_STT_URL=$(prompt_plain "WHISPER_STT_URL" "wss://your-whisper.up.railway.app:9090")
   add_manual "Deploy the whisper-stt service on Railway:
-    - New Service → GitHub repo → Root Directory: apps/whisper-stt
-    - Builder: Dockerfile → Dockerfile: apps/whisper-stt/Dockerfile
+    - New Service → Docker Image → ghcr.io/collabora/whisperlive-cpu:latest
+    - Set port to 9090 in Settings → Networking
     - Set memory limit to 4096 MB in Settings → Resources
     - After deploy, copy the service URL and update WHISPER_STT_URL on voice-engine"
 else
