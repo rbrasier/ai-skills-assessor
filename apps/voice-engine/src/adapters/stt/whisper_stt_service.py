@@ -42,6 +42,74 @@ _DROP_WARN_INTERVAL = 200
 _RECONNECT_COOLDOWN_S = 2.0
 
 
+def _ensure_int16_pcm(audio: bytes) -> bytes:
+    """Convert audio to int16 PCM if it's in normalized float format [-1, 1].
+
+    Pipecat may emit audio as normalized float samples; WhisperLive expects raw int16 PCM.
+    """
+    import numpy as np
+
+    if not audio:
+        return audio
+
+    try:
+        # Try to interpret as int16 first
+        samples = np.frombuffer(audio, dtype=np.int16)
+        if len(samples) > 0:
+            # Check if values look like proper int16 (typical range) or misinterpreted float
+            max_abs = np.abs(samples).max()
+            min_abs = np.abs(samples).min()
+            logger.debug("_ensure_int16_pcm: int16 interpretation max_abs=%d min_abs=%d, bytes=%d, samples=%d",
+                        max_abs, min_abs, len(audio), len(samples))
+            if max_abs > 100:  # Looks like proper int16 (typical range would be thousands)
+                logger.debug("_ensure_int16_pcm: returning as-is - proper int16")
+                return audio
+            # If all samples are 0 (silence), might be int16
+            if max_abs == 0:
+                logger.debug("_ensure_int16_pcm: audio is silence (all zeros)")
+                return audio
+            # Otherwise, it might be float32 misinterpreted, continue to next check
+    except Exception as e:
+        logger.debug("_ensure_int16_pcm: int16 interpretation failed: %s", e)
+
+    # Try to interpret as float32 (Pipecat sends normalized float [-1, 1])
+    try:
+        float_samples = np.frombuffer(audio, dtype=np.float32)
+        if len(float_samples) > 0:
+            max_float = np.abs(float_samples).max()
+            min_float = np.abs(float_samples).min()
+            nan_count = np.isnan(float_samples).sum()
+            inf_count = np.isinf(float_samples).sum()
+
+            logger.info("_ensure_int16_pcm: float32 interpretation max=%.6f min=%.6f, samples=%d, nan=%d, inf=%d",
+                       max_float, min_float, len(float_samples), nan_count, inf_count)
+
+            # Check for NaN or Inf
+            if nan_count > 0 or inf_count > 0:
+                logger.error("_ensure_int16_pcm: audio contains NaN (%d) or Inf (%d) values - audio is corrupted or invalid", nan_count, inf_count)
+                # Try to salvage by replacing NaN/Inf with 0
+                float_samples = np.nan_to_num(float_samples, nan=0.0, posinf=1.0, neginf=-1.0)
+                logger.info("_ensure_int16_pcm: replaced NaN/Inf with valid values")
+
+            if max_float <= 1.1 or np.isnan(max_float):  # Normalized float in [-1, 1] or was NaN
+                logger.info("_ensure_int16_pcm: converting float32 [-1,1] to int16 PCM (max=%.6f)", max_float)
+                # Amplify quiet audio (if max is < 0.1, boost to use more of the dynamic range)
+                if 0 < max_float < 0.1:
+                    gain = min(1.0 / max_float, 10.0)  # Cap gain at 10x to avoid clipping
+                    logger.info("_ensure_int16_pcm: applying gain %.2fx to quiet audio", gain)
+                    float_samples = float_samples * gain
+                int_samples = np.clip(float_samples * 32767, -32768, 32767).astype(np.int16)
+                result = int_samples.tobytes()
+                logger.info("_ensure_int16_pcm: converted to int16, output bytes=%d", len(result))
+                return result
+    except Exception as e:
+        logger.debug("_ensure_int16_pcm: float32 interpretation failed: %s", e)
+
+    # If all else fails, return as-is
+    logger.warning("_ensure_int16_pcm: returning audio as-is (bytes=%d) - could not convert", len(audio))
+    return audio
+
+
 def _resample_pcm(audio: bytes, from_rate: int, to_rate: int) -> bytes:
     """Resample 16-bit mono PCM from from_rate to to_rate using linear interpolation."""
     if from_rate == to_rate or not audio:
@@ -134,7 +202,7 @@ def _build_processor(url: str) -> Any:
                     "language": "en",
                     "task": "transcribe",
                     "model": "tiny.en",
-                    "use_vad": True,
+                    "use_vad": False,
                     "send_last_n_segments": 10,
                 }
                 await self._ws.send(json.dumps(handshake))
@@ -156,12 +224,21 @@ def _build_processor(url: str) -> Any:
                     await self._ws.send(b"END_OF_AUDIO")
                 except Exception:
                     pass
+
+            # Wait for receive task to finish naturally (so WhisperLive can send final results)
+            # Give it up to 10 seconds to process and respond
             if self._recv_task and not self._recv_task.done():
-                self._recv_task.cancel()
                 try:
-                    await self._recv_task
-                except asyncio.CancelledError:
-                    pass
+                    await asyncio.wait_for(self._recv_task, timeout=10.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # If still running after timeout, cancel it
+                    if not self._recv_task.done():
+                        self._recv_task.cancel()
+                        try:
+                            await self._recv_task
+                        except asyncio.CancelledError:
+                            pass
+
             if self._ws is not None:
                 try:
                     await self._ws.close()
@@ -178,12 +255,15 @@ def _build_processor(url: str) -> Any:
             try:
                 async for raw in self._ws:  # type: ignore[union-attr]
                     if isinstance(raw, bytes):
+                        logger.debug("WhisperSTT: ignoring binary message (bytes=%d)", len(raw))
                         continue  # WhisperLive sends text JSON only
                     try:
                         data: dict[str, Any] = json.loads(raw)
                     except json.JSONDecodeError:
                         logger.warning("WhisperSTT: non-JSON message: %r", raw)
                         continue
+
+                    logger.info("WhisperSTT: received message: %s", json.dumps(data)[:300])
 
                     # Status / control messages (no segments key).
                     if "segments" not in data:
@@ -195,6 +275,7 @@ def _build_processor(url: str) -> Any:
                             logger.info("WhisperSTT: server at capacity — queued (%s)", data.get("message", ""))
                         elif status == "ERROR":
                             logger.error("WhisperSTT: server error: %s", data.get("message", ""))
+                        logger.debug("WhisperSTT: status message handled (msg=%r, status=%r)", msg, status)
                         continue
 
                     segments: list[dict[str, Any]] = data.get("segments", [])
@@ -250,10 +331,20 @@ def _build_processor(url: str) -> Any:
 
                 if self._audio_frames_received == 1:
                     sr = getattr(frame, "sample_rate", "unknown")
-                    logger.info(
-                        "WhisperSTT: first audio frame (sample_rate=%s, bytes=%d)",
-                        sr, len(frame.audio),
-                    )
+                    # Validate audio: should be int16 PCM (range -32768..32767 per sample)
+                    import numpy as np
+                    try:
+                        samples = np.frombuffer(frame.audio, dtype=np.int16)
+                        if len(samples) > 0:
+                            min_val, max_val = samples.min(), samples.max()
+                            logger.info(
+                                "WhisperSTT: first audio frame (sample_rate=%s, bytes=%d, samples=%d, range=[%d, %d])",
+                                sr, len(frame.audio), len(samples), int(min_val), int(max_val),
+                            )
+                        else:
+                            logger.warning("WhisperSTT: first audio frame is empty")
+                    except Exception as e:
+                        logger.error("WhisperSTT: error validating audio: %s", e)
 
                 if self._ws is None:
                     elapsed = time.monotonic() - self._last_connect_attempt
@@ -263,12 +354,21 @@ def _build_processor(url: str) -> Any:
 
                 if self._ws is not None and self._server_ready.is_set():
                     try:
-                        audio = _resample_pcm(
-                            frame.audio,
-                            getattr(frame, "sample_rate", _WHISPER_SAMPLE_RATE),
-                            _WHISPER_SAMPLE_RATE,
-                        )
-                        await self._ws.send(audio)
+                        audio = _ensure_int16_pcm(frame.audio)
+
+                        # Skip frames that are empty
+                        if audio and len(audio) > 0:
+                            audio = _resample_pcm(
+                                audio,
+                                getattr(frame, "sample_rate", _WHISPER_SAMPLE_RATE),
+                                _WHISPER_SAMPLE_RATE,
+                            )
+                            # Ensure audio is properly aligned for int16 PCM
+                            if len(audio) % 2 != 0:
+                                logger.warning("WhisperSTT: audio misaligned (%d bytes), trimming last byte", len(audio))
+                                audio = audio[:-1]
+                            if audio:
+                                await self._ws.send(audio)
                     except Exception as exc:
                         logger.warning("WhisperSTT: send failed: %s", exc)
                         self._ws = None

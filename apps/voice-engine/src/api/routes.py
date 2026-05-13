@@ -1766,3 +1766,327 @@ def _pcm_to_wav_response(pcm: bytes, *, sample_rate: int, filename: str) -> Resp
         media_type="audio/wav",
         headers={"Content-Disposition": f"inline; filename={filename}"},
     )
+
+
+# ─── STT Testing ──────────────────────────────────────────────────────
+
+
+class STTTestResult(BaseModel):
+    status: str
+    segments: list[dict[str, Any]] = []
+    error: str | None = None
+
+
+@router.get("/stt-test", response_model=STTTestResult, tags=["stt"])
+async def stt_test(
+    request: Request,
+    text: str = Query(
+        default="Hello, this is a test of the speech to text provider.",
+        max_length=500,
+    ),
+) -> STTTestResult:
+    """Standalone STT provider check — bypasses Pipecat and LiveKit entirely.
+
+    Synthesizes ``text`` using the active TTS provider, then sends the audio
+    to the active STT provider (WhisperLive) and returns the transcription.
+
+    Usage: GET /stt-test
+           GET /stt-test?text=Say+something+custom
+    """
+    settings = request.app.state.settings
+    tts_provider: str = getattr(settings, "tts_provider", "elevenlabs")
+    stt_provider: str = getattr(settings, "stt_provider", "deepgram")
+
+    # Step 1: Generate speech using active TTS
+    try:
+        if tts_provider == "kokoro":
+            pcm = await _tts_test_kokoro_pcm(settings, text)
+        else:
+            pcm = await _tts_test_elevenlabs_pcm(settings, text)
+    except Exception as exc:
+        return STTTestResult(status="error", error=f"TTS failed: {str(exc)}")
+
+    # Step 2: Send audio to STT provider
+    if stt_provider == "whisper":
+        return await _stt_test_whisper(request, pcm)
+    else:
+        return STTTestResult(status="error", error=f"STT provider '{stt_provider}' not supported for testing")
+
+
+async def _tts_test_elevenlabs_pcm(settings: Any, text: str) -> bytes:
+    """Generate PCM audio from ElevenLabs."""
+    import httpx
+
+    if not getattr(settings, "elevenlabs_api_key", None):
+        raise ValueError("ELEVENLABS_API_KEY not configured")
+
+    voice_id = settings.elevenlabs_voice_id
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(
+            url,
+            headers={
+                "xi-api-key": settings.elevenlabs_api_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/pcm",
+            },
+            json={
+                "text": text,
+                "model_id": "eleven_turbo_v2",
+                "output_format": "pcm_24000",
+            },
+        )
+    if r.status_code != 200:
+        raise ValueError(f"ElevenLabs error {r.status_code}: {r.text[:200]}")
+    return r.content
+
+
+async def _tts_test_kokoro_pcm(settings: Any, text: str) -> bytes:
+    """Generate PCM audio from Kokoro."""
+    import httpx
+
+    base_url: str = getattr(settings, "kokoro_tts_url", "").strip()
+    if not base_url:
+        raise ValueError("KOKORO_TTS_URL not configured")
+
+    voice: str = getattr(settings, "kokoro_voice", "af_sky")
+    sample_rate: int = getattr(settings, "kokoro_sample_rate", 24000)
+    speech_url = base_url.rstrip("/") + "/v1/audio/speech"
+
+    pcm_chunks: list[bytes] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        async with client.stream(
+            "POST",
+            speech_url,
+            json={
+                "model": "kokoro",
+                "input": text,
+                "voice": voice,
+                "response_format": "pcm",
+                "speed": 1.0,
+            },
+        ) as r:
+            if r.status_code != 200:
+                body = await r.aread()
+                raise ValueError(f"Kokoro error {r.status_code}: {body[:200].decode(errors='replace')}")
+            async for chunk in r.aiter_bytes(4096):
+                if chunk:
+                    pcm_chunks.append(chunk)
+
+    return b"".join(pcm_chunks)
+
+
+async def _stt_test_whisper(request: Request, pcm_24k: bytes) -> STTTestResult:
+    """Test WhisperLive STT with PCM audio."""
+    import asyncio
+    import json
+    import uuid
+    import websockets
+
+    whisper_url: str = getattr(request.app.state.settings, "whisper_stt_url", "").strip()
+    if not whisper_url:
+        return STTTestResult(status="error", error="WHISPER_STT_URL not configured")
+
+    # Resample from 24kHz to 16kHz (WhisperLive expects 16kHz)
+    pcm_16k = _resample_pcm_24_to_16(pcm_24k)
+
+    # Validate we have audio data
+    if not pcm_16k or len(pcm_16k) < 100:
+        return STTTestResult(status="error", error=f"Audio too short: {len(pcm_16k)} bytes (need at least 100)")
+
+    # Ensure audio is properly aligned (int16 = 2 bytes per sample)
+    if len(pcm_16k) % 2 != 0:
+        return STTTestResult(status="error", error=f"Audio misaligned: {len(pcm_16k)} bytes (must be even for int16 PCM)")
+
+    segments: list[dict[str, Any]] = []
+    error_msg: str | None = None
+
+    try:
+        async with websockets.connect(whisper_url, ping_interval=20, ping_timeout=10) as ws:
+            # Send handshake
+            handshake = {
+                "uid": str(uuid.uuid4()),
+                "language": "en",
+                "task": "transcribe",
+                "model": "tiny.en",
+                "use_vad": True,
+                "send_last_n_segments": 10,
+            }
+            await ws.send(json.dumps(handshake))
+
+            # Wait for SERVER_READY
+            server_ready = False
+            for _ in range(15):  # 15 second timeout
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    data = json.loads(msg)
+                    if data.get("message") == "SERVER_READY":
+                        server_ready = True
+                        break
+                except asyncio.TimeoutError:
+                    continue
+
+            if not server_ready:
+                return STTTestResult(status="error", error="WhisperLive did not respond with SERVER_READY")
+
+            # Send audio (all at once for simplicity; WhisperLive will buffer and process)
+            await ws.send(pcm_16k)
+
+            # Receive transcription results (accumulate across multiple messages)
+            # WhisperLive sends incremental updates as it processes; we wait for completed segments
+            completed_count = 0
+            timeout_count = 0
+            all_messages = []  # Track all messages for debugging
+
+            for _ in range(60):  # 60 second timeout
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    timeout_count = 0  # Reset on successful receive
+
+                    try:
+                        data = json.loads(msg)
+                    except json.JSONDecodeError:
+                        all_messages.append(f"(binary or non-JSON: {len(msg) if isinstance(msg, bytes) else 'str'} bytes)")
+                        continue
+
+                    # Track all JSON messages
+                    all_messages.append(data)
+
+                    # Check for error messages from WhisperLive
+                    if data.get("status") == "ERROR":
+                        error_msg = data.get("message", "Unknown error from WhisperLive")
+                        return STTTestResult(status="error", error=error_msg)
+
+                    if "segments" in data:
+                        all_segments = data.get("segments", [])
+                        # Extract only newly completed segments (avoid duplicates)
+                        completed = [s for s in all_segments if s.get("completed", False)]
+                        new_completed = completed[completed_count:]
+                        if new_completed:
+                            segments.extend(new_completed)
+                            completed_count = len(completed)
+
+                        # Stop if we have completed segments with actual text
+                        if segments and any(s.get("text", "").strip() for s in segments):
+                            break
+
+                except asyncio.TimeoutError:
+                    timeout_count += 1
+                    # After 10 timeouts in a row (10 seconds of silence), assume transcription is done
+                    if timeout_count >= 10:
+                        break
+                    continue
+
+            # If no segments were received, return what we did receive for debugging
+            if not segments and all_messages:
+                return STTTestResult(
+                    status="ok",
+                    segments=[],
+                    error=f"No transcription received. Messages: {str(all_messages)[:500]}"
+                )
+
+            # Wait a bit longer for any final messages
+            for _ in range(5):
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    data = json.loads(msg)
+                    if data.get("status") == "ERROR":
+                        error_msg = data.get("message", "Unknown error")
+                        return STTTestResult(status="error", error=error_msg)
+                    if "segments" in data:
+                        all_segments = data.get("segments", [])
+                        completed = [s for s in all_segments if s.get("completed", False)]
+                        new_completed = completed[completed_count:]
+                        if new_completed:
+                            segments.extend(new_completed)
+                except (asyncio.TimeoutError, json.JSONDecodeError):
+                    continue
+
+            # Send END_OF_AUDIO sentinel AFTER waiting for transcription
+            try:
+                await ws.send(b"END_OF_AUDIO")
+            except Exception:
+                pass  # Connection might already be closing
+
+            # Wait a final moment for any response
+            await asyncio.sleep(1.0)
+
+    except Exception as exc:
+        error_msg = f"WhisperLive error: {str(exc)}"
+
+    status = "error" if error_msg else "ok"
+    return STTTestResult(status=status, segments=segments, error=error_msg)
+
+
+def _resample_pcm_24_to_16(pcm_24k: bytes) -> bytes:
+    """Resample 24kHz PCM to 16kHz using numpy linear interpolation.
+
+    Handles both int16 and float32 PCM formats from TTS providers.
+    Always returns properly aligned int16 PCM (even number of bytes).
+    """
+    import numpy as np
+
+    if not pcm_24k:
+        return b""
+
+    # Try to interpret as int16 first (most common)
+    try:
+        # Ensure even number of bytes for int16
+        if len(pcm_24k) % 2 != 0:
+            pcm_24k = pcm_24k[:-1]  # Trim last byte if odd
+
+        samples_24k = np.frombuffer(pcm_24k, dtype=np.int16).astype(np.float32)
+        if len(samples_24k) > 0:
+            # Linear interpolation: map 24kHz indices to 16kHz
+            num_samples_16k = int(len(samples_24k) * 16000 / 24000)
+            resampled = np.interp(
+                np.linspace(0, len(samples_24k) - 1, num_samples_16k),
+                np.arange(len(samples_24k)),
+                samples_24k,
+            ).astype(np.int16)
+            return resampled.tobytes()
+    except Exception:
+        pass
+
+    # Fallback: try float32
+    try:
+        # Ensure multiple of 4 bytes for float32
+        trim_len = (len(pcm_24k) // 4) * 4
+        if trim_len > 0:
+            pcm_24k = pcm_24k[:trim_len]
+
+        samples_24k = np.frombuffer(pcm_24k, dtype=np.float32)
+        if len(samples_24k) > 0:
+            # Resample
+            num_samples_16k = int(len(samples_24k) * 16000 / 24000)
+            resampled_float = np.interp(
+                np.linspace(0, len(samples_24k) - 1, num_samples_16k),
+                np.arange(len(samples_24k)),
+                samples_24k,
+            )
+            # Convert float to int16
+            resampled = np.clip(resampled_float * 32767, -32768, 32767).astype(np.int16)
+            return resampled.tobytes()
+    except Exception:
+        pass
+
+    # Last resort: try to interpret as int16 with padding
+    try:
+        # Pad to even length
+        if len(pcm_24k) % 2 != 0:
+            pcm_24k = pcm_24k + b'\x00'
+
+        samples_24k = np.frombuffer(pcm_24k, dtype=np.int16).astype(np.float32)
+        if len(samples_24k) > 0:
+            num_samples_16k = int(len(samples_24k) * 16000 / 24000)
+            resampled = np.interp(
+                np.linspace(0, len(samples_24k) - 1, num_samples_16k),
+                np.arange(len(samples_24k)),
+                samples_24k,
+            ).astype(np.int16)
+            return resampled.tobytes()
+    except Exception:
+        pass
+
+    # If all else fails, return empty
+    return b""

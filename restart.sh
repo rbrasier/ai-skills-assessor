@@ -190,7 +190,7 @@ ensure_whisper() {
   # This replaces the former custom docker build step (apps/whisper-stt/Dockerfile).
   if ! docker image inspect "$WHISPER_IMAGE_NAME" &>/dev/null 2>&1; then
     info "Pulling WhisperLive image '$WHISPER_IMAGE_NAME' (first run — downloads model layers, allow a few minutes)..."
-    docker pull "$WHISPER_IMAGE_NAME"
+    docker pull --platform linux/amd64 "$WHISPER_IMAGE_NAME"
     ok "WhisperLive image pulled"
   fi
 
@@ -202,7 +202,7 @@ ensure_whisper() {
     info "WhisperLive container '$WHISPER_CONTAINER_NAME' is up — checking readiness..."
   else
     info "Creating WhisperLive container (port 9090)..."
-    docker run --name "$WHISPER_CONTAINER_NAME" \
+    docker run --platform linux/amd64 --name "$WHISPER_CONTAINER_NAME" \
       -e OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}" \
       --memory 4g \
       --restart on-failure:3 \
@@ -227,9 +227,18 @@ ensure_whisper() {
 
   if [ "$whisper_ready" = true ]; then
     ok "WhisperLive ready (port 9090 accepting connections)"
+
+    # Show recent container logs
+    info "WhisperLive container initialization logs:"
+    if docker logs "$WHISPER_CONTAINER_NAME" 2>/dev/null | tail -30; then
+      :
+    else
+      warn "Could not retrieve logs from $WHISPER_CONTAINER_NAME"
+    fi
   else
     warn "WhisperLive did not become ready in time"
     warn "  Container logs: docker logs $WHISPER_CONTAINER_NAME"
+    warn "  Watch logs live: docker logs -f $WHISPER_CONTAINER_NAME"
   fi
 }
 
