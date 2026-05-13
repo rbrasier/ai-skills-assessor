@@ -57,6 +57,8 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
   const [status, setStatus] = useState<CallStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [focusCount, setFocusCount] = useState(0);
+  const [totalFocusMs, setTotalFocusMs] = useState(0);
 
   // Track the current assessment phase so focus events are tagged correctly.
   // Derived from status polling; defaults to "unknown" until the call connects.
@@ -111,6 +113,8 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
         const durationMs = Date.now() - focusLostAtRef.current;
         focusLostAtRef.current = null;
         void postFocusEvent(sessionId, currentPhaseRef.current, durationMs);
+        setFocusCount((c) => c + 1);
+        setTotalFocusMs((ms) => ms + durationMs);
       }
     };
 
@@ -201,6 +205,14 @@ export function CallStateDisplay({ sessionId, onCancel }: CallStateDisplayProps)
         failureReason={status?.failureReason}
         dialingMethod={status?.dialingMethod}
       />
+
+      {/* Focus-away notice — only shown after at least one tab-blur during the call */}
+      {currentStatus === "in_progress" && focusCount > 0 ? (
+        <p className="focus-away-notice">
+          Browser out of focus {focusCount} {focusCount === 1 ? "time" : "times"} for a
+          cumulative {formatFocusDuration(totalFocusMs)}
+        </p>
+      ) : null}
 
       {error ? (
         <p className="connection-error">Connection hiccup — retrying…</p>
@@ -483,6 +495,17 @@ function CallSubText({
   }
 
   return <p className="call-sub">{content}</p>;
+}
+
+function formatFocusDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 1) return "less than 1 second";
+  if (totalSeconds < 60) return `${totalSeconds} ${totalSeconds === 1 ? "second" : "seconds"}`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const minStr = `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  if (seconds === 0) return minStr;
+  return `${minStr} ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
 }
 
 function formatDuration(total: number): string {
