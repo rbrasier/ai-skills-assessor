@@ -242,6 +242,33 @@ ensure_whisper() {
   fi
 }
 
+ensure_localstt() {
+  local stt_provider
+  stt_provider=$(read_env_var STT_PROVIDER)
+  if [ "$stt_provider" != "local" ]; then
+    return 0
+  fi
+
+  local venv_pip="$REPO_ROOT/apps/voice-engine/.venv/bin/pip"
+  if [ ! -f "$venv_pip" ]; then
+    warn "Voice engine venv not found — skipping faster-whisper install check"
+    return 0
+  fi
+
+  info "STT_PROVIDER=local — checking faster-whisper installation..."
+  if "$venv_pip" show faster-whisper &>/dev/null 2>&1; then
+    ok "faster-whisper already installed"
+  else
+    info "Installing faster-whisper into voice engine venv..."
+    if "$venv_pip" install faster-whisper; then
+      ok "faster-whisper installed"
+    else
+      err "faster-whisper install failed — check pip output above"
+      err "  Manual install: cd apps/voice-engine && .venv/bin/pip install faster-whisper"
+    fi
+  fi
+}
+
 ensure_kokoro() {
   if [ "${DOCKER_KOKORO_SKIP:-0}" = "1" ]; then
     return 0
@@ -360,6 +387,9 @@ ensure_livekit
 
 # Self-hosted STT (only when STT_PROVIDER=whisper in apps/voice-engine/.env)
 ensure_whisper
+
+# Local STT (only when STT_PROVIDER=local — installs faster-whisper into venv)
+ensure_localstt
 
 # Self-hosted TTS (only when TTS_PROVIDER=kokoro in apps/voice-engine/.env)
 ensure_kokoro

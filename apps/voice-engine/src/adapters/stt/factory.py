@@ -48,6 +48,12 @@ def create_stt_service(settings: Settings) -> Any:
     """
     provider = settings.stt_provider
 
+    if provider == "local":
+        model = settings.local_stt_model
+        logger.info("STT provider: local faster-whisper (model=%s)", model)
+        from src.adapters.stt.faster_whisper_chunked_stt import FasterWhisperChunkedSTTService
+        return FasterWhisperChunkedSTTService(model_name=model).build()
+
     if provider == "whisper":
         url = settings.whisper_stt_url.strip()
         if not url:

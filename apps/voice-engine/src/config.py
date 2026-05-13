@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DialingMethod = Literal["daily", "browser"]
-SttProvider = Literal["deepgram", "whisper"]
+SttProvider = Literal["deepgram", "whisper", "local"]
 TtsProvider = Literal["elevenlabs", "kokoro"]
 
 
@@ -78,7 +78,13 @@ class Settings(BaseSettings):
     # ``whisper``  — Self-hosted WhisperLive via WebSocket (requires
     #                WHISPER_STT_URL). Falls back to deepgram if URL is unset
     #                or the service is unreachable at pipeline start.
+    # ``local``    — Local faster-whisper model (no external service required).
+    #                Requires faster-whisper pip package. Use with the chunking
+    #                pipeline (AudioChunkingFrameProcessor + FasterWhisperChunkedSTT).
     stt_provider: SttProvider = "deepgram"
+    # faster-whisper model size for STT_PROVIDER=local.
+    # Options: tiny.en, base.en, small.en (larger = more accurate, slower).
+    local_stt_model: str = "tiny.en"
     # WebSocket URL of your self-hosted WhisperLive STT service (port 9090).
     # Local: ws://localhost:9090
     # Docker compose: ws://whisper-stt:9090

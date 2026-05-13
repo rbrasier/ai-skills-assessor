@@ -1850,7 +1850,6 @@ async def _tts_test_kokoro_pcm(settings: Any, text: str) -> bytes:
         raise ValueError("KOKORO_TTS_URL not configured")
 
     voice: str = getattr(settings, "kokoro_voice", "af_sky")
-    sample_rate: int = getattr(settings, "kokoro_sample_rate", 24000)
     speech_url = base_url.rstrip("/") + "/v1/audio/speech"
 
     pcm_chunks: list[bytes] = []
@@ -1881,6 +1880,7 @@ async def _stt_test_whisper(request: Request, pcm_24k: bytes) -> STTTestResult:
     import asyncio
     import json
     import uuid
+
     import websockets
 
     whisper_url: str = getattr(request.app.state.settings, "whisper_stt_url", "").strip()
@@ -1923,7 +1923,7 @@ async def _stt_test_whisper(request: Request, pcm_24k: bytes) -> STTTestResult:
                     if data.get("message") == "SERVER_READY":
                         server_ready = True
                         break
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
             if not server_ready:
@@ -1970,7 +1970,7 @@ async def _stt_test_whisper(request: Request, pcm_24k: bytes) -> STTTestResult:
                         if segments and any(s.get("text", "").strip() for s in segments):
                             break
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     timeout_count += 1
                     # After 10 timeouts in a row (10 seconds of silence), assume transcription is done
                     if timeout_count >= 10:
@@ -1999,7 +1999,7 @@ async def _stt_test_whisper(request: Request, pcm_24k: bytes) -> STTTestResult:
                         new_completed = completed[completed_count:]
                         if new_completed:
                             segments.extend(new_completed)
-                except (asyncio.TimeoutError, json.JSONDecodeError):
+                except (TimeoutError, json.JSONDecodeError):
                     continue
 
             # Send END_OF_AUDIO sentinel AFTER waiting for transcription

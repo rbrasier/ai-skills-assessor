@@ -230,7 +230,7 @@ def _build_processor(url: str) -> Any:
             if self._recv_task and not self._recv_task.done():
                 try:
                     await asyncio.wait_for(self._recv_task, timeout=10.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                except (TimeoutError, asyncio.CancelledError):
                     # If still running after timeout, cancel it
                     if not self._recv_task.done():
                         self._recv_task.cancel()
