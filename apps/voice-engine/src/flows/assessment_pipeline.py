@@ -94,11 +94,18 @@ async def build_sfia_pipeline(
 
     from src.adapters.stt import create_stt_service
     from src.adapters.tts import create_tts_service
-    from src.processors.pipecat_audio_chunker import build_audio_chunking_frame_processor
 
     stt = create_stt_service(settings)
     tts = create_tts_service(settings)
-    audio_chunker = build_audio_chunking_frame_processor()
+
+    use_chunker = settings.audio_chunking_enabled and settings.stt_provider == "local"
+    if use_chunker:
+        from src.processors.pipecat_audio_chunker import build_audio_chunking_frame_processor
+        audio_chunker = build_audio_chunking_frame_processor()
+        logger.info("SFIAAssessmentPipeline: audio chunking enabled (5-second chunks)")
+    else:
+        audio_chunker = None
+        logger.info("SFIAAssessmentPipeline: audio chunking disabled (full-clip STT)")
 
     # pipecat >= 0.0.105 prefers settings= over top-level model= kwarg.
     try:
@@ -120,19 +127,20 @@ async def build_sfia_pipeline(
 
     observer = _TranscriptFrameObserver(recorder=recorder)
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            audio_chunker,
-            stt,
-            context_aggregator.user(),
-            llm,
-            tts,
-            observer,
-            transport.output(),
-            context_aggregator.assistant(),
-        ]
-    )
+    pipeline_stages: list[Any] = [transport.input()]
+    if audio_chunker is not None:
+        pipeline_stages.append(audio_chunker)
+    pipeline_stages.extend([
+        stt,
+        context_aggregator.user(),
+        llm,
+        tts,
+        observer,
+        transport.output(),
+        context_aggregator.assistant(),
+    ])
+
+    pipeline = Pipeline(pipeline_stages)
 
     task = PipelineTask(
         pipeline,

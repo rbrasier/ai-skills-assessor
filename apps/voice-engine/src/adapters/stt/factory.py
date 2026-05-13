@@ -50,9 +50,14 @@ def create_stt_service(settings: Settings) -> Any:
 
     if provider == "local":
         model = settings.local_stt_model
-        logger.info("STT provider: local faster-whisper (model=%s)", model)
-        from src.adapters.stt.faster_whisper_chunked_stt import FasterWhisperChunkedSTTService
-        return FasterWhisperChunkedSTTService(model_name=model).build()
+        if settings.audio_chunking_enabled:
+            logger.info("STT provider: local faster-whisper chunked (model=%s)", model)
+            from src.adapters.stt.faster_whisper_chunked_stt import FasterWhisperChunkedSTTService
+            return FasterWhisperChunkedSTTService(model_name=model).build()
+        else:
+            logger.info("STT provider: local faster-whisper buffered/full-clip (model=%s)", model)
+            from src.adapters.stt.faster_whisper_chunked_stt import FasterWhisperSTTService
+            return FasterWhisperSTTService(model_name=model).build()
 
     if provider == "whisper":
         url = settings.whisper_stt_url.strip()

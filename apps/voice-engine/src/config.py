@@ -79,8 +79,7 @@ class Settings(BaseSettings):
     #                WHISPER_STT_URL). Falls back to deepgram if URL is unset
     #                or the service is unreachable at pipeline start.
     # ``local``    — Local faster-whisper model (no external service required).
-    #                Requires faster-whisper pip package. Use with the chunking
-    #                pipeline (AudioChunkingFrameProcessor + FasterWhisperChunkedSTT).
+    #                Requires faster-whisper pip package.
     stt_provider: SttProvider = "deepgram"
     # faster-whisper model size for STT_PROVIDER=local.
     # Options: tiny.en, base.en, small.en (larger = more accurate, slower).
@@ -90,6 +89,16 @@ class Settings(BaseSettings):
     # Docker compose: ws://whisper-stt:9090
     # Railway: wss://whisper-stt.up.railway.app:9090
     whisper_stt_url: str = ""
+
+    # ─── Audio chunking (local faster-whisper only) ────────────────
+    # When false (default): the entire user utterance is buffered and sent
+    # to faster-whisper as a single clip once the user stops speaking.
+    # When true: AudioChunkingFrameProcessor splits audio into 5-second
+    # chunks and transcribes each as it arrives (lower latency, less
+    # accurate per chunk).
+    # Has no effect when STT_PROVIDER is deepgram or whisper — those
+    # services manage their own audio buffering internally.
+    audio_chunking_enabled: bool = False
 
     # ─── TTS provider selection (Phase 3 Revision 3) ──────────────
     # ``elevenlabs`` — ElevenLabs cloud TTS (default, requires ELEVENLABS_API_KEY).

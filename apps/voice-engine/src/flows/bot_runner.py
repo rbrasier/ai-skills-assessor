@@ -100,11 +100,20 @@ class BasicCallBot:
             except Exception:
                 pass  # loguru not available in lean CI image
 
-        from src.processors.pipecat_audio_chunker import build_audio_chunking_frame_processor
-
         stt = create_stt_service(self._settings)
         tts = create_tts_service(self._settings)
-        audio_chunker = build_audio_chunking_frame_processor()
+
+        use_chunker = (
+            self._settings.audio_chunking_enabled
+            and self._settings.stt_provider == "local"
+        )
+        if use_chunker:
+            from src.processors.pipecat_audio_chunker import build_audio_chunking_frame_processor
+            audio_chunker = build_audio_chunking_frame_processor()
+            logger.info("BasicCallBot: audio chunking enabled (5-second chunks)")
+        else:
+            audio_chunker = None
+            logger.info("BasicCallBot: audio chunking disabled (full-clip STT)")
 
         if self._transport_mode == "livekit":
             from pipecat.transports.livekit.transport import (
@@ -192,17 +201,12 @@ class BasicCallBot:
                         pass  # logger.info("RMSLogger: len=%d rms=%.1f", len(samples), _math.sqrt(sum(s * s for s in samples) / len(samples)))
                 await self.push_frame(frame, direction)
 
-        pipeline = Pipeline(
-            [
-                transport.input(),
-                audio_chunker,
-                stt,
-                conversation,
-                tts,
-                _RMSLogger(),
-                transport.output(),
-            ]
-        )
+        pipeline_stages: list[Any] = [transport.input()]
+        if audio_chunker is not None:
+            pipeline_stages.append(audio_chunker)
+        pipeline_stages.extend([stt, conversation, tts, _RMSLogger(), transport.output()])
+
+        pipeline = Pipeline(pipeline_stages)
 
         task = PipelineTask(
             pipeline,
