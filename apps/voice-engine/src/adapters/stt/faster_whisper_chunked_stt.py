@@ -98,13 +98,16 @@ def _build_faster_whisper_processor(model_name: str) -> Any:
                     break
                 chunk_id, audio_bytes = item
                 try:
-                    logger.info("FasterWhisper: transcribing %s (%d bytes)", chunk_id, len(audio_bytes))
+                    logger.debug("FasterWhisper: transcribing %s (%d bytes)", chunk_id, len(audio_bytes))
                     loop = asyncio.get_running_loop()
                     segments, info = await loop.run_in_executor(
                         None, self._transcribe_sync, audio_bytes
                     )
                     text = " ".join(seg.text for seg in segments).strip()
-                    logger.info("FasterWhisper: %s → '%s'", chunk_id, text[:120])
+                    if text:
+                        logger.info("FasterWhisper: %s → '%s'", chunk_id, text[:120])
+                    else:
+                        logger.debug("FasterWhisper: %s → (empty)", chunk_id)
 
                     if text:
                         await self.push_frame(
@@ -114,7 +117,7 @@ def _build_faster_whisper_processor(model_name: str) -> Any:
                                 timestamp="",
                                 language=info.language,
                             ),
-                            FrameDirection.UPSTREAM,
+                            FrameDirection.DOWNSTREAM,
                         )
                 except Exception as exc:
                     logger.error("FasterWhisper: transcription failed for %s: %s", chunk_id, exc)

@@ -44,6 +44,7 @@ def build_audio_chunking_frame_processor(
         CancelFrame,
         EndFrame,
         Frame,
+        InputAudioRawFrame,
         StartFrame,
         TextFrame,
         TranscriptionFrame,
@@ -113,7 +114,7 @@ def build_audio_chunking_frame_processor(
                 self._num_channels = getattr(frame, "num_channels", 1)
                 ready_segments = self._chunker.push_audio_frame(frame.audio, self._sample_rate)
                 for segment in ready_segments:
-                    chunk_frame = AudioRawFrame(
+                    chunk_frame = InputAudioRawFrame(
                         audio=segment.audio,
                         sample_rate=self._sample_rate,
                         num_channels=self._num_channels,

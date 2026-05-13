@@ -94,9 +94,11 @@ async def build_sfia_pipeline(
 
     from src.adapters.stt import create_stt_service
     from src.adapters.tts import create_tts_service
+    from src.processors.pipecat_audio_chunker import build_audio_chunking_frame_processor
 
     stt = create_stt_service(settings)
     tts = create_tts_service(settings)
+    audio_chunker = build_audio_chunking_frame_processor()
 
     # pipecat >= 0.0.105 prefers settings= over top-level model= kwarg.
     try:
@@ -121,6 +123,7 @@ async def build_sfia_pipeline(
     pipeline = Pipeline(
         [
             transport.input(),
+            audio_chunker,
             stt,
             context_aggregator.user(),
             llm,

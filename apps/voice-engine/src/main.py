@@ -30,6 +30,7 @@ call transitions the session to ``failed`` with
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import warnings
@@ -53,23 +54,47 @@ from src.domain.services.claim_extractor import ClaimExtractor
 from src.domain.services.post_call_pipeline import PostCallPipeline
 from src.domain.services.report_generator import ReportGenerator
 
-# Suppress ResourceWarning noise from aiohttp sessions that pipecat's
-# internal transports (LiveKit, Daily) create and close asynchronously.
-# These sessions are not actually leaked — they are cleaned up by the event
-# loop after the pipeline tears down — but Python's GC emits the warning
-# before async finalisation completes.
-warnings.filterwarnings(
-    "ignore",
-    message="Unclosed client session",
-    category=ResourceWarning,
-)
-warnings.filterwarnings(
-    "ignore",
-    message="Unclosed connector",
-    category=ResourceWarning,
-)
+# Suppress ResourceWarning noise from aiohttp sessions that Pipecat's TTS/transport
+# adapters create per-request without closing before GC.  The sessions are not
+# real leaks — they are cleaned up by the event loop — but GC fires the warning
+# before async teardown completes.
+#
+# Three-layer defence:
+#   1. warnings.filterwarnings — suppresses if Python warning system is in play
+#   2. warnings.showwarning override — catches any that slip past the filter
+#   3. logging filter + setLevel(ERROR) — suppresses if aiohttp uses logging
+_AIOHTTP_NOISE = ("Unclosed client session", "Unclosed connector")
+
+warnings.filterwarnings("ignore", message="Unclosed client session", category=ResourceWarning)
+warnings.filterwarnings("ignore", message="Unclosed connector", category=ResourceWarning)
+
+_orig_showwarning = warnings.showwarning
+
+
+def _showwarning_filter(
+    message: warnings.WarningMessage,
+    category: type,
+    filename: str,
+    lineno: int,
+    file: object = None,
+    line: object = None,
+) -> None:
+    if category is ResourceWarning and str(message).startswith(_AIOHTTP_NOISE):
+        return
+    _orig_showwarning(message, category, filename, lineno, file, line)  # type: ignore[arg-type]
+
+
+warnings.showwarning = _showwarning_filter  # type: ignore[assignment]
+
 
 logger = logging.getLogger(__name__)
+
+
+class _AiohttpUnclosedFilter(logging.Filter):
+    """Drop 'Unclosed client session / connector' if aiohttp routes via logging."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not record.getMessage().startswith(_AIOHTTP_NOISE)
 
 
 def _configure_logging() -> None:
@@ -86,6 +111,14 @@ def _configure_logging() -> None:
     """
     level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_str, logging.INFO)
+
+    # Suppress aiohttp's "Unclosed client session / connector" noise.
+    # The primary pathway is asyncio's exception handler (intercepted in
+    # _lifespan), but the asyncio logger is the fallback for any that slip
+    # through before the lifespan handler is installed.
+    for _aio_logger in ("aiohttp.client", "aiohttp.connector", "asyncio"):
+        _lg = logging.getLogger(_aio_logger)
+        _lg.addFilter(_AiohttpUnclosedFilter())
 
     src_logger = logging.getLogger("src")
     src_logger.setLevel(level)
@@ -296,6 +329,23 @@ def _warn_on_missing_provider_keys(settings: Settings) -> None:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Install a filtered asyncio exception handler.  aiohttp's __del__ calls
+    # loop.call_exception_handler({"message": "Unclosed client session", ...})
+    # which bypasses warnings.filterwarnings and goes straight to the asyncio
+    # logger via logger.error().  Intercept it here before it reaches logging.
+    _loop = asyncio.get_running_loop()
+    _prev_exc_handler = _loop.get_exception_handler()
+
+    def _filtered_exc_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        if context.get("message") in ("Unclosed client session", "Unclosed connector"):
+            return
+        if _prev_exc_handler is not None:
+            _prev_exc_handler(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    _loop.set_exception_handler(_filtered_exc_handler)
+
     settings = get_settings()
     _validate_dialing_env(settings)
     _warn_on_missing_provider_keys(settings)

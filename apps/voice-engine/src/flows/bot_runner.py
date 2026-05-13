@@ -100,8 +100,11 @@ class BasicCallBot:
             except Exception:
                 pass  # loguru not available in lean CI image
 
+        from src.processors.pipecat_audio_chunker import build_audio_chunking_frame_processor
+
         stt = create_stt_service(self._settings)
         tts = create_tts_service(self._settings)
+        audio_chunker = build_audio_chunking_frame_processor()
 
         if self._transport_mode == "livekit":
             from pipecat.transports.livekit.transport import (
@@ -192,6 +195,7 @@ class BasicCallBot:
         pipeline = Pipeline(
             [
                 transport.input(),
+                audio_chunker,
                 stt,
                 conversation,
                 tts,
